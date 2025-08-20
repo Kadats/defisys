@@ -1,0 +1,19 @@
+# Ambiente Virtual
+venv/
+
+# Arquivos temporários do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Arquivos de banco de dados
+*.db
+*.sqlite3
+
+# Arquivos de sistema operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos de IDEs (ex: VSCode)
+.vscode/
