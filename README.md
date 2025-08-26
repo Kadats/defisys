@@ -35,4 +35,21 @@ Com o ambiente virtual ativado, utilize o Makefile para rodar o sistema principa
 
 ```bash
 make run
+```
+
+## Uso com Poetry (recomendado)
+
+Este projeto também suporta Poetry para gerenciamento reprodutível de dependências e execução do código. Recomenda-se usar Poetry em ambientes onde esteja disponível.
+
+1. Instale dependências com Poetry:
+```bash
+poetry install
+```
+
+2. Execute o entrypoint do backend (inicializa logging centralizado conforme configuração em `backend/src/config.py`):
+```bash
+poetry run python -m backend.src.main
+```
+
+Observação: o logging é inicializado centralmente no entrypoint; outros módulos apenas obtêm loggers com `logging.getLogger(__name__)`.
 

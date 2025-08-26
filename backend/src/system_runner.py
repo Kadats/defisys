@@ -13,6 +13,11 @@ from .database import (
     save_on_chain_to_db, save_funding_rate_to_db, save_open_interest_to_db
 )
 from .config import DB_FILE, DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_HISTORICAL_DAYS
+from .logging_config import setup_logging
+import logging
+
+# Modules should obtain a logger instance; actual configuration happens in the entrypoint
+logger = logging.getLogger(__name__)
 
 # Importa o módulo de indicadores
 from .indicators import (
@@ -40,10 +45,10 @@ def run_trading_system():
     funding_rate_table_name = "binance_futures_funding_rate"
     open_interest_table_name = "binance_futures_open_interest"
 
-    print(f"Iniciando processo para {DEFAULT_SYMBOL} ({DEFAULT_INTERVAL})...")
+    logger.info("Iniciando processo para %s (%s)...", DEFAULT_SYMBOL, DEFAULT_INTERVAL)
 
     # --- FASE 1: COLETA DE DADOS E ATUALIZAÇÃO DO BANCO DE DADOS ---
-    print("\n--- FASE 1: COLETA DE DADOS E ATUALIZAÇÃO DO BANCO DE DADOS ---")
+    logger.info("--- FASE 1: COLETA DE DADOS E ATUALIZAÇÃO DO BANCO DE DADOS ---")
     
     # Coleta 1.1: Dados de Velas (OHLCV)
     last_timestamp_klines = get_last_timestamp_from_db(klines_table_name, DB_FILE)
@@ -53,10 +58,10 @@ def run_trading_system():
         start_time_ms_klines = last_timestamp_klines
     df_klines_new = fetch_all_klines(DEFAULT_SYMBOL, DEFAULT_INTERVAL, start_time_ms_klines, int(time.time() * 1000))
     if not df_klines_new.empty:
-        print(f"Total de {len(df_klines_new)} novas velas coletadas.")
+        logger.info("Total de %d novas velas coletadas.", len(df_klines_new))
         save_klines_to_db(df_klines_new, klines_table_name, DB_FILE)
     else:
-        print("Nenhuma nova vela foi coletada.")
+        logger.warning("Nenhuma nova vela foi coletada.")
     
     # Coleta 1.2: Fear and Greed Index
     last_timestamp_fng_sec = get_last_fng_timestamp_from_db(fng_table_name, DB_FILE)
@@ -80,14 +85,14 @@ def run_trading_system():
         save_open_interest_to_db(open_interest_data, open_interest_table_name, DB_FILE)
 
     # --- FASE 2: CARREGAMENTO DE DADOS E CÁLCULO DE INDICADORES ---
-    print("\n--- FASE 2: CARREGAMENTO DE DADOS E CÁLCULO DE INDICADORES ---")
+    logger.info("--- FASE 2: CARREGAMENTO DE DADOS E CÁLCULO DE INDICADORES ---")
     all_klines_df = get_data_from_db(klines_table_name, DB_FILE)
     
     if all_klines_df.empty:
-        print("Não há dados suficientes no banco de dados para continuar. Encerrando.")
+        logger.warning("Não há dados suficientes no banco de dados para continuar. Encerrando.")
         return
         
-    print(f"DataFrame de velas carregado com {len(all_klines_df)} velas para cálculo.")
+    logger.info("DataFrame de velas carregado com %d velas para cálculo.", len(all_klines_df))
     
     # Adicionar Volume On-Chain como proxy do volume de klines
     all_klines_df['Vol_onchain'] = all_klines_df['Volume']
@@ -108,94 +113,119 @@ def run_trading_system():
     all_klines_df = pd.concat([all_klines_df, fib_df], axis=1)
 
     # --- FASE 3: CÁLCULO DE INDICADORES COMPOSTOS ---
-    print("\n--- FASE 3: CÁLCULO DE INDICADORES COMPOSTOS ---")
-    
+    logger.info("--- FASE 3: CÁLCULO DE INDICADORES COMPOSTOS ---")
+
     conn = create_connection(DB_FILE)
     funding_rate_df = pd.read_sql("SELECT FundingTime, FundingRate FROM " + funding_rate_table_name, conn)
     open_interest_df = pd.read_sql("SELECT Timestamp, OpenInterest FROM " + open_interest_table_name, conn)
-    on_chain_df = pd.read_sql("SELECT Timestamp, Transactions_24h, Fees_usd_24h FROM " + on_chain_table_name, conn)
     conn.close()
 
-    if not funding_rate_df.empty and not open_interest_df.empty and not on_chain_df.empty:
+    if not funding_rate_df.empty and not open_interest_df.empty:
         funding_rate_df['Timestamp'] = pd.to_datetime(funding_rate_df['FundingTime'], unit='ms')
         open_interest_df['Timestamp'] = pd.to_datetime(open_interest_df['Timestamp'], unit='ms')
-        on_chain_df['Timestamp'] = pd.to_datetime(on_chain_df['Timestamp'], unit='ms')
 
-        merged_df = pd.merge(funding_rate_df[['Timestamp', 'FundingRate']], open_interest_df[['Timestamp', 'OpenInterest']], on='Timestamp', how='outer')
-        merged_df = pd.merge(merged_df, on_chain_df[['Timestamp', 'Transactions_24h']], on='Timestamp', how='outer')
-        merged_df = pd.merge(merged_df, on_chain_df[['Timestamp', 'Fees_usd_24h']], on='Timestamp', how='outer') # Adicionado Fees_usd_24h
-        
-        merged_df = merged_df.sort_values(by='Timestamp').reset_index(drop=True)
-        merged_df = merged_df.ffill().dropna().reset_index(drop=True)
+        sentiment_data_df = pd.merge(
+            funding_rate_df[['Timestamp', 'FundingRate']],
+            open_interest_df[['Timestamp', 'OpenInterest']],
+            on='Timestamp',
+            how='outer'
+        ).sort_values(by='Timestamp').ffill().dropna()
 
-        if not merged_df.empty:
-            all_klines_df['Sentimento_Score'] = calculate_composite_sentiment(merged_df['FundingRate'], merged_df['OpenInterest'])
-            all_klines_df['Volatilidade_Score'] = calculate_composite_volatility(all_klines_df, atr_col='ATR')
-            all_klines_df['Oportunidade_Score'] = calculate_composite_opportunity(all_klines_df, volume_onchain_col='Vol_onchain')
-        else:
-            print("Erro: Não foi possível alinhar os dados de indicadores compostos.")
-            all_klines_df['Sentimento_Score'] = None
-            all_klines_df['Volatilidade_Score'] = None
-            all_klines_df['Oportunidade_Score'] = None
+        if not sentiment_data_df.empty:
+            sentiment_data_df['Sentimento_Score'] = calculate_composite_sentiment(
+                sentiment_data_df['FundingRate'],
+                sentiment_data_df['OpenInterest']
+            )
+            
+            all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
+            sentiment_data_df['Date'] = sentiment_data_df['Timestamp'].dt.date
+            
+            daily_sentiment = sentiment_data_df.groupby('Date').last().reset_index()
+
+            all_klines_df = pd.merge(
+                all_klines_df,
+                daily_sentiment[['Date', 'Sentimento_Score']],
+                on='Date',
+                how='left'
+            )
+            
+            # --- LÓGICA DE PREENCHIMENTO ROBUSTA ---
+            # 1. Preenche para frente (carrega o último valor válido para os dias seguintes)
+            all_klines_df['Sentimento_Score'].ffill(inplace=True)
+            # 2. Preenche para trás (pega o próximo valor válido e preenche os dias anteriores)
+            all_klines_df['Sentimento_Score'].bfill(inplace=True)
+            
+            all_klines_df.drop(columns=['Date'], inplace=True)
+
+    # Garante que os scores sejam calculados e não contenham NaN
+    if 'Sentimento_Score' in all_klines_df.columns and not all_klines_df['Sentimento_Score'].isnull().all():
+        all_klines_df['Volatilidade_Score'] = calculate_composite_volatility(all_klines_df, atr_col='ATR')
+        all_klines_df['Oportunidade_Score'] = calculate_composite_opportunity(all_klines_df, volume_onchain_col='Vol_onchain')
+
+        # Preenche qualquer NaN restante com um valor neutro (0.5) como segurança final
+        all_klines_df[['Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']] = all_klines_df[['Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']].fillna(0.5)
     else:
-        print("Erro: Um ou mais DataFrames para indicadores compostos estão vazios.")
-        all_klines_df['Sentimento_Score'] = None
-        all_klines_df['Volatilidade_Score'] = None
-        all_klines_df['Oportunidade_Score'] = None
+        logger.warning("Aviso: Score de Sentimento não pôde ser calculado. Scores compostos serão preenchidos com valor neutro.")
+        all_klines_df['Sentimento_Score'] = 0.5
+        all_klines_df['Volatilidade_Score'] = 0.5
+        all_klines_df['Oportunidade_Score'] = 0.5
 
     # --- FASE 4: BACKTEST, GERAÇÃO DE SINAIS E RELATÓRIOS ---
-    print("\n--- FASE 4: BACKTEST, GERAÇÃO DE SINAIS E RELATÓRIOS ---")
+    logger.info("--- FASE 4: BACKTEST, GERAÇÃO DE SINAIS E RELATÓRIOS ---")
     initial_capital = 1000
     backtest_results = run_backtest(all_klines_df, initial_capital_usd=initial_capital)
     
     # Exibe o relatório de backtest
-    print("\n--- RELATÓRIO DE BACKTEST ---")
-    print(f"Capital Inicial: ${backtest_results['initial_capital_usd']:.2f}")
-    print(f"Capital Final: ${backtest_results['final_usd_value']:.2f}")
-    print(f"Lucro/Prejuízo: ${backtest_results['profit_usd']:.2f} ({backtest_results['profit_percentage_usd']:.2f}%)")
-    print(f"Performance do Buy and Hold (BTC): ({backtest_results['btc_benchmark_profit_percentage']:.2f}%)")
+    logger.info("--- RELATÓRIO DE BACKTEST ---")
+    logger.info("Capital Inicial: $%0.2f", backtest_results['initial_capital_usd'])
+    logger.info("Capital Final: $%0.2f", backtest_results['final_usd_value'])
+    logger.info("Lucro/Prejuízo: $%0.2f (%0.2f%%)", backtest_results['profit_usd'], backtest_results['profit_percentage_usd'])
+    logger.info("Performance do Buy and Hold (BTC): (%0.2f%%)", backtest_results['btc_benchmark_profit_percentage'])
 
     # Exibe os indicadores e resultados
-    print("\n--- RESUMO DOS INDICADORES RECENTES ---")
+    logger.info("--- RESUMO DOS INDICADORES RECENTES ---")
     df_display = all_klines_df.dropna().tail(5).copy()
-    print("\n[ TENDÊNCIA ]")
-    print(df_display[['Open_time', 'Close', 'SMA_20', 'EMA_20', 'MACD', 'MACD_Signal']].to_string())
-    print("\n[ MOMENTUM e VOLATILIDADE ]")
-    print(df_display[['Open_time', 'RSI', 'Stoch_K', 'Stoch_D', 'BB_Upper', 'BB_Lower', 'ATR']].to_string())
-    print("\n[ FLUXO ]")
-    print(df_display[['Open_time', 'OBV']].to_string())
-    print("\n[ INDICADORES COMPOSTOS ]")
-    print(df_display[['Open_time', 'Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']].to_string())
+    logger.info("[ TENDÊNCIA ]\n%s", df_display[['Open_time', 'Close', 'SMA_20', 'EMA_20', 'MACD', 'MACD_Signal']].to_string())
+    logger.info("[ MOMENTUM e VOLATILIDADE ]\n%s", df_display[['Open_time', 'RSI', 'Stoch_K', 'Stoch_D', 'BB_Upper', 'BB_Lower', 'ATR']].to_string())
+    logger.info("[ FLUXO ]\n%s", df_display[['Open_time', 'OBV']].to_string())
+    logger.info("[ INDICADORES COMPOSTOS ]\n%s", df_display[['Open_time', 'Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']].to_string())
     
-    print("\n--- EXIBINDO DADOS RECENTES ---")
+    logger.info("--- EXIBINDO DADOS RECENTES ---")
     fng_df = get_fng_data_from_db(fng_table_name, DB_FILE)
     if not fng_df.empty:
-        print("\n--- Fear and Greed Index Recente ---")
-        print(fng_df.tail(5))
+        logger.info("--- Fear and Greed Index Recente ---\n%s", fng_df.tail(5))
     conn = create_connection(DB_FILE)
     if conn:
         try:
             on_chain_df = pd.read_sql("SELECT * FROM " + on_chain_table_name + " ORDER BY Timestamp DESC LIMIT 5", conn)
             on_chain_df['Timestamp'] = pd.to_datetime(on_chain_df['Timestamp'], unit='ms')
-            print("\n--- Dados On-Chain Recentes ---")
-            print(on_chain_df.to_string())
+            logger.info("--- Dados On-Chain Recentes ---\n%s", on_chain_df.to_string())
             funding_rate_df = pd.read_sql("SELECT * FROM " + funding_rate_table_name + " ORDER BY FundingTime DESC LIMIT 5", conn)
             funding_rate_df['FundingTime'] = pd.to_datetime(funding_rate_df['FundingTime'], unit='ms')
-            print("\n--- Funding Rate Recente ---")
-            print(funding_rate_df.to_string())
+            logger.info("--- Funding Rate Recente ---\n%s", funding_rate_df.to_string())
             open_interest_df = pd.read_sql("SELECT * FROM " + open_interest_table_name + " ORDER BY Timestamp DESC LIMIT 5", conn)
             open_interest_df['Timestamp'] = pd.to_datetime(open_interest_df['Timestamp'], unit='ms')
-            print("\n--- Open Interest Recente ---")
-            print(open_interest_df.to_string())
+            logger.info("--- Open Interest Recente ---\n%s", open_interest_df.to_string())
         except pd.io.sql.DatabaseError:
-            print("Alguma das tabelas recentes não existe ou está vazia.")
+            logger.warning("Alguma das tabelas recentes não existe ou está vazia.")
         finally:
             conn.close()
 
-    # --- GERAÇÃO DE SINAIS DE TRADE EM TEMPO REAL ---
-    df_with_signals_real_time = generate_signals(all_klines_df.tail(1))
-    latest_signal = df_with_signals_real_time['Signal'].iloc[-1]
-    print(f"\nSinal de trade mais recente: {latest_signal}")
-    
-    print("\nProcessamento do sistema de trade concluído.")
+    # --- GERAÇÃO DE DECISÃO DE TRADE EM TEMPO REAL ---
+    latest_data = all_klines_df.dropna().tail(1)
+
+    if not latest_data.empty:
+        # Usa a estratégia principal para tomar a decisão
+        latest_decision = decide_liquidity(
+            latest_data,
+            sentiment_col='Sentimento_Score',
+            volatility_col='Volatilidade_Score',
+            opportunity_col='Oportunidade_Score'
+        ).iloc[-1]
+
+        logger.info("Decisão de liquidez mais recente: %s", latest_decision.upper())
+    else:
+        logger.warning("Não foi possível gerar uma decisão; dados insuficientes.")
+
+    logger.info("Processamento do sistema de trade concluído.")
 
