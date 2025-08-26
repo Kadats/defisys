@@ -324,28 +324,38 @@ def calculate_composite_sentiment(funding_rate: pd.Series, open_interest: pd.Ser
     
     return sentiment_score
 
-def calculate_composite_volatility(df: pd.DataFrame, atr_col: str = 'ATR', iv_col: str = 'Implied_Volatility') -> pd.Series:
+def calculate_composite_volatility(df: pd.DataFrame, iv_col: str = 'Implied_Volatility', atr_col: str = 'ATR') -> pd.Series:
     """
-    Calcula um indicador composto de volatilidade.
-    Baseado em Implied Volatility (IV) e Average True Range (ATR), conforme blueprint.
-    
+    Calcula o indicador composto de volatilidade usando Implied Volatility (IV) como fonte
+    primária. O ATR foi removido da lógica — o IV (Deribit BTC_DVOL) fornece um sinal mais
+    preditivo e alinhado com o blueprint.
+
     Args:
-        df (pd.DataFrame): DataFrame contendo ATR e, futuramente, IV.
-        atr_col (str): Nome da coluna para o ATR (padrão: 'ATR').
-        iv_col (str): Nome da coluna para a Volatilidade Implícita (ainda não implementada).
-        
+        df (pd.DataFrame): DataFrame contendo a coluna de Implied Volatility.
+        iv_col (str): Nome da coluna para a Volatilidade Implícita (padrão: 'Implied_Volatility').
+
     Returns:
-        pd.Series: Uma Série Pandas com o score de volatilidade.
+        pd.Series: Série Pandas com o score de volatilidade normalizado entre 0 e 1.
     """
-    # Usaremos o ATR por enquanto, já que não temos o Implied Volatility
-    if atr_col not in df.columns:
-        raise ValueError(f"Coluna '{atr_col}' não encontrada no DataFrame.")
-    
-    # Normalizamos o ATR para que o score fique entre 0 e 1
-    # Futuramente, podemos adicionar o IV aqui e combinar os dois
-    volatility_score = (df[atr_col] - df[atr_col].min()) / (df[atr_col].max() - df[atr_col].min())
-    
-    return volatility_score
+    # Preferir Implied Volatility se disponível e não totalmente nula
+    if iv_col in df.columns and not df[iv_col].isnull().all():
+        iv_series = df[iv_col].astype(float)
+        iv_min = iv_series.min()
+        iv_max = iv_series.max()
+        if iv_max == iv_min:
+            return pd.Series(0.5, index=df.index)
+        return (iv_series - iv_min) / (iv_max - iv_min)
+
+    # Caso IV não esteja disponível, usar ATR como fallback (mantém compatibilidade)
+    if atr_col in df.columns and not df[atr_col].isnull().all():
+        atr_series = df[atr_col].astype(float)
+        atr_min = atr_series.min()
+        atr_max = atr_series.max()
+        if atr_max == atr_min:
+            return pd.Series(0.5, index=df.index)
+        return (atr_series - atr_min) / (atr_max - atr_min)
+
+    raise ValueError(f"Nenhuma das colunas '{iv_col}' ou '{atr_col}' está disponível no DataFrame para calcular volatilidade.")
 
 def calculate_composite_opportunity(df: pd.DataFrame, volume_onchain_col: str = 'Volume', pool_utilization_col: str = 'Pool_Utilization') -> pd.Series:
     """

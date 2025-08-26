@@ -38,5 +38,9 @@ def setup_logging(level=None):
     root.setLevel(level)
 
     logger = logging.getLogger("projeto_zero")
+    # Ensure the returned logger has the effective level set explicitly so
+    # tests and callers inspecting logger.level get a numeric level instead
+    # of 0 (NOTSET).
+    logger.setLevel(level)
     logger.info("Logging configured with level: %s", logging.getLevelName(level))
     return logger

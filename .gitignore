@@ -1,11 +1,13 @@
 # Ambiente Virtual
 venv/
+.venv
 
 # Arquivos temporários do Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
 
 # Arquivos de banco de dados
 *.db
@@ -17,3 +19,17 @@ Thumbs.db
 
 # Arquivos de IDEs (ex: VSCode)
 .vscode/
+
+# Arquivos de ambiente e segredos
+.env
+.env.*
+
+# Artefatos de teste
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Artefatos de build do Python
+build/
+dist/
+*.egg-info/

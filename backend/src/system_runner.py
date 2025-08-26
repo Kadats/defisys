@@ -12,6 +12,8 @@ from .database import (
     save_fng_to_db, get_last_fng_timestamp_from_db, get_fng_data_from_db,
     save_on_chain_to_db, save_funding_rate_to_db, save_open_interest_to_db
 )
+from .data_collector import get_implied_volatility_history
+from .database import save_implied_volatility_to_db, get_implied_volatility_data_from_db, get_last_implied_volatility_timestamp_from_db
 from .config import DB_FILE, DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_HISTORICAL_DAYS
 from .logging_config import setup_logging
 import logging
@@ -29,7 +31,7 @@ from .indicators import (
 )
 
 # Estratégias
-from .strategies import generate_signals
+from .strategies import generate_signals, decide_liquidity
 
 # Backtest
 from .backtester import run_backtest
@@ -44,6 +46,7 @@ def run_trading_system():
     on_chain_table_name = "bitcoin_on_chain_metrics"
     funding_rate_table_name = "binance_futures_funding_rate"
     open_interest_table_name = "binance_futures_open_interest"
+    implied_vol_table_name = "implied_volatility"
 
     logger.info("Iniciando processo para %s (%s)...", DEFAULT_SYMBOL, DEFAULT_INTERVAL)
 
@@ -83,6 +86,18 @@ def run_trading_system():
     open_interest_data = get_open_interest(symbol=DEFAULT_SYMBOL)
     if open_interest_data:
         save_open_interest_to_db(open_interest_data, open_interest_table_name, DB_FILE)
+
+    # Coleta 1.6: Implied Volatility (Deribit BTC_DVOL)
+    last_iv_ts = get_last_implied_volatility_timestamp_from_db(implied_vol_table_name, DB_FILE)
+    # Se não tivermos timestamp anterior, buscar histórico dos últimos DEFAULT_HISTORICAL_DAYS dias
+    if not last_iv_ts:
+        start_ts_iv = int((datetime.now() - timedelta(days=DEFAULT_HISTORICAL_DAYS)).timestamp() * 1000)
+    else:
+        start_ts_iv = last_iv_ts
+
+    iv_data = get_implied_volatility_history(index_name="BTC_DVOL", resolution="1D", start_timestamp_ms=start_ts_iv, end_timestamp_ms=int(time.time() * 1000), limit=1000)
+    if iv_data:
+        save_implied_volatility_to_db(iv_data, implied_vol_table_name, DB_FILE)
 
     # --- FASE 2: CARREGAMENTO DE DADOS E CÁLCULO DE INDICADORES ---
     logger.info("--- FASE 2: CARREGAMENTO DE DADOS E CÁLCULO DE INDICADORES ---")
@@ -156,6 +171,22 @@ def run_trading_system():
             all_klines_df['Sentimento_Score'].bfill(inplace=True)
             
             all_klines_df.drop(columns=['Date'], inplace=True)
+
+    # --- Merge Implied Volatility ---
+    iv_df = get_implied_volatility_data_from_db(implied_vol_table_name, DB_FILE)
+    if not iv_df.empty:
+        iv_df['Date'] = iv_df['Timestamp'].dt.date
+        daily_iv = iv_df.groupby('Date').last().reset_index()[['Date', 'Volatility']]
+        daily_iv.rename(columns={'Volatility': 'Implied_Volatility'}, inplace=True)
+
+        all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
+        all_klines_df = pd.merge(all_klines_df, daily_iv, on='Date', how='left')
+        # Propagate values forward/backward to align with intraday candles
+        all_klines_df['Implied_Volatility'].ffill(inplace=True)
+        all_klines_df['Implied_Volatility'].bfill(inplace=True)
+        all_klines_df.drop(columns=['Date'], inplace=True)
+    else:
+        logger.warning("Nenhum dado de Implied Volatility disponível; Volatilidade será baseada em fallback (ATR).")
 
     # Garante que os scores sejam calculados e não contenham NaN
     if 'Sentimento_Score' in all_klines_df.columns and not all_klines_df['Sentimento_Score'].isnull().all():

@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "defisys-backend"
+version = "0.1.0"
+description = "Sistema de trading automatizado para provisão de liquidez em pools DeFi."
+authors = ["Seu Nome <seuemail@example.com>"]
+readme = "README.md"
+packages = [
+    { include = "backend" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pandas = "^2.2.2"
+requests = "^2.32.3"
+numpy = "^1.26.4"
+pydantic-settings = "^2.3.4"
+pydantic = "^2.6.5"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.2"
+mypy = "^1.10.0"
+ruff = "^0.4.8"
+black = "^24.4.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
