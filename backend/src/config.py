@@ -24,6 +24,22 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	DEFAULT_INTERVAL: str = "1d"
 	DEFAULT_KLINES_LIMIT: int = 1000
 	DEFAULT_HISTORICAL_DAYS: int = 365
+
+	# The Graph - Uniswap v3 configuration (configurable)
+	# Base gateway URL (no API key or subgraph id included)
+	THEGRAPH_UNISWAP_V3_URL: str = "https://gateway.thegraph.com/api/"
+
+	# Mapping of network name -> Uniswap v3 subgraph ID
+	THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS: dict = {
+		"mainnet": "ELUcwgpm14LKPLrdduc6pTfS_LpC7xdM14iBC_19I70",
+		"polygon": "BvYiaJ6vCLkk63oW2y7N8SCvDTWMugUAF35RAUZpQXE",
+	}
+
+	# Default network to query (can be 'mainnet' or 'polygon')
+	DEFAULT_NETWORK: str = "polygon"
+
+	# The Graph API key (set in .env)
+	THEGRAPH_API_KEY: str = ""
 	# Logging
 	LOG_LEVEL: str = "INFO"
 
@@ -62,9 +78,15 @@ BINANCE_API_BASE_URL = _settings.BINANCE_API_BASE_URL
 BINANCE_FUTURES_API_BASE_URL = _settings.BINANCE_FUTURES_API_BASE_URL
 FNG_API_URL = _settings.FNG_API_URL
 BLOCKCHAIR_API_URL = _settings.BLOCKCHAIR_API_URL
+THEGRAPH_UNISWAP_V3_URL = _settings.THEGRAPH_UNISWAP_V3_URL
+THEGRAPH_API_KEY = _settings.THEGRAPH_API_KEY
 DEFAULT_SYMBOL = _settings.DEFAULT_SYMBOL
 DEFAULT_INTERVAL = _settings.DEFAULT_INTERVAL
 DEFAULT_KLINES_LIMIT = _settings.DEFAULT_KLINES_LIMIT
 DEFAULT_HISTORICAL_DAYS = _settings.DEFAULT_HISTORICAL_DAYS
 LOG_LEVEL = _settings.LOG_LEVEL
+
+# New exports for The Graph multi-subgraph support
+THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS
+DEFAULT_NETWORK = _settings.DEFAULT_NETWORK
 

@@ -7,6 +7,7 @@ from .data_collector import (
     fetch_all_klines, get_fear_and_greed_index, get_bitcoin_network_fees,
     get_funding_rate_history, get_open_interest
 )
+from .data_collector import get_uniswap_pool_daily_data
 from .database import (
     create_connection, get_last_timestamp_from_db, save_klines_to_db, get_data_from_db,
     save_fng_to_db, get_last_fng_timestamp_from_db, get_fng_data_from_db,
@@ -14,9 +15,11 @@ from .database import (
 )
 from .data_collector import get_implied_volatility_history
 from .database import save_implied_volatility_to_db, get_implied_volatility_data_from_db, get_last_implied_volatility_timestamp_from_db
+from .database import save_uniswap_pool_data_to_db, get_uniswap_pool_data_from_db, get_last_uniswap_timestamp_from_db
 from .config import DB_FILE, DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_HISTORICAL_DAYS
 from .logging_config import setup_logging
 import logging
+from .database import create_implied_volatility_table, create_uniswap_pool_table
 
 # Modules should obtain a logger instance; actual configuration happens in the entrypoint
 logger = logging.getLogger(__name__)
@@ -47,6 +50,23 @@ def run_trading_system():
     funding_rate_table_name = "binance_futures_funding_rate"
     open_interest_table_name = "binance_futures_open_interest"
     implied_vol_table_name = "implied_volatility"
+    uniswap_table_name = "uniswap_pool_data"
+
+    # Garantir que a tabela de Implied Volatility exista antes de qualquer leitura
+    conn_iv = create_connection(DB_FILE)
+    if conn_iv:
+        try:
+            create_implied_volatility_table(conn_iv, implied_vol_table_name)
+        finally:
+            conn_iv.close()
+
+    # Garantir que a tabela de Uniswap exista antes de qualquer leitura/escrita
+    conn_uniswap = create_connection(DB_FILE)
+    if conn_uniswap:
+        try:
+            create_uniswap_pool_table(conn_uniswap, uniswap_table_name)
+        finally:
+            conn_uniswap.close()
 
     logger.info("Iniciando processo para %s (%s)...", DEFAULT_SYMBOL, DEFAULT_INTERVAL)
 
@@ -98,6 +118,17 @@ def run_trading_system():
     iv_data = get_implied_volatility_history(index_name="BTC_DVOL", resolution="1D", start_timestamp_ms=start_ts_iv, end_timestamp_ms=int(time.time() * 1000), limit=1000)
     if iv_data:
         save_implied_volatility_to_db(iv_data, implied_vol_table_name, DB_FILE)
+
+    # Coleta 1.7: Uniswap V3 pool daily data
+    last_uniswap_ts = get_last_uniswap_timestamp_from_db(uniswap_table_name, DB_FILE)
+    if not last_uniswap_ts:
+        start_ts_uniswap = int((datetime.now() - timedelta(days=DEFAULT_HISTORICAL_DAYS)).timestamp() * 1000)
+    else:
+        start_ts_uniswap = last_uniswap_ts
+
+    uniswap_data = get_uniswap_pool_daily_data(start_timestamp_ms=start_ts_uniswap, end_timestamp_ms=int(time.time() * 1000), limit=1000)
+    if uniswap_data:
+        save_uniswap_pool_data_to_db(uniswap_data, uniswap_table_name, DB_FILE)
 
     # --- FASE 2: CARREGAMENTO DE DADOS E CÁLCULO DE INDICADORES ---
     logger.info("--- FASE 2: CARREGAMENTO DE DADOS E CÁLCULO DE INDICADORES ---")
@@ -166,9 +197,9 @@ def run_trading_system():
             
             # --- LÓGICA DE PREENCHIMENTO ROBUSTA ---
             # 1. Preenche para frente (carrega o último valor válido para os dias seguintes)
-            all_klines_df['Sentimento_Score'].ffill(inplace=True)
+            all_klines_df['Sentimento_Score'] = all_klines_df['Sentimento_Score'].ffill()
             # 2. Preenche para trás (pega o próximo valor válido e preenche os dias anteriores)
-            all_klines_df['Sentimento_Score'].bfill(inplace=True)
+            all_klines_df['Sentimento_Score'] = all_klines_df['Sentimento_Score'].bfill()
             
             all_klines_df.drop(columns=['Date'], inplace=True)
 
@@ -187,6 +218,22 @@ def run_trading_system():
         all_klines_df.drop(columns=['Date'], inplace=True)
     else:
         logger.warning("Nenhum dado de Implied Volatility disponível; Volatilidade será baseada em fallback (ATR).")
+
+    # --- Merge Uniswap Pool Data ---
+    uniswap_df = get_uniswap_pool_data_from_db(uniswap_table_name, DB_FILE)
+    if not uniswap_df.empty:
+        uniswap_df['Date'] = uniswap_df['Timestamp'].dt.date
+        daily_uniswap = uniswap_df.groupby('Date').last().reset_index()[['Date', 'VolumeUSD', 'TVL_USD']]
+
+        all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
+        all_klines_df = pd.merge(all_klines_df, daily_uniswap, on='Date', how='left')
+
+        # normalize/massage: forward/backfill so intraday candles have the day's metrics
+        all_klines_df['VolumeUSD'] = all_klines_df['VolumeUSD'].ffill().bfill()
+        all_klines_df['TVL_USD'] = all_klines_df['TVL_USD'].ffill().bfill()
+        all_klines_df.drop(columns=['Date'], inplace=True)
+    else:
+        logger.warning("Nenhum dado Uniswap disponível; Oportunidade será baseada em fallback (on-exchange volume).")
 
     # Garante que os scores sejam calculados e não contenham NaN
     if 'Sentimento_Score' in all_klines_df.columns and not all_klines_df['Sentimento_Score'].isnull().all():

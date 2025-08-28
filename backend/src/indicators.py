@@ -357,25 +357,47 @@ def calculate_composite_volatility(df: pd.DataFrame, iv_col: str = 'Implied_Vola
 
     raise ValueError(f"Nenhuma das colunas '{iv_col}' ou '{atr_col}' está disponível no DataFrame para calcular volatilidade.")
 
-def calculate_composite_opportunity(df: pd.DataFrame, volume_onchain_col: str = 'Volume', pool_utilization_col: str = 'Pool_Utilization') -> pd.Series:
+def calculate_composite_opportunity(df: pd.DataFrame, volume_onchain_col: str = 'VolumeUSD', tvl_col: str = 'TVL_USD') -> pd.Series:
     """
-    Calcula um indicador composto de oportunidade.
-    Baseado em Volume on-chain e Taxa de Utilização da pool, conforme blueprint.
-    
-    Args:
-        df (pd.DataFrame): DataFrame contendo os dados de volume e, futuramente, de utilização.
-        volume_onchain_col (str): Nome da coluna para o volume on-chain (padrão: 'Volume').
-        pool_utilization_col (str): Nome da coluna para a taxa de utilização (ainda não implementada).
-        
-    Returns:
-        pd.Series: Uma Série Pandas com o score de oportunidade.
+    Calcula o Oportunidade_Score usando dados on-chain da Uniswap v3 conforme o blueprint:
+
+    Score = 0.5 * normalized(volumeUSD) + 0.5 * normalized(utilization)
+
+    onde utilization = volumeUSD / tvlUSD (por dia).
+
+    A função normaliza cada série para 0..1; se a série for constante ou vazia, usa 0.5 como fallback.
     """
-    # Usaremos o volume do klines por enquanto, já que não temos o volume on-chain
-    if volume_onchain_col not in df.columns:
-        raise ValueError(f"Coluna '{volume_onchain_col}' não encontrada no DataFrame.")
-    
-    # Normalizamos o volume para que o score fique entre 0 e 1
-    opportunity_score = (df[volume_onchain_col] - df[volume_onchain_col].min()) / (df[volume_onchain_col].max() - df[volume_onchain_col].min())
-    
-    return opportunity_score
+    # Preferir dados on-chain da Uniswap quando disponíveis
+    if volume_onchain_col in df.columns and tvl_col in df.columns:
+        vol = df[volume_onchain_col].fillna(0).astype(float)
+        tvl = df[tvl_col].fillna(0).astype(float)
+
+        # Evitar divisão por zero ao calcular utilization
+        utilization = vol / tvl.replace(0, np.nan)
+        utilization = utilization.fillna(0.0)
+
+        # Normalize helper
+        def normalize_series(s: pd.Series) -> pd.Series:
+            s_min = s.min()
+            s_max = s.max()
+            if pd.isna(s_min) or pd.isna(s_max) or s_max == s_min:
+                return pd.Series(0.5, index=s.index)
+            return (s - s_min) / (s_max - s_min)
+
+        vol_n = normalize_series(vol)
+        util_n = normalize_series(utilization)
+
+        opportunity_score = 0.5 * vol_n + 0.5 * util_n
+        return opportunity_score
+
+    # Fallback: use on-exchange volume column if present
+    if 'Volume' in df.columns:
+        v = df['Volume'].fillna(0).astype(float)
+        v_min = v.min()
+        v_max = v.max()
+        if v_max == v_min:
+            return pd.Series(0.5, index=df.index)
+        return (v - v_min) / (v_max - v_min)
+
+    raise ValueError("Nenhuma fonte de volume disponível para calcular Oportunidade_Score.")
 

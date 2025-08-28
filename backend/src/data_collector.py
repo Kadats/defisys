@@ -14,6 +14,8 @@ from .config import (
     FNG_API_URL,
     BLOCKCHAIR_API_URL,
     BINANCE_FUTURES_API_BASE_URL,
+    THEGRAPH_UNISWAP_V3_URL,
+    THEGRAPH_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,11 @@ class APIClient:
         self.timeout = timeout
         self.session = requests.Session()
 
+        # store retry policy for use in explicit retry loop
+        self.max_retries = max_retries
+        self.backoff_factor = backoff_factor
+        self.status_forcelist = status_forcelist
+
         retry = Retry(
             total=max_retries,
             read=max_retries,
@@ -62,14 +69,27 @@ class APIClient:
 
     def get(self, path_or_url: str, params: dict = None, headers: dict = None) -> requests.Response:
         url = self._build_url(path_or_url)
-        try:
-            resp = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
-            # If status is 5xx and Retry allowed, urllib3 will have retried according to policy.
-            resp.raise_for_status()
-            return resp
-        except requests.exceptions.RequestException as exc:
-            # Let caller handle/log final failure
-            raise
+        attempts = self.max_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
+                resp.raise_for_status()
+                return resp
+            except requests.exceptions.RequestException as exc:
+                # Decide whether to retry: for HTTPError, check status code if available
+                status = None
+                if hasattr(exc, "response") and exc.response is not None:
+                    status = getattr(exc.response, "status_code", None)
+                # If this was the last attempt, re-raise
+                if attempt == attempts:
+                    raise
+                # If we have a status code and it's not in status_forcelist, do not retry
+                if status is not None and status not in self.status_forcelist:
+                    raise
+                # Otherwise sleep with exponential backoff and retry
+                sleep_for = self.backoff_factor * (2 ** (attempt - 1))
+                time.sleep(sleep_for)
+                continue
 
 
 # Create per-API clients to reuse connections and retry behavior
@@ -78,6 +98,7 @@ _binance_futures_client = APIClient(base_url=BINANCE_FUTURES_API_BASE_URL, timeo
 _fng_client = APIClient(base_url=FNG_API_URL, timeout=10, max_retries=2, backoff_factor=0.5)
 _blockchair_client = APIClient(base_url=BLOCKCHAIR_API_URL, timeout=10, max_retries=2, backoff_factor=0.5)
 _deribit_client = APIClient(base_url="https://www.deribit.com/api/v2", timeout=10, max_retries=3, backoff_factor=1)
+_thegraph_client = APIClient(base_url=THEGRAPH_UNISWAP_V3_URL, timeout=10, max_retries=3, backoff_factor=1)
 
 
 # Coletas Binance
@@ -278,11 +299,17 @@ def get_implied_volatility_history(index_name: str = "BTC_DVOL", resolution: str
     """
     endpoint = "/public/get_volatility_index_data"
     # Deribit expects 'index_name' as the parameter name
+    # Deribit requires a 'currency' parameter for many volatility endpoints (e.g. BTC_DVOL -> currency=BTC)
+    currency = None
+    if isinstance(index_name, str) and "_" in index_name:
+        currency = index_name.split("_")[0]
+
     params = {
         "index_name": index_name,
         "resolution": resolution,
-        "limit": limit,
     }
+    if currency:
+        params["currency"] = currency
     if start_timestamp_ms:
         # Deribit API expects timestamps in milliseconds
         params["start_timestamp"] = int(start_timestamp_ms)
@@ -303,13 +330,23 @@ def get_implied_volatility_history(index_name: str = "BTC_DVOL", resolution: str
             logger.error("Resposta inesperada da Deribit para IV: %s", payload)
             return []
 
-        # Deribit may return arrays of timestamps and values, or a list of dicts
+        # Deribit may return arrays of timestamps and values, a list of dicts, or a list-of-lists
         out = []
         # Case A: result contains 'data' as list of dicts
         if isinstance(result, dict) and "data" in result and isinstance(result["data"], list):
             for item in result["data"]:
-                ts = item.get("timestamp") or item.get("t")
-                vol = item.get("value") or item.get("volatility") or item.get("v")
+                # item can be a dict or a list/tuple
+                if isinstance(item, dict):
+                    ts = item.get("timestamp") or item.get("t")
+                    vol = item.get("value") or item.get("volatility") or item.get("v")
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    ts = item[0]
+                    # many Deribit volatility series return [timestamp, open, high, low, close]
+                    # so take the last element as the representative volatility value
+                    vol = item[-1]
+                else:
+                    continue
+
                 if ts is None or vol is None:
                     continue
                 out.append({"timestamp": int(ts), "volatility": float(vol)})
@@ -339,4 +376,106 @@ def get_implied_volatility_history(index_name: str = "BTC_DVOL", resolution: str
     except requests.exceptions.RequestException as e:
         logger.error("Erro ao conectar à API Deribit (IV) endpoint %s: %s", _deribit_client._build_url(endpoint), e)
         return []
+
+
+def get_uniswap_pool_daily_data(pool_id: str = "0x99ac8ca7087fa4a2a1fb6357269965a2014abc35", start_timestamp_ms: int = None, end_timestamp_ms: int = None, limit: int = 1000) -> list:
+    """Consulta o subgraph da Uniswap v3 (The Graph) para recuperar poolDayDatas diários.
+
+    Retorna uma lista de dicionários com chaves: 'timestamp' (ms), 'volumeUSD' (float), 'tvlUSD' (float).
+    """
+    # Build final URL using base + API key + subgraph id
+    subgraph_id = "5zvR82QoaXyYfDEKLZ9t6v9adgnpTXyYp8gSbxTGVENFV"
+    if not THEGRAPH_API_KEY:
+        logger.error("THEGRAPH_API_KEY not configured; cannot query The Graph gateway.")
+        return []
+    # Sanitize key: strip possible extra quotes from env file
+    api_key = str(THEGRAPH_API_KEY).strip()
+    if (api_key.startswith('"') and api_key.endswith('"')) or (api_key.startswith("'") and api_key.endswith("'")):
+        api_key = api_key[1:-1]
+    api_key = api_key.strip()
+    if not api_key:
+        logger.error("THEGRAPH_API_KEY is empty after sanitization; cannot query The Graph gateway.")
+        return []
+    # Determine subgraph id based on configured default network
+    # THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS and DEFAULT_NETWORK are available via config import
+    from .config import THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS, DEFAULT_NETWORK
+
+    network = DEFAULT_NETWORK
+    subgraph_id = THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS.get(network)
+    if not subgraph_id:
+        logger.error("No subgraph id configured for network '%s'", network)
+        return []
+
+    # Base gateway URL
+    base = THEGRAPH_UNISWAP_V3_URL
+    if not base.endswith('/'):
+        base = base + '/'
+
+    # Build final URL using the gateway path that includes the API key and subgraph id if needed
+    # We'll prefer Authorization header for authentication; keep URL as base + api_key + '/subgraphs/id/' + subgraph_id
+    final_url = f"{base}{api_key}/subgraphs/id/{subgraph_id}"
+
+    # Prepare Authorization header (primary auth method)
+    headers = { 'Authorization': f'Bearer {api_key}' }
+
+    # Log masked endpoint (do not reveal API key)
+    masked = f"{base}<API_KEY>/subgraphs/id/{subgraph_id}"
+    logger.debug("Querying The Graph endpoint: %s (network=%s)", masked, network)
+
+    url = final_url
+
+    # poolDayData.date is a unix timestamp in seconds representing the day
+    start_sec = None
+    end_sec = None
+    if start_timestamp_ms:
+        start_sec = int(start_timestamp_ms // 1000)
+    if end_timestamp_ms:
+        end_sec = int(end_timestamp_ms // 1000)
+
+    # GraphQL query
+    where_clauses = [f'pool: "{pool_id.lower()}"']
+    if start_sec:
+        where_clauses.append(f'date_gte: {start_sec}')
+    if end_sec:
+        where_clauses.append(f'date_lte: {end_sec}')
+    where = ", ".join(where_clauses)
+
+    query = f"""
+    {{
+      poolDayDatas(where: {{ {where} }}, orderBy: date, orderDirection: asc, first: {limit}) {{
+        date
+        volumeUSD
+        tvlUSD
+      }}
+    }}
+    """
+
+    try:
+        # Use session.post to benefit from mounted adapters/retries and send Authorization header
+        resp = _thegraph_client.session.post(url, json={"query": query}, headers=headers, timeout=_thegraph_client.timeout)
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.exceptions.RequestException as e:
+        logger.error("Erro ao conectar ao The Graph (Uniswap subgraph): %s", e)
+        return []
+    except ValueError:
+        logger.error("Resposta inválida do The Graph (não JSON): %s", resp.text if resp is not None else "<no response>")
+        return []
+
+    result = payload.get("data") if isinstance(payload, dict) else None
+    if not result or "poolDayDatas" not in result:
+        logger.error("Resposta inesperada do The Graph para poolDayDatas: %s", payload)
+        return []
+
+    out = []
+    for item in result["poolDayDatas"]:
+        try:
+            ts_sec = int(item.get("date"))
+            vol = float(item.get("volumeUSD") or 0.0)
+            tvl = float(item.get("tvlUSD") or 0.0)
+            out.append({"timestamp": int(ts_sec * 1000), "volumeUSD": vol, "tvlUSD": tvl})
+        except Exception:
+            continue
+
+    return out
     

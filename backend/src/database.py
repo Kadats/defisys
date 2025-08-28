@@ -412,3 +412,85 @@ def get_implied_volatility_data_from_db(table_name: str, db_file: str, limit: in
             conn.close()
     return pd.DataFrame()
 
+
+# Tabela Uniswap Pool Data
+def create_uniswap_pool_table(conn: sqlite3.Connection, table_name: str):
+    """Cria a tabela para armazenar poolDayData da Uniswap (volumeUSD e tvlUSD por dia)."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                Timestamp INTEGER PRIMARY KEY,
+                VolumeUSD REAL,
+                TVL_USD REAL
+            )
+        """)
+        conn.commit()
+        logger.info("Tabela '%s' verificada/criada com sucesso para Uniswap Pool Data.", table_name)
+    except sqlite3.Error as e:
+        logger.error("Erro ao criar tabela '%s' para Uniswap Pool Data: %s", table_name, e)
+
+
+def save_uniswap_pool_data_to_db(data: list, table_name: str, db_file: str):
+    """Salva uma lista de dicionários com chaves timestamp (ms), volumeUSD, tvlUSD."""
+    conn = create_connection(db_file)
+    if conn:
+        try:
+            create_uniswap_pool_table(conn, table_name)
+            cursor = conn.cursor()
+
+            rows = []
+            for item in data:
+                ts = int(item.get('timestamp'))
+                vol = float(item.get('volumeUSD') or 0.0)
+                tvl = float(item.get('tvlUSD') or item.get('tvl') or 0.0)
+                rows.append((ts, vol, tvl))
+
+            cursor.executemany(f"""
+                INSERT OR IGNORE INTO {table_name} (Timestamp, VolumeUSD, TVL_USD)
+                VALUES (?, ?, ?)
+            """, rows)
+            conn.commit()
+            logger.info("Dados da Uniswap salvos/atualizados na tabela '%s'.", table_name)
+        except sqlite3.Error as e:
+            logger.error("Erro ao salvar dados da Uniswap no banco de dados: %s", e)
+        finally:
+            conn.close()
+
+
+def get_last_uniswap_timestamp_from_db(table_name: str, db_file: str) -> int:
+    conn = create_connection(db_file)
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT MAX(Timestamp) FROM {table_name}")
+            last_ts = cursor.fetchone()[0]
+            if last_ts:
+                return last_ts + 1
+            return None
+        except sqlite3.Error as e:
+            logger.error("Erro ao buscar último timestamp da Uniswap Pool Data: %s", e)
+            return None
+        finally:
+            conn.close()
+    return None
+
+
+def get_uniswap_pool_data_from_db(table_name: str, db_file: str, limit: int = None) -> pd.DataFrame:
+    conn = create_connection(db_file)
+    if conn:
+        try:
+            query = f"SELECT * FROM {table_name} ORDER BY Timestamp ASC"
+            if limit:
+                query += f" LIMIT {limit}"
+            df = pd.read_sql(query, conn)
+            if not df.empty:
+                df['Timestamp'] = pd.to_datetime(df['Timestamp'], unit='ms')
+            return df
+        except Exception as e:
+            logger.debug("Erro ao carregar dados da Uniswap (talvez tabela ausente): %s", e)
+            return pd.DataFrame()
+        finally:
+            conn.close()
+    return pd.DataFrame()
+
