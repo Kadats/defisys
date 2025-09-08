@@ -16,6 +16,7 @@ from .config import (
     BINANCE_FUTURES_API_BASE_URL,
     THEGRAPH_UNISWAP_V3_URL,
     THEGRAPH_API_KEY,
+    DEFAULT_POLYGON_POOL_ID,
 )
 
 logger = logging.getLogger(__name__)
@@ -378,7 +379,7 @@ def get_implied_volatility_history(index_name: str = "BTC_DVOL", resolution: str
         return []
 
 
-def get_uniswap_pool_daily_data(pool_id: str = "0x847b64f9d3a95e977d157866447a5c0a5dfa0ee5", start_timestamp_ms: int = None, end_timestamp_ms: int = None, limit: int = 1000) -> list:
+def get_uniswap_pool_daily_data(pool_id: str = DEFAULT_POLYGON_POOL_ID, start_timestamp_ms: int = None, end_timestamp_ms: int = None, limit: int = 1000) -> list:
     """Consulta o subgraph da Uniswap v3 (The Graph) para recuperar poolDayDatas diários.
 
     Retorna uma lista de dicionários com chaves: 'timestamp' (ms), 'volumeUSD' (float), 'tvlUSD' (float).

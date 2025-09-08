@@ -38,6 +38,9 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Default network to query (can be 'mainnet' or 'polygon')
 	DEFAULT_NETWORK: str = "polygon"
 
+	# Default Uniswap pool id for Polygon (used by the Uniswap collector)
+	DEFAULT_POLYGON_POOL_ID: str = "0x847b64f9d3a95e977d157866447a5c0a5dfa0ee5"
+
 	# The Graph API key (set in .env)
 	THEGRAPH_API_KEY: str = ""
 	# Logging
