@@ -378,7 +378,7 @@ def get_implied_volatility_history(index_name: str = "BTC_DVOL", resolution: str
         return []
 
 
-def get_uniswap_pool_daily_data(pool_id: str = "0x99ac8ca7087fa4a2a1fb6357269965a2014abc35", start_timestamp_ms: int = None, end_timestamp_ms: int = None, limit: int = 1000) -> list:
+def get_uniswap_pool_daily_data(pool_id: str = "0x5081b3917ba33575385a3c313a2fb31015f450b2", start_timestamp_ms: int = None, end_timestamp_ms: int = None, limit: int = 1000) -> list:
     """Consulta o subgraph da Uniswap v3 (The Graph) para recuperar poolDayDatas diários.
 
     Retorna uma lista de dicionários com chaves: 'timestamp' (ms), 'volumeUSD' (float), 'tvlUSD' (float).
