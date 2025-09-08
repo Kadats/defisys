@@ -32,7 +32,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Mapping of network name -> Uniswap v3 subgraph ID
 	THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS: dict = {
 		"mainnet": "ELUcwgpm14LKPLrdduc6pTfS_LpC7xdM14iBC_19I70",
-		"polygon": "BvYiaJ6vCLkk63oW2y7N8SCvDTWMugUAF35RAUZpQXE",
+		"polygon": "3hCPRGf4z88VC5rsBKU5AA9FBBq5nF3jbKJG7VZCbhjm",
 	}
 
 	# Default network to query (can be 'mainnet' or 'polygon')
