@@ -11,7 +11,8 @@ from .data_collector import get_uniswap_pool_daily_data
 from .database import (
     create_connection, get_last_timestamp_from_db, save_klines_to_db, get_data_from_db,
     save_fng_to_db, get_last_fng_timestamp_from_db, get_fng_data_from_db,
-    save_on_chain_to_db, save_funding_rate_to_db, save_open_interest_to_db
+    save_on_chain_to_db, save_funding_rate_to_db, save_open_interest_to_db,
+    get_start_timestamp_for_collection
 )
 from .data_collector import get_implied_volatility_history
 from .database import save_implied_volatility_to_db, get_implied_volatility_data_from_db, get_last_implied_volatility_timestamp_from_db
@@ -52,21 +53,12 @@ def run_trading_system():
     implied_vol_table_name = "implied_volatility"
     uniswap_table_name = "uniswap_pool_data"
 
-    # Garantir que a tabela de Implied Volatility exista antes de qualquer leitura
-    conn_iv = create_connection(DB_FILE)
-    if conn_iv:
-        try:
-            create_implied_volatility_table(conn_iv, implied_vol_table_name)
-        finally:
-            conn_iv.close()
-
-    # Garantir que a tabela de Uniswap exista antes de qualquer leitura/escrita
-    conn_uniswap = create_connection(DB_FILE)
-    if conn_uniswap:
-        try:
-            create_uniswap_pool_table(conn_uniswap, uniswap_table_name)
-        finally:
-            conn_uniswap.close()
+    # Garantir que todas as tabelas auxiliares existam antes de qualquer leitura/escrita
+    logger.info("Verificando a existência das tabelas no banco de dados...")
+    with create_connection(DB_FILE) as conn:
+        if conn:
+            create_implied_volatility_table(conn, implied_vol_table_name)
+            create_uniswap_pool_table(conn, uniswap_table_name)
 
     logger.info("Iniciando processo para %s (%s)...", DEFAULT_SYMBOL, DEFAULT_INTERVAL)
 
@@ -74,11 +66,7 @@ def run_trading_system():
     logger.info("--- FASE 1: COLETA DE DADOS E ATUALIZAÇÃO DO BANCO DE DADOS ---")
     
     # Coleta 1.1: Dados de Velas (OHLCV)
-    last_timestamp_klines = get_last_timestamp_from_db(klines_table_name, DB_FILE)
-    if not last_timestamp_klines:
-        start_time_ms_klines = int((datetime.now() - timedelta(days=DEFAULT_HISTORICAL_DAYS)).timestamp() * 1000)
-    else:
-        start_time_ms_klines = last_timestamp_klines
+    start_time_ms_klines = get_start_timestamp_for_collection(get_last_timestamp_from_db, klines_table_name, DB_FILE, DEFAULT_HISTORICAL_DAYS)
     df_klines_new = fetch_all_klines(DEFAULT_SYMBOL, DEFAULT_INTERVAL, start_time_ms_klines, int(time.time() * 1000))
     if not df_klines_new.empty:
         logger.info("Total de %d novas velas coletadas.", len(df_klines_new))
@@ -108,23 +96,14 @@ def run_trading_system():
         save_open_interest_to_db(open_interest_data, open_interest_table_name, DB_FILE)
 
     # Coleta 1.6: Implied Volatility (Deribit BTC_DVOL)
-    last_iv_ts = get_last_implied_volatility_timestamp_from_db(implied_vol_table_name, DB_FILE)
-    # Se não tivermos timestamp anterior, buscar histórico dos últimos DEFAULT_HISTORICAL_DAYS dias
-    if not last_iv_ts:
-        start_ts_iv = int((datetime.now() - timedelta(days=DEFAULT_HISTORICAL_DAYS)).timestamp() * 1000)
-    else:
-        start_ts_iv = last_iv_ts
+    start_ts_iv = get_start_timestamp_for_collection(get_last_implied_volatility_timestamp_from_db, implied_vol_table_name, DB_FILE, DEFAULT_HISTORICAL_DAYS)
 
     iv_data = get_implied_volatility_history(index_name="BTC_DVOL", resolution="1D", start_timestamp_ms=start_ts_iv, end_timestamp_ms=int(time.time() * 1000), limit=1000)
     if iv_data:
         save_implied_volatility_to_db(iv_data, implied_vol_table_name, DB_FILE)
 
     # Coleta 1.7: Uniswap V3 pool daily data
-    last_uniswap_ts = get_last_uniswap_timestamp_from_db(uniswap_table_name, DB_FILE)
-    if not last_uniswap_ts:
-        start_ts_uniswap = int((datetime.now() - timedelta(days=DEFAULT_HISTORICAL_DAYS)).timestamp() * 1000)
-    else:
-        start_ts_uniswap = last_uniswap_ts
+    start_ts_uniswap = get_start_timestamp_for_collection(get_last_uniswap_timestamp_from_db, uniswap_table_name, DB_FILE, DEFAULT_HISTORICAL_DAYS)
 
     uniswap_data = get_uniswap_pool_daily_data(start_timestamp_ms=start_ts_uniswap, end_timestamp_ms=int(time.time() * 1000), limit=1000)
     if uniswap_data:
@@ -213,8 +192,8 @@ def run_trading_system():
         all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
         all_klines_df = pd.merge(all_klines_df, daily_iv, on='Date', how='left')
         # Propagate values forward/backward to align with intraday candles
-        all_klines_df['Implied_Volatility'].ffill(inplace=True)
-        all_klines_df['Implied_Volatility'].bfill(inplace=True)
+        all_klines_df['Implied_Volatility'] = all_klines_df['Implied_Volatility'].ffill()
+        all_klines_df['Implied_Volatility'] = all_klines_df['Implied_Volatility'].bfill()
         all_klines_df.drop(columns=['Date'], inplace=True)
     else:
         logger.warning("Nenhum dado de Implied Volatility disponível; Volatilidade será baseada em fallback (ATR).")
@@ -307,3 +286,8 @@ def run_trading_system():
 
     logger.info("Processamento do sistema de trade concluído.")
 
+    # --- NOVA LINHA: RETORNAR OS RESULTADOS PARA A API ---
+    return {
+        "backtest_report": backtest_results,
+        "full_dataframe": all_klines_df
+    }

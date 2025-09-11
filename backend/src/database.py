@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import time
 import logging
+from datetime import datetime, timedelta
 
 from .config import DB_FILE # Importa o caminho do DB do config
 
@@ -19,6 +20,16 @@ def create_connection(db_file: str = DB_FILE):
     except sqlite3.Error as e:
         logger.error("Erro ao conectar ao banco de dados SQLite: %s", e)
     return conn
+
+
+def get_start_timestamp_for_collection(get_last_ts_func, table_name, db_file, historical_days):
+    """Determina o timestamp de início para uma nova coleta de dados."""
+    last_ts = get_last_ts_func(table_name, db_file)
+    if last_ts:
+        return last_ts
+    return int((datetime.now() - timedelta(days=historical_days)).timestamp() * 1000)
+
+
 
 # Tabela Binance
 def create_table(conn: sqlite3.Connection, table_name: str):

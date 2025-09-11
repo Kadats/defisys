@@ -27,6 +27,14 @@ format:
 	poetry run ruff format .
 	poetry run black .
 
+# --- EXECUÇÃO DO FRONTEND E BACKEND ---
+run-api:
+	poetry run uvicorn backend.src.api:app --reload --host 0.0.0.0
+
+run-frontend:
+	poetry run streamlit run frontend/dashboard.py
+	
+
 # --- LIMPEZA ---
 
 # Limpa arquivos temporários do Python e bancos de dados
