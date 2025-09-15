@@ -53,10 +53,12 @@ def get_backtest_results():
 
         safe_report = sanitize(results.get("backtest_report", {}))
         safe_historical = sanitize(historical_data_json)
+        safe_decision_history = sanitize(results.get('decision_history', []))
 
         return {
             "report": safe_report,
-            "historical_data": safe_historical
+            "historical_data": safe_historical,
+            "decision_history": safe_decision_history
         }
     except Exception as e:
         logger.exception("Ocorreu um erro crítico ao executar o backtest via API.")

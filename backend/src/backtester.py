@@ -28,6 +28,7 @@ def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_
     capital_usd = initial_capital_usd
     position_is_open = False
     current_position = {} # Dicionário para guardar os dados da única posição ativa
+    decision_history = []
     
     initial_btc_price = df.iloc[0]['Close']
     hodl_btc_amount = initial_capital_usd / initial_btc_price
@@ -54,6 +55,14 @@ def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_
             capital_usd = final_lp_value
             position_is_open = False
             current_position = {}
+            decision_history.append({
+                'Data': str(row['Open_time'].date()),
+                'Decisão': 'SAÍDA',
+                'Tipo': 'reduzir',
+                'Preço': float(current_price),
+                'Capital': float(capital_usd),
+                'Range': None
+            })
 
         # 2. Se a decisão for ENTRAR (e a posição estiver fechada), abrir uma nova.
         elif decision in ['range_curto', 'range_largo'] and not position_is_open:
@@ -71,6 +80,14 @@ def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_
             }
             logger.info("[%s] ENTRADA (%s): Capital: $%0.2f. Range: $%0.2f a $%0.2f", row['Open_time'].date(), decision.upper(), capital_usd, current_position['range_lower'], current_position['range_upper'])
             capital_usd = 0.0 # Capital está na pool
+            decision_history.append({
+                'Data': str(row['Open_time'].date()),
+                'Decisão': 'ENTRADA',
+                'Tipo': decision,
+                'Preço': float(current_price),
+                'Capital': float(current_position['initial_capital']),
+                'Range': f"{current_position['range_lower']:.2f} - {current_position['range_upper']:.2f}"
+            })
 
         # 3. Se a decisão MUDAR (ex: de curto para largo), ajustar o range.
         elif decision in ['range_curto', 'range_largo'] and position_is_open and decision != current_position['type']:
@@ -79,6 +96,14 @@ def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_
             il_multiplier = calculate_impermanent_loss(current_position['entry_price'], current_price)
             capital_temp = (hodl_value * il_multiplier) + current_position['fees_accrued']
             logger.info("[%s] AJUSTE DE RANGE: Posição '%s' fechada com $%0.2f.", row['Open_time'].date(), current_position['type'], capital_temp)
+            decision_history.append({
+                'Data': str(row['Open_time'].date()),
+                'Decisão': 'AJUSTE_DE_RANGE',
+                'Tipo': current_position['type'],
+                'Preço': float(current_price),
+                'Capital': float(capital_temp),
+                'Range': f"{current_position['range_lower']:.2f} - {current_position['range_upper']:.2f}"
+            })
             
             # Reabre a nova posição com o capital atualizado
             atr_multiplier = 0.75 if decision == 'range_curto' else 2.0
@@ -92,6 +117,14 @@ def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_
                 'fees_accrued': 0.0,
             }
             logger.info("[%s] RE-ENTRADA (%s): Capital: $%0.2f. Novo Range: $%0.2f a $%0.2f", row['Open_time'].date(), decision.upper(), capital_temp, current_position['range_lower'], current_position['range_upper'])
+            decision_history.append({
+                'Data': str(row['Open_time'].date()),
+                'Decisão': 'ENTRADA',
+                'Tipo': decision,
+                'Preço': float(current_price),
+                'Capital': float(capital_temp),
+                'Range': f"{current_position['range_lower']:.2f} - {current_position['range_upper']:.2f}"
+            })
 
         # --- CÁLCULO DIÁRIO DE TAXAS E VALOR DO PORTFÓLIO ---
         if position_is_open:
@@ -123,5 +156,7 @@ def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_
         'profit_percentage_usd': profit_percentage,
         'btc_benchmark_profit_percentage': hodl_profit_percentage,
     }
+    # Inclui histórico de decisões para o dashboard
+    results['decision_history'] = decision_history
     return results
 
