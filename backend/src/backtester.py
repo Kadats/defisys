@@ -155,6 +155,7 @@ def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_
         'profit_usd': profit_usd,
         'profit_percentage_usd': profit_percentage,
         'btc_benchmark_profit_percentage': hodl_profit_percentage,
+    'btc_benchmark_final_value': hodl_final_value,
     }
     # Inclui histórico de decisões para o dashboard
     results['decision_history'] = decision_history
