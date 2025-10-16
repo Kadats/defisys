@@ -33,3 +33,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Ignorar arquivos de metadados do WSL/Windows
+*.[iI]dentifier
