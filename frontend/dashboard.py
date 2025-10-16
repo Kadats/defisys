@@ -68,45 +68,45 @@ if data:
 
     st.divider() # Adiciona uma linha divisória
 
-        # --- Estrutura com Abas ---
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Análise Gráfica", "📈 Indicadores Compostos", "📄 Dados Brutos", "🗂️ Histórico de Decisões"])
+    # --- Estrutura com Abas ---
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Análise Gráfica", "📈 Indicadores Compostos", "📄 Dados Brutos", "🗂️ Histórico de Decisões"])
 
-        with tab1:
-            st.plotly_chart(plot_price_chart(df_history), use_container_width=True)
+    with tab1:
+        st.plotly_chart(plot_price_chart(df_history), use_container_width=True)
 
-        with tab2:
-            st.header("Painel de Indicadores Compostos")
-            scores_df = df_history[['Open_time', 'Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']].dropna()
+    with tab2:
+        st.header("Painel de Indicadores Compostos")
+        scores_df = df_history[['Open_time', 'Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']].dropna()
         
-            # Renomeia colunas para os gráficos
-            scores_df_renamed = scores_df.rename(columns={
-                'Open_time': 'index',
-                'Sentimento_Score': 'Sentimento (0-1)',
-                'Volatilidade_Score': 'Volatilidade (0-1)',
-                'Oportunidade_Score': 'Oportunidade (0-1)'
-            }).set_index('index')
+        # Renomeia colunas para os gráficos
+        scores_df_renamed = scores_df.rename(columns={
+            'Open_time': 'index',
+            'Sentimento_Score': 'Sentimento (0-1)',
+            'Volatilidade_Score': 'Volatilidade (0-1)',
+            'Oportunidade_Score': 'Oportunidade (0-1)'
+        }).set_index('index')
 
-            st.line_chart(scores_df_renamed)
+        st.line_chart(scores_df_renamed)
 
-        with tab3:
-            st.header("Dados Históricos Completos")
-            st.dataframe(df_history)
+    with tab3:
+        st.header("Dados Históricos Completos")
+        st.dataframe(df_history)
 
-        with tab4:
-            st.header("Histórico de Decisões")
-            # Extrai o histórico de decisões da resposta da API
-            decision_history = data.get('decision_history', [])
-            if decision_history:
-                df_decisions = pd.DataFrame(decision_history)
-                # Tenta converter a coluna Data para datetime, se existir
-                if 'Data' in df_decisions.columns:
-                    try:
-                        df_decisions['Data'] = pd.to_datetime(df_decisions['Data'])
-                    except Exception:
-                        pass
-                st.dataframe(df_decisions)
-            else:
-                st.info("Nenhum histórico de decisões disponível.")
+    with tab4:
+        st.header("Histórico de Decisões")
+        # Extrai o histórico de decisões da resposta da API
+        decision_history = data.get('decision_history', [])
+        if decision_history:
+            df_decisions = pd.DataFrame(decision_history)
+            # Tenta converter a coluna Data para datetime, se existir
+            if 'Data' in df_decisions.columns:
+                try:
+                    df_decisions['Data'] = pd.to_datetime(df_decisions['Data'])
+                except Exception:
+                    pass
+            st.dataframe(df_decisions)
+        else:
+            st.info("Nenhum histórico de decisões disponível.")
 else:
     st.warning("Não foi possível carregar os dados do backend. Certifique-se de que a API está a rodar com 'make run-api'.")
 

@@ -16,6 +16,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# API endpoints (change via env if needed)
 	BINANCE_API_BASE_URL: str = "https://api.binance.com/api/v3"
 	BINANCE_FUTURES_API_BASE_URL: str = "https://fapi.binance.com"
+	DERIBIT_API_BASE_URL: str = "https://www.deribit.com/api/v2"
 	FNG_API_URL: str = "https://api.alternative.me/fng/"
 	BLOCKCHAIR_API_URL: str = "https://api.blockchair.com/bitcoin/stats"
 
@@ -60,6 +61,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			# API endpoints (change via env if needed)
 			self.BINANCE_API_BASE_URL = os.environ.get('BINANCE_API_BASE_URL', "https://api.binance.com/api/v3")
 			self.BINANCE_FUTURES_API_BASE_URL = os.environ.get('BINANCE_FUTURES_API_BASE_URL', "https://fapi.binance.com")
+			self.DERIBIT_API_BASE_URL = os.environ.get('DERIBIT_API_BASE_URL', "https://www.deribit.com/api/v2")
 			self.FNG_API_URL = os.environ.get('FNG_API_URL', "https://api.alternative.me/fng/")
 			self.BLOCKCHAIR_API_URL = os.environ.get('BLOCKCHAIR_API_URL', "https://api.blockchair.com/bitcoin/stats")
 
@@ -93,4 +95,5 @@ LOG_LEVEL = _settings.LOG_LEVEL
 THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS
 DEFAULT_NETWORK = _settings.DEFAULT_NETWORK
 DEFAULT_POLYGON_POOL_ID = _settings.DEFAULT_POLYGON_POOL_ID
+DERIBIT_API_BASE_URL = _settings.DERIBIT_API_BASE_URL
 

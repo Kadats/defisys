@@ -53,7 +53,8 @@ def get_backtest_results():
 
         safe_report = sanitize(results.get("backtest_report", {}))
         safe_historical = sanitize(historical_data_json)
-        safe_decision_history = sanitize(results.get('decision_history', []))
+        # decision_history is produced by the backtest and lives inside the backtest report
+        safe_decision_history = sanitize(results.get('backtest_report', {}).get('decision_history', []))
 
         return {
             "report": safe_report,
