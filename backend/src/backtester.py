@@ -1,163 +1,143 @@
+# Em backend/src/backtester.py
 import pandas as pd
 import numpy as np
 import logging
-from .strategies import decide_liquidity
 
 logger = logging.getLogger(__name__)
 
-def calculate_impermanent_loss(initial_price, current_price):
+class Backtester:
     """
-    Calcula uma aproximação da Perda Impermanente (IL) sem depender do range.
-    Retorna o multiplicador do valor do HODL (ex: 0.95 para uma perda de 5%).
-    """
-    price_ratio = current_price / initial_price
-    il_multiplier = (2 * np.sqrt(price_ratio)) / (1 + price_ratio)
-    return il_multiplier
+    Motor de backtest genérico baseado em eventos.
 
-def run_backtest(df: pd.DataFrame, initial_capital_usd: float = 1000, daily_fee_rate: float = 0.001) -> dict:
+    Este motor não contém nenhuma lógica de estratégia. Em vez disso, ele
+    aceita uma 'strategy_function' que é chamada a cada passo (vela)
+    e pode tomar decisões de portfólio.
     """
-    Executa um backtest alinhado com a lógica simples do blueprint: uma única posição gerenciada.
-    """
-    if df.empty or 'Oportunidade_Score' not in df.columns or df['Oportunidade_Score'].isnull().all():
-        logger.error("Erro: DataFrame vazio ou indicadores compostos ausentes para o backtest.")
-        return {}
-
-    df['Decision'] = decide_liquidity(df, sentiment_col='Sentimento_Score', volatility_col='Volatilidade_Score', opportunity_col='Oportunidade_Score')
-
-    # --- Variáveis de Estado Simplificadas ---
-    capital_usd = initial_capital_usd
-    position_is_open = False
-    current_position = {} # Dicionário para guardar os dados da única posição ativa
-    decision_history = []
     
-    initial_btc_price = df.iloc[0]['Close']
-    hodl_btc_amount = initial_capital_usd / initial_btc_price
-    portfolio_history = []
+    def __init__(self, initial_capital_usd: float = 1000.0):
+        # Estado do Portfólio
+        self.initial_capital = initial_capital_usd
+        self.usd_balance = initial_capital_usd
+        self.btc_hodl_balance = 0.0
+        self.active_lps = [] # Lista para guardar as posições de LP ativas
+        
+        # Rastreamento
+        self.portfolio_history = [] # Guarda o valor total do portfólio a cada passo
+        self.decision_history = []  # Guarda todas as ações tomadas
+        
+        logger.info(f"Backtester v2 (Engine) inicializado com ${initial_capital_usd} USD.")
 
-    logger.info("--- INICIANDO BACKTEST (LÓGICA DO BLUEPRINT) ---")
-    logger.info("Capital Inicial: $%0.2f USDT", capital_usd)
-
-    for index, row in df.iterrows():
-        current_price = row['Close']
-        decision = row['Decision']
-        last_decision = df.loc[index-1, 'Decision'] if index > 0 else 'reduzir'
-
-        # --- LÓGICA DE GESTÃO DA POSIÇÃO ÚNICA ---
-
-        # 1. Se a decisão for REDUZIR, fechar qualquer posição aberta.
-        if decision == 'reduzir' and position_is_open:
-            hodl_value = current_position['initial_capital'] * (current_price / current_position['entry_price'])
-            il_multiplier = calculate_impermanent_loss(current_position['entry_price'], current_price)
-            final_lp_value = (hodl_value * il_multiplier) + current_position['fees_accrued']
+    def _calculate_portfolio_value(self, current_btc_price: float) -> float:
+        """Calcula o valor total do portfólio em USD."""
+        # Valor das LPs ativas (Esta é a parte mais complexa que vamos construir)
+        lp_value = 0.0
+        for lp in self.active_lps:
+            # TODO: Implementar cálculo de valor da LP (taxas + IL)
+            # Por agora, vamos usar uma aproximação simples
+            hodl_value = lp['initial_capital'] * (current_btc_price / lp['entry_price'])
+            lp_value += hodl_value # Simplificação temporária
             
-            logger.info("[%s] SAÍDA DA POOL: Preço: $%0.2f. Valor retornado: $%0.2f", row['Open_time'].date(), current_price, final_lp_value)
+        # Valor do BTC em HODL
+        hodl_value = self.btc_hodl_balance * current_btc_price
+        
+        return self.usd_balance + hodl_value + lp_value
+
+    # --- API PÚBLICA (Funções que a Estratégia pode chamar) ---
+
+    def buy_and_hodl(self, amount_usd: float, current_btc_price: float):
+        """Aloca capital de USD para a carteira HODL de BTC."""
+        if self.usd_balance < amount_usd:
+            logger.warning("Capital insuficiente para comprar HODL.")
+            return
             
-            capital_usd = final_lp_value
-            position_is_open = False
-            current_position = {}
-            decision_history.append({
-                'Data': str(row['Open_time'].date()),
-                'Decisão': 'SAÍDA',
-                'Tipo': 'reduzir',
-                'Preço': float(current_price),
-                'Capital': float(capital_usd),
-                'Range': None
-            })
+        btc_bought = amount_usd / current_btc_price
+        self.usd_balance -= amount_usd
+        self.btc_hodl_balance += btc_bought
+        self.decision_history.append(f"HODL BUY: {btc_bought:.6f} BTC @ ${current_btc_price}")
 
-        # 2. Se a decisão for ENTRAR (e a posição estiver fechada), abrir uma nova.
-        elif decision in ['range_curto', 'range_largo'] and not position_is_open:
-            position_is_open = True
-            atr_multiplier = 0.75 if decision == 'range_curto' else 2.0 # Ajustando multiplicadores
-            range_width = row['ATR'] * atr_multiplier
+    def open_lp(self, capital_usd: float, range_lower: float, range_upper: float, current_btc_price: float, timestamp):
+        """Abre uma nova posição de LP."""
+        if self.usd_balance < capital_usd:
+            logger.warning("Capital insuficiente para abrir LP.")
+            return
+
+        self.usd_balance -= capital_usd
+        new_lp = {
+            "id": len(self.active_lps) + 1,
+            "entry_price": current_btc_price,
+            "initial_capital": capital_usd,
+            "range_lower": range_lower,
+            "range_upper": range_upper,
+            "fees_accrued": 0.0,
+            "open_timestamp": timestamp
+        }
+        self.active_lps.append(new_lp)
+        self.decision_history.append(f"OPEN LP: ${capital_usd} @ ${current_btc_price} | Range: ${range_lower:.2f}-${range_upper:.2f}")
+
+    def close_lp(self, lp_id: int, current_btc_price: float):
+        """Fecha uma posição de LP e retorna o valor para o balanço de USD."""
+        lp_to_close = next((lp for lp in self.active_lps if lp['id'] == lp_id), None)
+        if not lp_to_close:
+            logger.warning(f"Tentativa de fechar LP ID {lp_id} inexistente.")
+            return
+
+        # TODO: Cálculo de valor real (com IL e taxas)
+        # Por agora, aproximação simples
+        hodl_value = lp_to_close['initial_capital'] * (current_btc_price / lp_to_close['entry_price'])
+        final_value = hodl_value + lp_to_close['fees_accrued']
+
+        self.usd_balance += final_value
+        self.active_lps.remove(lp_to_close)
+        self.decision_history.append(f"CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price}")
+
+    # --- O Ponto de Entrada Principal ---
+    
+    def run(self, df: pd.DataFrame, strategy_function) -> dict:
+        """
+        Executa o backtest iterando pelo DataFrame e chamando a
+        função de estratégia a cada passo.
+        """
+        if df.empty:
+            logger.error("DataFrame vazio. Abortando backtest.")
+            return {}
+
+        logger.info(f"Iniciando Backtester v2. Processando {len(df)} velas...")
+
+        for index, row in df.iterrows():
+            current_price = row['Close']
             
-            current_position = {
-                'type': decision,
-                'initial_capital': capital_usd,
-                'entry_price': current_price,
-                'range_lower': current_price - range_width,
-                'range_upper': current_price + range_width,
-                'fees_accrued': 0.0,
-            }
-            logger.info("[%s] ENTRADA (%s): Capital: $%0.2f. Range: $%0.2f a $%0.2f", row['Open_time'].date(), decision.upper(), capital_usd, current_position['range_lower'], current_position['range_upper'])
-            capital_usd = 0.0 # Capital está na pool
-            decision_history.append({
-                'Data': str(row['Open_time'].date()),
-                'Decisão': 'ENTRADA',
-                'Tipo': decision,
-                'Preço': float(current_price),
-                'Capital': float(current_position['initial_capital']),
-                'Range': f"{current_position['range_lower']:.2f} - {current_position['range_upper']:.2f}"
-            })
+            # --- 1. Atualizar Estado das Posições (Ex: Acumular taxas) ---
+            # (Manteremos simples por agora)
+            for lp in self.active_lps:
+                if lp['range_lower'] < current_price < lp['range_upper']:
+                    # Simulação de taxa diária simples
+                    lp['fees_accrued'] += lp['initial_capital'] * 0.001 # 0.1% ao dia
 
-        # 3. Se a decisão MUDAR (ex: de curto para largo), ajustar o range.
-        elif decision in ['range_curto', 'range_largo'] and position_is_open and decision != current_position['type']:
-            # Primeiro, fecha a posição antiga
-            hodl_value = current_position['initial_capital'] * (current_price / current_position['entry_price'])
-            il_multiplier = calculate_impermanent_loss(current_position['entry_price'], current_price)
-            capital_temp = (hodl_value * il_multiplier) + current_position['fees_accrued']
-            logger.info("[%s] AJUSTE DE RANGE: Posição '%s' fechada com $%0.2f.", row['Open_time'].date(), current_position['type'], capital_temp)
-            decision_history.append({
-                'Data': str(row['Open_time'].date()),
-                'Decisão': 'AJUSTE_DE_RANGE',
-                'Tipo': current_position['type'],
-                'Preço': float(current_price),
-                'Capital': float(capital_temp),
-                'Range': f"{current_position['range_lower']:.2f} - {current_position['range_upper']:.2f}"
-            })
-            
-            # Reabre a nova posição com o capital atualizado
-            atr_multiplier = 0.75 if decision == 'range_curto' else 2.0
-            range_width = row['ATR'] * atr_multiplier
-            current_position = {
-                'type': decision,
-                'initial_capital': capital_temp,
-                'entry_price': current_price,
-                'range_lower': current_price - range_width,
-                'range_upper': current_price + range_width,
-                'fees_accrued': 0.0,
-            }
-            logger.info("[%s] RE-ENTRADA (%s): Capital: $%0.2f. Novo Range: $%0.2f a $%0.2f", row['Open_time'].date(), decision.upper(), capital_temp, current_position['range_lower'], current_position['range_upper'])
-            decision_history.append({
-                'Data': str(row['Open_time'].date()),
-                'Decisão': 'ENTRADA',
-                'Tipo': decision,
-                'Preço': float(current_price),
-                'Capital': float(capital_temp),
-                'Range': f"{current_position['range_lower']:.2f} - {current_position['range_upper']:.2f}"
-            })
+            # --- 2. Chamar a Estratégia ---
+            # A estratégia recebe a 'row' (com todos os indicadores)
+            # e o 'self' (o próprio backtester, para poder chamar .open_lp(), etc.)
+            strategy_function(row, self)
 
-        # --- CÁLCULO DIÁRIO DE TAXAS E VALOR DO PORTFÓLIO ---
-        if position_is_open:
-            if current_position['range_lower'] < current_price < current_position['range_upper']:
-                daily_fees = current_position['initial_capital'] * daily_fee_rate
-                current_position['fees_accrued'] += daily_fees
-            
-            hodl_value = current_position['initial_capital'] * (current_price / current_position['entry_price'])
-            il_multiplier = calculate_impermanent_loss(current_position['entry_price'], current_price)
-            current_portfolio_value = (hodl_value * il_multiplier) + current_position['fees_accrued']
-        else:
-            current_portfolio_value = capital_usd
-            
-        portfolio_history.append(current_portfolio_value)
+            # --- 3. Registrar o Valor do Portfólio ---
+            total_value = self._calculate_portfolio_value(current_price)
+            self.portfolio_history.append(total_value)
 
-    # --- Finalização e Métricas ---
-    df['Portfolio_Value'] = portfolio_history
-    final_portfolio_value = df['Portfolio_Value'].iloc[-1]
-    hodl_final_value = hodl_btc_amount * df.iloc[-1]['Close']
+        # --- Fim do Backtest ---
+        final_portfolio_value = self.portfolio_history[-1]
+        
+        # Calcular HODL benchmark
+        initial_btc_price = df.iloc[0]['Close']
+        hodl_btc_amount = self.initial_capital / initial_btc_price
+        hodl_final_value = hodl_btc_amount * df.iloc[-1]['Close']
+        
+        logger.info("Backtest v2 Concluído. Valor Final: $%.2f", final_portfolio_value)
 
-    profit_usd = final_portfolio_value - initial_capital_usd
-    profit_percentage = (profit_usd / initial_capital_usd) * 100
-    hodl_profit_percentage = ((hodl_final_value - initial_capital_usd) / initial_capital_usd) * 100
-
-    results = {
-        'initial_capital_usd': initial_capital_usd,
-        'final_usd_value': final_portfolio_value,
-        'profit_usd': profit_usd,
-        'profit_percentage_usd': profit_percentage,
-        'btc_benchmark_profit_percentage': hodl_profit_percentage,
-    'btc_benchmark_final_value': hodl_final_value,
-    }
-    # Inclui histórico de decisões para o dashboard
-    results['decision_history'] = decision_history
-    return results
-
+        return {
+            'initial_capital_usd': self.initial_capital,
+            'final_usd_value': final_portfolio_value,
+            'profit_usd': final_portfolio_value - self.initial_capital,
+            'profit_percentage_usd': ((final_portfolio_value / self.initial_capital) - 1) * 100,
+            'btc_benchmark_final_value': hodl_final_value,
+            'btc_benchmark_profit_percentage': ((hodl_final_value / self.initial_capital) - 1) * 100,
+            'decision_history': self.decision_history,
+        }

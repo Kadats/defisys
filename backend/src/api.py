@@ -53,15 +53,18 @@ def get_backtest_results():
 
         safe_report = sanitize(results.get("backtest_report", {}))
         safe_historical = sanitize(historical_data_json)
-        # decision_history is produced by the backtest and lives inside the backtest report
-        safe_decision_history = sanitize(results.get('backtest_report', {}).get('decision_history', []))
+        
+        # AJUSTE AQUI: Pega a lista de strings diretamente do report sanitizado
+        safe_decision_history = safe_report.get('decision_history', []) 
 
         return {
             "report": safe_report,
             "historical_data": safe_historical,
-            "decision_history": safe_decision_history
+            # Não precisa mais de uma chave separada aqui, pois já está dentro de 'report'
+            # "decision_history": safe_decision_history <--- REMOVER/COMENTAR ESTA LINHA
         }
     except Exception as e:
         logger.exception("Ocorreu um erro crítico ao executar o backtest via API.")
         # Levanta uma exceção HTTP para que o erro seja mais claro no lado do cliente
         raise HTTPException(status_code=500, detail=f"Erro interno no servidor: {e}")
+
