@@ -1,91 +1,79 @@
+# Em backend/src/strategies.py
 import pandas as pd
-import numpy as np
+import logging
+# Importamos a classe Backtester para type hinting (boa prática)
+from .backtester import Backtester 
 
-def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
+logger = logging.getLogger(__name__)
+
+# --- Lógica de Decisão Antiga (Preservada) ---
+def _decide_action_v1(row: pd.Series) -> str:
     """
-    Gera sinais de trade baseados em uma estratégia de lateralização e sentimento.
-    
-    Args:
-        df (pd.DataFrame): DataFrame contendo os dados OHLCV e os indicadores calculados.
-        
-    Returns:
-        pd.DataFrame: O DataFrame com uma nova coluna 'Signal' e informações do range.
+    Decide a ação ('range_curto', 'range_largo', 'reduzir') com base nos scores.
+    Esta é a lógica do blueprint original. Renomeada para clareza.
     """
-    df_with_signals = df.copy()
-    
-    # Adiciona uma coluna 'Signal' e a inicializa com 'SEGUIR'
-    df_with_signals['Signal'] = 'SEGUIR'
-    
-    # Adiciona colunas para armazenar o range da pool
-    df_with_signals['Pool_Range_Lower'] = None
-    df_with_signals['Pool_Range_Upper'] = None
-    
-    # Lógica da Estratégia (Versão 2.0):
-    # A sua estratégia se baseia na ideia de alta oportunidade + baixa volatilidade -> range curto.
-    # O Sentimento é um proxy para a 'Oportunidade'.
-    
-    # Definindo um limite para o Sentimento (ex: 0.5 é neutro, valores abaixo indicam pessimismo)
-    SENTIMENT_THRESHOLD = 0.5
-    
-    # Condição para "ENTRAR EM POOL"
-    # Entra na pool quando a volatilidade está baixa (bandas estreitas) E o sentimento não está muito alto (abaixo de 0.5)
-    # Isso sugere um bom momento para um range curto, antes que a 'ganância' do mercado aumente.
-    df_with_signals.loc[
-        (df_with_signals['BB_Upper'] - df_with_signals['BB_Lower'] < df_with_signals['ATR']) &
-        (df_with_signals['Sentiment_Score'] < SENTIMENT_THRESHOLD),
-        'Signal'
-    ] = 'ENTRAR EM POOL'
-
-    # Condição para "SAIR DA POOL"
-    # Sai da pool quando a volatilidade aumenta (o preço sai das bandas de Bollinger)
-    df_with_signals.loc[
-        (df_with_signals['Close'] > df_with_signals['BB_Upper']) |
-        (df_with_signals['Close'] < df_with_signals['BB_Lower']),
-        'Signal'
-    ] = 'SAIR DA POOL'
-
-    # Preenche o range da pool nos sinais de ENTRADA (usando as bandas de bollinger)
-    df_with_signals.loc[df_with_signals['Signal'] == 'ENTRAR EM POOL', 'Pool_Range_Lower'] = df_with_signals['BB_Lower']
-    df_with_signals.loc[df_with_signals['Signal'] == 'ENTRAR EM POOL', 'Pool_Range_Upper'] = df_with_signals['BB_Upper']
-    
-    # A coluna Band_Width e Avg_Band_Width são colunas auxiliares que não são necessárias aqui, mas o código original pode ter
-    # df_with_signals['Band_Width'] = df_with_signals['BB_Upper'] - df_with_signals['BB_Lower']
-    # df_with_signals['Avg_Band_Width'] = df_with_signals['Band_Width'].rolling(window=20).mean()
-
-    return df_with_signals
-
-def get_latest_signal(df: pd.DataFrame) -> str:
-    # Apenas retorna o último sinal do DataFrame com a estratégia rodada.
-    df_with_signals = generate_signals(df)
-    return df_with_signals['Signal'].iloc[-1]
-
-def decide_liquidity(df: pd.DataFrame, sentiment_col: str = 'Sentiment_Score', volatility_col: str = 'Volatility_Score', opportunity_col: str = 'Opportunity_Score') -> pd.Series:
-    """
-    Decide a ação na pool de liquidez com base nos indicadores compostos.
-
-    Args:
-        df (pd.DataFrame): DataFrame com os indicadores compostos.
-        sentiment_col (str): Nome da coluna do score de sentimento.
-        volatility_col (str): Nome da coluna do score de volatilidade.
-        opportunity_col (str): Nome da coluna do score de oportunidade.
-
-    Returns:
-        pd.Series: Uma série com a decisão ('range_curto', 'range_largo', 'reduzir').
-    """
-    if not all(col in df.columns for col in [sentiment_col, volatility_col, opportunity_col]):
-        raise ValueError("DataFrame deve conter as colunas dos indicadores compostos.")
-
-    decision = pd.Series('reduzir', index=df.index, dtype='object') # Decisão padrão é reduzir
-
-    # Limiares (thresholds) para a decisão - estes são parâmetros a serem otimizados no backtest
+    # Limiares (thresholds) - mantemos os mesmos por enquanto
     OPP_HIGH_THRESHOLD = 0.5
     VOL_SAFE_THRESHOLD = 0.3
-
-    # Regra 1: Alta oportunidade + baixa volatilidade -> range curto
-    decision.loc[(df[opportunity_col] > OPP_HIGH_THRESHOLD) & (df[volatility_col] < VOL_SAFE_THRESHOLD)] = 'range_curto'
     
-    # Regra 2: Alta oportunidade + alta volatilidade -> range largo
-    decision.loc[(df[opportunity_col] > OPP_HIGH_THRESHOLD) & (df[volatility_col] >= VOL_SAFE_THRESHOLD)] = 'range_largo'
+    opportunity_score = row.get('Oportunidade_Score', 0.5) # Usa 0.5 se score não existir
+    volatility_score = row.get('Volatilidade_Score', 0.5)
 
-    return decision
+    if opportunity_score > OPP_HIGH_THRESHOLD and volatility_score < VOL_SAFE_THRESHOLD:
+        return 'range_curto'
+    elif opportunity_score > OPP_HIGH_THRESHOLD and volatility_score >= VOL_SAFE_THRESHOLD:
+        return 'range_largo'
+    else:
+        return 'reduzir'
+
+# --- Nova Função de Execução da Estratégia ---
+def run_strategy_v1(row: pd.Series, engine: Backtester):
+    """
+    Função principal da estratégia V1 (Blueprint).
+    Recebe a linha de dados atual ('row') e o motor de backtest ('engine').
+    Analisa os dados e chama os métodos do motor para executar ações.
+    """
+    decision = _decide_action_v1(row)
+    current_price = row['Close']
+    timestamp = row['Open_time'] # Usaremos o Open_time como timestamp do evento
+
+    # Lógica de Gestão de Posição (Simplificada para UMA posição)
+    
+    # Verifica se há alguma LP ativa
+    active_lp = engine.active_lps[0] if engine.active_lps else None
+
+    # 1. Se a decisão for REDUZIR e houver LP ativa, fechar.
+    if decision == 'reduzir' and active_lp:
+        engine.close_lp(lp_id=active_lp['id'], current_btc_price=current_price)
+
+    # 2. Se a decisão for ENTRAR (curto ou largo) e NÃO houver LP ativa, abrir.
+    elif decision in ['range_curto', 'range_largo'] and not active_lp:
+        # Define o range baseado em ATR (como antes)
+        atr_multiplier = 0.75 if decision == 'range_curto' else 2.0
+        range_width = row['ATR'] * atr_multiplier
+        range_lower = current_price - range_width
+        range_upper = current_price + range_width
+        
+        # Aloca TODO o capital USD disponível (simplificação V1)
+        capital_to_allocate = engine.usd_balance
+        if capital_to_allocate > 10: # Só abre se tiver mais de $10
+            engine.open_lp(
+                capital_usd=capital_to_allocate,
+                range_lower=range_lower,
+                range_upper=range_upper,
+                current_btc_price=current_price,
+                timestamp=timestamp
+            )
+
+    # 3. Se a decisão MUDAR (curto -> largo ou vice-versa) e houver LP ativa, ajustar.
+    elif decision in ['range_curto', 'range_largo'] and active_lp and decision != active_lp.get('type', decision): # Compara com o tipo da LP
+        logger.info(f"[{timestamp.date()}] AJUSTE DE RANGE: Mudando de {active_lp.get('type')} para {decision}...")
+        # Fecha a LP antiga
+        engine.close_lp(lp_id=active_lp['id'], current_btc_price=current_price)
+        # Reabre a nova (a lógica no passo 2 cuidará disso na próxima iteração ou podemos forçar aqui)
+        # Para simplificar, vamos assumir que a reabertura acontece no próximo passo
+        # Se quiséssemos reabrir imediatamente:
+        # (código para calcular novo range e chamar engine.open_lp com o novo capital)
+
+    # (Nenhuma outra ação é tomada se a decisão for a mesma e a LP já estiver aberta/fechada)
 
