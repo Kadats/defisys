@@ -1,11 +1,12 @@
 # Em backend/src/system_runner.py
 import logging
 import pandas as pd
+import os
 # Orquestracao e backtest
-from .data_provider import get_full_prepared_data # Corrigido para importar da toolkit
-from .backtester import Backtester # Importa a CLASSE
-from .strategies import run_strategy_regime_switcher # Importa a FUNÇÃO da estratégia
-# (Remova imports não usados como run_backtest antigo, config, logging_config se não forem usados aqui)
+from .data_provider import get_full_prepared_data
+from .backtester import Backtester
+from .strategies import run_strategy_regime_switcher
+from .config import PROJECT_ROOT
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,33 @@ def log_summary_report(results, latest_indicators=None):
             logger.info("\n%s", latest_indicators[cols_available].to_string())
     except Exception:
         logger.exception("Erro ao logar o sumario do relatorio")
+
+    # Salva o relatorio em um arquivo .txt
+    try:
+        report_path = os.path.join(PROJECT_ROOT, "backtest_report.txt")
+        decision_history = results.get('decision_history', [])
+        
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("--- RELATORIO DE BACKTEST (v2 Engine) ---\n")
+            f.write(f"Data da Execução: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("="*40 + "\n")
+            f.write(f"Capital Inicial: ${results.get('initial_capital_usd'):.2f}\n")
+            f.write(f"Capital Final: ${results.get('final_usd_value'):.2f}\n")
+            f.write(f"Lucro/Prejuizo: ${results.get('profit_usd'):.2f} ({results.get('profit_percentage_usd'):.2f}%)\n")
+            f.write(f"Performance do Buy and Hold (BTC): {results.get('btc_benchmark_profit_percentage'):.2f}%\n")
+            f.write("\n" + "="*40 + "\n")
+            f.write("--- HISTORICO DE DECISOES ---\n\n")
+            
+            if decision_history:
+                for decision in decision_history:
+                    f.write(f"{decision}\n")
+            else:
+                f.write("Nenhuma decisão foi tomada.\n")
+        
+        logger.info(f"Relatório de backtest salvo em: {report_path}")
+        
+    except Exception:
+        logger.exception("Erro ao salvar o relatorio .txt")
 
 
 def run_trading_system():
