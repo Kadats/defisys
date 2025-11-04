@@ -1,11 +1,12 @@
 import os
 try:
 	from pydantic_settings import BaseSettings
+	from pydantic import ConfigDict # <-- MUDANÇA 1: Importar ConfigDict
 	_HAS_PYDANTIC = True
 except Exception:
 	BaseSettings = object
+	ConfigDict = None # <-- Adicionar fallback
 	_HAS_PYDANTIC = False
-
 
 class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Paths
@@ -48,8 +49,9 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	LOG_LEVEL: str = "INFO"
 
 	if _HAS_PYDANTIC:
-		class Config:
-			env_file = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+		model_config = ConfigDict(
+			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+		)
 	else:
 		# Fallback: read environment variables directly when pydantic-settings is not available
 		def __init__(self):
