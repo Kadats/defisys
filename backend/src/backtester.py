@@ -6,6 +6,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Taxa da pool que estamos simulando (0.3% para WETH/USDT ou WBTC/USDT)
+POOL_FEE_RATE = 0.003
+
 class Backtester:
     """
     Motor de backtest genérico baseado em eventos.
@@ -28,21 +31,58 @@ class Backtester:
         
         logger.info(f"Backtester v2 (Engine) inicializado com ${initial_capital_usd} USD.")
 
+    def _get_lp_value(self, lp: dict, current_btc_price: float) -> tuple:
+        """
+        Calcula o valor atual dos ativos (BTC e USDT) em uma LP.
+        Esta é a matemática central do Impermanent Loss.
+        Retorna (valor_total_usd, amount_btc, amount_usdt)
+        """
+        L = lp['L']
+        pa = lp['range_lower']
+        pb = lp['range_upper']
+        pc = current_btc_price
+        
+        sqrt_pa = math.sqrt(pa)
+        sqrt_pb = math.sqrt(pb)
+        sqrt_pc = math.sqrt(pc)
+
+        amount_btc = 0
+        amount_usdt = 0
+
+        if pc <= pa:
+            # Preço abaixo do range -> 100% BTC
+            amount_btc = L * ((1/sqrt_pa) - (1/sqrt_pb))
+            amount_usdt = 0
+        elif pc >= pb:
+            # Preço acima do range -> 100% USDT
+            amount_btc = 0
+            amount_usdt = L * (sqrt_pb - sqrt_pa)
+        else:
+            # Preço dentro do range -> Mix de BTC e USDT
+            amount_btc = L * ((1/sqrt_pc) - (1/sqrt_pb))
+            amount_usdt = L * (sqrt_pc - sqrt_pa)
+            
+        value_usd = (amount_btc * pc) + amount_usdt
+        return value_usd, amount_btc, amount_usdt
+
     def _calculate_portfolio_value(self, current_btc_price: float) -> float:
         """Calcula o valor total do portfólio em USD."""
+        
         # Valor das LPs ativas
-        lp_value = 0.0
+        lp_total_value = 0.0
         for lp in self.active_lps:
-            # TODO: Implementar cálculo de valor da LP (próximo passo)
-            # Por agora, vamos usar uma aproximação simples
-            # <-- MUDANÇA (Mínima): Usar 'initial_capital_usd'
-            hodl_value = lp['initial_capital_usd'] * (current_btc_price / lp['entry_price'])
-            lp_value += hodl_value # Simplificação temporária
+            # Pega o valor dos ativos (considerando IL)
+            asset_value, _, _ = self._get_lp_value(lp, current_btc_price)
+            
+            # Adiciona as taxas acumuladas
+            fees_value = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_btc_price)
+            
+            lp_total_value += asset_value + fees_value
             
         # Valor do BTC em HODL
         hodl_value = self.btc_hodl_balance * current_btc_price
         
-        return self.usd_balance + hodl_value + lp_value
+        return self.usd_balance + hodl_value + lp_total_value
 
     # --- API PÚBLICA (Funções que a Estratégia pode chamar) ---
 
@@ -169,6 +209,30 @@ class Backtester:
 
     # --- O Ponto de Entrada Principal ---
     
+    def close_lp(self, lp_id: int, current_btc_price: float, timestamp):
+        """Fecha uma posição de LP e retorna o valor para o balanço de USD."""
+        lp_to_close = next((lp for lp in self.active_lps if lp['id'] == lp_id), None)
+        if not lp_to_close:
+            logger.warning(f"Tentativa de fechar LP ID {lp_id} inexistente.")
+            return
+
+        # 1. Calcula o valor dos ATIVOS (com IL)
+        asset_value, _, _ = self._get_lp_value(lp_to_close, current_btc_price)
+        
+        # 2. Calcula o valor das TAXAS acumuladas
+        fees_value = lp_to_close['fees_accrued_usdt'] + (lp_to_close['fees_accrued_btc'] * current_btc_price)
+
+        # 3. Valor final é a soma de ativos + taxas
+        final_value = asset_value + fees_value
+
+        self.usd_balance += final_value
+        self.active_lps.remove(lp_to_close)
+        self.decision_history.append(
+            f"[{timestamp.date()}] CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price:.2f} "
+            f"(Ativos: ${asset_value:.2f}, Taxas: ${fees_value:.2f})"
+        )
+
+    
     def run(self, df: pd.DataFrame, strategy_function) -> dict:
         """
         Executa o backtest iterando pelo DataFrame e chamando a
@@ -182,19 +246,38 @@ class Backtester:
 
         for index, row in df.iterrows():
             current_price = row['Close']
+            timestamp = row['Open_time']
             
-            # --- 1. Atualizar Estado das Posições (Ex: Acumular taxas) ---
+            # --- MUDANÇA 4: Simulação de Taxas Realista ---
             for lp in self.active_lps:
+                # Só acumula taxas se o preço estiver DENTRO do range
                 if lp['range_lower'] < current_price < lp['range_upper']:
-                    # TODO: Implementar simulação de taxa real (próximo passo)
-                    # Simulação de taxa diária simples (em USD)
-                    # <-- MUDANÇA (Mínima): Usar 'initial_capital_usd' e 'fees_accrued_usdt'
-                    lp['fees_accrued_usdt'] += lp['initial_capital_usd'] * 0.001 # 0.1% ao dia
+                    
+                    # Pega os dados de volume e TVL do dia (do data_provider)
+                    total_pool_volume_24h = row.get('VolumeUSD', 0)
+                    total_pool_tvl_usd = row.get('TVL_USD', 1) # Pega o TVL total da pool
+                    
+                    if total_pool_tvl_usd > 0 and total_pool_volume_24h > 0:
+                        # 1. Calcula o valor atual da NOSSA liquidez (apenas ativos)
+                        my_lp_value_usd, _, _ = self._get_lp_value(lp, current_price)
+                        
+                        # 2. Calcula nossa participação no TVL total
+                        # (Esta é uma APROXIMAÇÃO, mas é muito melhor que a anterior)
+                        my_share_of_pool = my_lp_value_usd / total_pool_tvl_usd
+                        
+                        # 3. Calcula o total de taxas geradas pela pool neste dia
+                        total_fees_generated_usd = total_pool_volume_24h * POOL_FEE_RATE
+                        
+                        # 4. Calcula a nossa parte dessas taxas
+                        fees_earned_today_usd = total_fees_generated_usd * my_share_of_pool
+                        
+                        # 5. Acumula as taxas (Simplificação: acumulamos tudo em USDT)
+                        # (Uma simulação 100% precisa dividiria em BTC/USDT, mas isso já é excelente)
+                        lp['fees_accrued_usdt'] += fees_earned_today_usd
 
             # --- 2. Chamar a Estratégia ---
-            # A estratégia recebe a 'row' (com todos os indicadores)
-            # e o 'self' (o próprio backtester, para poder chamar .open_lp(), etc.)
-            strategy_function(row, self)
+            # Passa o timestamp para a estratégia
+            strategy_function(row, self, timestamp)
 
             # --- 3. Registrar o Valor do Portfólio ---
             total_value = self._calculate_portfolio_value(current_price)
@@ -203,7 +286,6 @@ class Backtester:
         # --- Fim do Backtest ---
         final_portfolio_value = self.portfolio_history[-1] if self.portfolio_history else self.initial_capital
         
-        # Calcular HODL benchmark
         initial_btc_price = df.iloc[0]['Close']
         hodl_btc_amount = self.initial_capital / initial_btc_price
         hodl_final_value = hodl_btc_amount * df.iloc[-1]['Close']
@@ -219,4 +301,6 @@ class Backtester:
             'btc_benchmark_profit_percentage': ((hodl_final_value / self.initial_capital) - 1) * 100,
             'decision_history': self.decision_history,
         }
+
+
 

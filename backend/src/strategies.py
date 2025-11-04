@@ -27,36 +27,34 @@ def _decide_action_v1(row: pd.Series) -> str:
         return 'reduzir'
 
 # --- Nova Função de Execução da Estratégia ---
-def run_strategy_v1(row: pd.Series, engine: Backtester):
+def run_strategy_v1(row: pd.Series, engine: Backtester, timestamp: pd.Timestamp):
     """
     Função principal da estratégia V1 (Blueprint).
-    Recebe a linha de dados atual ('row') e o motor de backtest ('engine').
+    Recebe a linha de dados atual ('row'), o motor de backtest ('engine') e o timestamp.
     Analisa os dados e chama os métodos do motor para executar ações.
     """
     decision = _decide_action_v1(row)
     current_price = row['Close']
-    timestamp = row['Open_time'] # Usaremos o Open_time como timestamp do evento
+    # 'timestamp' agora é recebido como argumento
 
     # Lógica de Gestão de Posição (Simplificada para UMA posição)
     
-    # Verifica se há alguma LP ativa
     active_lp = engine.active_lps[0] if engine.active_lps else None
 
     # 1. Se a decisão for REDUZIR e houver LP ativa, fechar.
     if decision == 'reduzir' and active_lp:
-        engine.close_lp(lp_id=active_lp['id'], current_btc_price=current_price)
+        # --- MUDANÇA: Passar o timestamp para o log ---
+        engine.close_lp(lp_id=active_lp['id'], current_btc_price=current_price, timestamp=timestamp)
 
     # 2. Se a decisão for ENTRAR (curto ou largo) e NÃO houver LP ativa, abrir.
     elif decision in ['range_curto', 'range_largo'] and not active_lp:
-        # Define o range baseado em ATR (como antes)
         atr_multiplier = 0.75 if decision == 'range_curto' else 2.0
         range_width = row['ATR'] * atr_multiplier
         range_lower = current_price - range_width
         range_upper = current_price + range_width
         
-        # Aloca TODO o capital USD disponível (simplificação V1)
         capital_to_allocate = engine.usd_balance
-        if capital_to_allocate > 10: # Só abre se tiver mais de $10
+        if capital_to_allocate > 10:
             engine.open_lp(
                 capital_usd=capital_to_allocate,
                 range_lower=range_lower,
@@ -66,14 +64,11 @@ def run_strategy_v1(row: pd.Series, engine: Backtester):
             )
 
     # 3. Se a decisão MUDAR (curto -> largo ou vice-versa) e houver LP ativa, ajustar.
-    elif decision in ['range_curto', 'range_largo'] and active_lp and decision != active_lp.get('type', decision): # Compara com o tipo da LP
+    elif decision in ['range_curto', 'range_largo'] and active_lp and decision != active_lp.get('type', decision):
         logger.info(f"[{timestamp.date()}] AJUSTE DE RANGE: Mudando de {active_lp.get('type')} para {decision}...")
-        # Fecha a LP antiga
-        engine.close_lp(lp_id=active_lp['id'], current_btc_price=current_price)
-        # Reabre a nova (a lógica no passo 2 cuidará disso na próxima iteração ou podemos forçar aqui)
-        # Para simplificar, vamos assumir que a reabertura acontece no próximo passo
-        # Se quiséssemos reabrir imediatamente:
-        # (código para calcular novo range e chamar engine.open_lp com o novo capital)
-
-    # (Nenhuma outra ação é tomada se a decisão for a mesma e a LP já estiver aberta/fechada)
+        
+        # --- MUDANÇA: Passar o timestamp para o log ---
+        engine.close_lp(lp_id=active_lp['id'], current_btc_price=current_price, timestamp=timestamp)
+        
+        # (A reabertura ocorrerá no próximo passo, quando 'active_lp' for None)
 
