@@ -4,7 +4,7 @@ import pandas as pd
 # Orquestracao e backtest
 from .data_provider import get_full_prepared_data # Corrigido para importar da toolkit
 from .backtester import Backtester # Importa a CLASSE
-from .strategies import run_strategy_v1 # Importa a FUNÇÃO da estratégia
+from .strategies import run_strategy_regime_switcher # Importa a FUNÇÃO da estratégia
 # (Remova imports não usados como run_backtest antigo, config, logging_config se não forem usados aqui)
 
 
@@ -51,7 +51,7 @@ def run_trading_system():
     engine = Backtester(initial_capital_usd=initial_capital)
     
     # Passa o DataFrame E a função da estratégia para o motor
-    backtest_results = engine.run(full_df, strategy_function=run_strategy_v1) 
+    backtest_results = engine.run(full_df, strategy_function=run_strategy_regime_switcher) 
 
     # 3. Logar o relatório final
     latest_indicators = full_df.tail(5) if not full_df.empty else None
