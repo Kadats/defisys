@@ -9,6 +9,7 @@ from defi_data_toolkit.data_collector import (
     get_funding_rate_history, get_open_interest, get_uniswap_pool_daily_data,
     get_implied_volatility_history
 )
+
 from defi_data_toolkit.database import (
     create_connection, get_last_timestamp_from_db, save_klines_to_db, get_data_from_db,
     save_fng_to_db, get_last_fng_timestamp_from_db, get_fng_data_from_db,
@@ -17,6 +18,15 @@ from defi_data_toolkit.database import (
     get_last_implied_volatility_timestamp_from_db, save_uniswap_pool_data_to_db, get_uniswap_pool_data_from_db, get_last_uniswap_timestamp_from_db,
     create_implied_volatility_table, create_uniswap_pool_table
 )
+
+from defi_data_toolkit.indicators import (
+    calculate_sma, calculate_ema, calculate_rsi, calculate_macd,
+    calculate_bollinger_bands, calculate_stochastic_oscillator,
+    calculate_obv, calculate_atr, calculate_fibonacci_retracements,
+    calculate_composite_sentiment, calculate_composite_volatility, 
+    calculate_composite_opportunity
+)
+
 from .config import (
     DB_FILE,
     DEFAULT_SYMBOL,
@@ -32,13 +42,6 @@ from .config import (
     THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS,
     DEFAULT_NETWORK,
     DEFAULT_POLYGON_POOL_ID,
-)
-from defi_data_toolkit.indicators import (
-    calculate_sma, calculate_ema, calculate_rsi, calculate_macd,
-    calculate_bollinger_bands, calculate_stochastic_oscillator,
-    calculate_obv, calculate_atr, calculate_fibonacci_retracements,
-    calculate_composite_sentiment, calculate_composite_volatility, 
-    calculate_composite_opportunity
 )
 
 logger = logging.getLogger(__name__)
@@ -150,6 +153,7 @@ def get_full_prepared_data():
 
     # Calcular Indicadores Tecnicos
     all_klines_df['SMA_20'] = calculate_sma(all_klines_df, column='Close', window=20)
+    all_klines_df['SMA_50'] = calculate_sma(all_klines_df, column='Close', window=50)
     all_klines_df['EMA_20'] = calculate_ema(all_klines_df, column='Close', window=20)
     all_klines_df['RSI'] = calculate_rsi(all_klines_df, column='Close', window=14)
     macd_df = calculate_macd(all_klines_df, column='Close')
