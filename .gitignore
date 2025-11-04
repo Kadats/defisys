@@ -36,3 +36,6 @@ dist/
 
 # Ignorar arquivos de metadados do WSL/Windows
 *.[iI]dentifier
+
+# backtest_reports
+backtest_reports.txt
