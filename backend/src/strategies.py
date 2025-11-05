@@ -5,53 +5,59 @@ from .regime_analyzer import analyze_market_regime
 
 logger = logging.getLogger(__name__)
 
+DAYS_OUT_OF_RANGE_THRESHOLD = 10
+
 def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: pd.Timestamp):
     """
-    Estratégia 'Regime Contrário V1' (Buy Fear, Sell Greed).
+    Estratégia V2 (Avançada)
+    - Lógica de Fechamento: Fecha LPs "mortas" (fora do range por X dias).
+    - Lógica de Abertura: Chama o 'regime_analyzer' APENAS se não houver LPs.
     """
     
-    regime = analyze_market_regime(row)
     current_price = row['Close']
-    active_lp = engine.active_lps[0] if engine.active_lps else None
 
-    
-    # 1. REGIME DE BAIXA ('BEARISH') -> SINAL DE COMPRA
-    # Meta: Comprar a baixa com um range largo.
-    if regime == 'BEARISH':
-        if not active_lp:
-            # Abrir uma LP de "Compra/Hold"
-            range_lower = current_price * 0.75 # Range -25%
-            range_upper = current_price * 1.50 # Range +50%
-            
-            capital_to_allocate = engine.usd_balance
-            if capital_to_allocate > 10:
-                logger.info(f"[{timestamp.date()}] Regime: BEARISH (Compra). Abrindo LP de Range Largo (Range: ${range_lower:.2f}-${range_upper:.2f})")
-                engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp)
-        else:
-            # Já estamos comprados/posicionados, não fazer nada.
-            pass
-    
-    # 2. REGIME LATERAL ('SIDEWAYS') -> SINAL DE FARM
-    # Meta: Farm de taxas com range apertado.
-    elif regime == 'SIDEWAYS':
-        if not active_lp:
-            # Abrir uma nova LP de farm
-            range_width = current_price * 0.10 # Range apertado de +/- 10%
-            range_lower = current_price - range_width
-            range_upper = current_price + range_width
-            
-            capital_to_allocate = engine.usd_balance
-            if capital_to_allocate > 10:
-                logger.info(f"[{timestamp.date()}] Regime: SIDEWAYS (Farm). Abrindo LP de Farm (Range: ${range_lower:.2f}-${range_upper:.2f})")
-                engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp)
-        else:
-            # (Opcional Futuro): Se a LP anterior era 'BEARISH' (larga), talvez fechar e abrir uma 'SIDEWAYS' (apertada).
-            # Por enquanto, V1: se já tem LP, deixa estar.
-            pass
-            
-    # 3. REGIME DE ALTA ('BULLISH') -> SINAL DE VENDA
-    # Meta: Realizar lucros, sair do mercado, esperar próxima baixa.
-    elif regime == 'BULLISH':
-        if active_lp:
-            logger.info(f"[{timestamp.date()}] Regime: BULLISH (Venda). Fechando LP {active_lp['id']} para realizar lucros.")
-            engine.close_lp(lp_id=active_lp['id'], current_btc_price=current_price, timestamp=timestamp)
+    # --- 1. LÓGICA DE FECHAMENTO (Sempre checar) ---
+    lp_was_closed_this_turn = False
+    for lp in engine.active_lps.copy():
+        
+        if lp['days_out_of_range'] > DAYS_OUT_OF_RANGE_THRESHOLD:
+            logger.info(
+                f"[{timestamp.date()}] FECHANDO LP {lp['id']}: Fora do range "
+                f"(${lp['range_lower']:.2f}-${lp['range_upper']:.2f}) "
+                f"por {lp['days_out_of_range']} dias. Preço atual: ${current_price:.2f}"
+            )
+            engine.close_lp(lp_id=lp['id'], current_btc_price=current_price, timestamp=timestamp)
+            lp_was_closed_this_turn = True # Marca que fechamos uma LP
+
+    # --- MUDANÇA AQUI: Se fechamos uma LP, não fazemos mais nada hoje ---
+    if lp_was_closed_this_turn:
+        return # Espera até a próxima vela para decidir o que fazer
+
+    # --- 2. LÓGICA DE ABERTURA (Apenas se não tivermos LPs) ---
+    if not engine.active_lps:
+        # Estamos com 100% de capital livre. O que fazemos?
+        regime = analyze_market_regime(row)
+        capital_to_allocate = engine.usd_balance
+
+        if capital_to_allocate <= 10:
+            return # Capital insuficiente
+
+        # 2.1. Regime BEARISH (Medo) -> Comprar a baixa
+        if regime == 'BEARISH':
+            range_lower = current_price * 0.70 # Range -30%
+            range_upper = current_price * 1.60 # Range +60%
+            logger.info(f"[{timestamp.date()}] Regime: BEARISH (Compra). Abrindo LP de Range Largo (Range: ${range_lower:.2f}-${range_upper:.2f})")
+            engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp)
+        
+        # 2.2. Regime SIDEWAYS (Neutro/Farm) -> Farmar taxas
+        elif regime == 'SIDEWAYS':
+            range_lower = current_price * 0.85 # Range +/- 15%
+            range_upper = current_price * 1.15
+            logger.info(f"[{timestamp.date()}] Regime: SIDEWAYS (Farm). Abrindo LP de Range Apertado (Range: ${range_lower:.2f}-${range_upper:.2f})")
+            engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp)
+
+        # 2.3. Regime BULL_TOP (Euforia) -> Não fazer nada
+        elif regime == 'BULL_TOP':
+            logger.info(f"[{timestamp.date()}] Regime: BULL_TOP (Euforia). Não fazer nada, esperando a próxima baixa.")
+            pass # Ficar em USD, não comprar o topo
+

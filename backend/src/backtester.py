@@ -85,7 +85,6 @@ class Backtester:
         return self.usd_balance + hodl_value + lp_total_value
 
     # --- API PÚBLICA (Funções que a Estratégia pode chamar) ---
-
     def buy_and_hodl(self, amount_usd: float, current_btc_price: float):
         """Aloca capital de USD para a carteira HODL de BTC."""
         if self.usd_balance < amount_usd:
@@ -182,7 +181,8 @@ class Backtester:
             "fees_accrued_btc": 0.0,
             # Armazena os montantes iniciais para referência futura
             "initial_amount_btc": amount_btc, 
-            "initial_amount_usdt": amount_usdt
+            "initial_amount_usdt": amount_usdt,
+            "days_out_of_range": 0, # Rastrear dias fora do range
         }
         self.active_lps.append(new_lp)
         self.decision_history.append(
@@ -207,8 +207,7 @@ class Backtester:
         self.active_lps.remove(lp_to_close)
         self.decision_history.append(f"CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price}")
 
-    # --- O Ponto de Entrada Principal ---
-    
+    # --- O Ponto de Entrada Principal ---    
     def close_lp(self, lp_id: int, current_btc_price: float, timestamp):
         """Fecha uma posição de LP e retorna o valor para o balanço de USD."""
         lp_to_close = next((lp for lp in self.active_lps if lp['id'] == lp_id), None)
@@ -231,9 +230,8 @@ class Backtester:
             f"[{timestamp.date()}] CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price:.2f} "
             f"(Ativos: ${asset_value:.2f}, Taxas: ${fees_value:.2f})"
         )
-
-    
-    def run(self, df: pd.DataFrame, strategy_function) -> dict:
+ 
+    def run(self, df: pd.DataFrame, strategy_function):
         """
         Executa o backtest iterando pelo DataFrame e chamando a
         função de estratégia a cada passo.
@@ -248,35 +246,31 @@ class Backtester:
             current_price = row['Close']
             timestamp = row['Open_time']
             
-            # --- MUDANÇA 4: Simulação de Taxas Realista ---
+            # --- 1. Atualizar o estado das LPs ANTES da estratégia ---
             for lp in self.active_lps:
-                # Só acumula taxas se o preço estiver DENTRO do range
-                if lp['range_lower'] < current_price < lp['range_upper']:
-                    
-                    # Pega os dados de volume e TVL do dia (do data_provider)
+                is_in_range = lp['range_lower'] < current_price < lp['range_upper']
+
+                # 1. Acumular Taxas
+                if is_in_range:
                     total_pool_volume_24h = row.get('VolumeUSD', 0)
-                    total_pool_tvl_usd = row.get('TVL_USD', 1) # Pega o TVL total da pool
+                    total_pool_tvl_usd = row.get('TVL_USD', 1) 
                     
                     if total_pool_tvl_usd > 0 and total_pool_volume_24h > 0:
-                        # 1. Calcula o valor atual da NOSSA liquidez (apenas ativos)
                         my_lp_value_usd, _, _ = self._get_lp_value(lp, current_price)
-                        
-                        # 2. Calcula nossa participação no TVL total
-                        # (Esta é uma APROXIMAÇÃO, mas é muito melhor que a anterior)
                         my_share_of_pool = my_lp_value_usd / total_pool_tvl_usd
-                        
-                        # 3. Calcula o total de taxas geradas pela pool neste dia
                         total_fees_generated_usd = total_pool_volume_24h * POOL_FEE_RATE
-                        
-                        # 4. Calcula a nossa parte dessas taxas
                         fees_earned_today_usd = total_fees_generated_usd * my_share_of_pool
-                        
-                        # 5. Acumula as taxas (Simplificação: acumulamos tudo em USDT)
-                        # (Uma simulação 100% precisa dividiria em BTC/USDT, mas isso já é excelente)
                         lp['fees_accrued_usdt'] += fees_earned_today_usd
+                
+                # 2. Atualizar Contador "Fora do Range"
+                if not is_in_range:
+                    lp['days_out_of_range'] += 1
+                else:
+                    lp['days_out_of_range'] = 0 # Resetar o contador
 
             # --- 2. Chamar a Estratégia ---
-            # Passa o timestamp para a estratégia
+            # (Esta linha estava com a indentação errada)
+            # Ela deve estar alinhada com o 'for lp in...' acima, não dentro dele.
             strategy_function(row, self, timestamp)
 
             # --- 3. Registrar o Valor do Portfólio ---
@@ -286,6 +280,7 @@ class Backtester:
         # --- Fim do Backtest ---
         final_portfolio_value = self.portfolio_history[-1] if self.portfolio_history else self.initial_capital
         
+        # Calcular HODL benchmark
         initial_btc_price = df.iloc[0]['Close']
         hodl_btc_amount = self.initial_capital / initial_btc_price
         hodl_final_value = hodl_btc_amount * df.iloc[-1]['Close']
@@ -301,6 +296,4 @@ class Backtester:
             'btc_benchmark_profit_percentage': ((hodl_final_value / self.initial_capital) - 1) * 100,
             'decision_history': self.decision_history,
         }
-
-
 
