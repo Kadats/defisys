@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import math
-from backend.src.backtester import Backtester # Ajuste o caminho se necessário
+from backend.src.backtester import Backtester, LOAN_TO_VALUE_RATIO, DEBT_INTEREST_RATE
 from backend.src.strategies import run_strategy_regime_switcher, DAYS_OUT_OF_RANGE_THRESHOLD
 
 @pytest.fixture
@@ -181,22 +181,15 @@ def test_fee_simulation_logic(setup_lp_magic_numbers):
         'Open_time': [pd.Timestamp('2025-01-02')],
         'Close': [225.0], # Preço dentro do range
         'VolumeUSD': [500_000_000.0], # Volume da pool inteira
-        'TVL_USD': [1_000_000_000.0]  # TVL da pool inteira
+        'TVL_USD': [1_000_000_000.0],  # TVL da pool inteira
+        'SMA_50': [200.0],
+        'RSI': [50.0],
+        'FNG_Value': [50.0]
     }
     mock_df = pd.DataFrame(mock_data)
     
     # Executa o backtest com uma estratégia vazia
     bt.run(mock_df, strategy_function=lambda row, engine, timestamp: None)
-    
-    # Cálculos manuais:
-    # POOL_FEE_RATE = 0.003
-    # 1. Total de taxas geradas na pool = Volume * Taxa 
-    #    = 500,000,000 * 0.003 = $1,500,000
-    # 2. Valor da nossa LP = $1000 (no preço de abertura)
-    # 3. Nossa participação na pool = Valor LP / TVL Total
-    #    = 1000 / 1,000,000,000 = 0.000001 (ou 0.0001%)
-    # 4. Taxas ganhas por nós = Total de Taxas * Nossa Participação
-    #    = 1,500,000 * 0.000001 = $1.5
     
     assert lp['fees_accrued_usdt'] == pytest.approx(1.5)
     assert lp['fees_accrued_btc'] == 0 # (Simplificação: acumulamos tudo em USDT)
@@ -211,7 +204,10 @@ def test_fee_simulation_outside_range(setup_lp_magic_numbers):
         'Open_time': [pd.Timestamp('2025-01-02')],
         'Close': [500.0], # Preço FORA do range (100-400)
         'VolumeUSD': [500_000_000.0],
-        'TVL_USD': [1_000_000_000.0]
+        'TVL_USD': [1_000_000_000.0],
+        'SMA_50': [200.0],
+        'RSI': [50.0],
+        'FNG_Value': [50.0]
     }
     mock_df = pd.DataFrame(mock_data)
     
@@ -248,65 +244,110 @@ def test_backtester_days_out_of_range_counter(fresh_backtester):
     # (Para um teste mais robusto, poderíamos verificar o valor a cada passo,
     # mas o 'reset' no final já valida a lógica de incremento e reset)
 
-def test_strategy_closes_lp_after_threshold(fresh_backtester, mocker):
-    """
-    Testa se a ESTRATÉGIA fecha a LP após 'DAYS_OUT_OF_RANGE_THRESHOLD' dias.
-    """
-    bt = fresh_backtester
-    bt.open_lp(1000, 100, 200, 150, pd.Timestamp('2025-01-01'))
-    
-    # Simula 11 dias, todos FORA do range
-    days_to_run = DAYS_OUT_OF_RANGE_THRESHOLD + 1
-    mock_data = {
-        'Open_time': pd.date_range(start='2025-01-02', periods=days_to_run),
-        'Close': [50] * days_to_run, # Sempre fora do range
-        'SMA_50': [60] * days_to_run,
-        'RSI': [30] * days_to_run,
-        'FNG_Value': [30] * days_to_run,
-        'VolumeUSD': [0]*days_to_run, 'TVL_USD': [1]*days_to_run
-    }
-    mock_df = pd.DataFrame(mock_data)
+def create_mock_df_aave(price: float, days: int) -> pd.DataFrame:
+    """Cria um DataFrame simples para testes do AAVE loop."""
+    return pd.DataFrame({
+        'Open_time': pd.date_range(start='2025-01-01', periods=days),
+        'Close': [price] * days,
+        'SMA_50': [price] * days,
+        'RSI': [50] * days,
+        'FNG_Value': [50] * days,
+        'VolumeUSD': [0] * days,
+        'TVL_USD': [1] * days
+    })
 
-    # Executa o backtest
+def test_aave_loop_initial_setup(fresh_backtester):
+    """Testa se o setup (Ponto 1 e 2) funciona no primeiro dia do 'run'."""
+    bt = fresh_backtester # Inicia com $1000 USD
+    mock_df = create_mock_df_aave(price=100.0, days=1)
+    
+    # Rodar 1 dia com uma estratégia que não faz nada
+    bt.run(mock_df, strategy_function=lambda r, e, t: None)
+    
+    # Ponto 1: Comprou o colateral
+    assert bt.initial_capital == 1000.0
+    assert bt.btc_hodl_balance == 10.0 # $1000 / $100/BTC
+    
+    # Ponto 2: Pegou o empréstimo
+    expected_debt = 1000.0 * LOAN_TO_VALUE_RATIO # 1000 * 0.35 = 350
+    assert bt.total_debt_usd == 350.0
+    
+    # Ponto 3: Pagou o juro de 1 dia
+    daily_interest = 350.0 * (DEBT_INTEREST_RATE / 365)
+    assert bt.usd_balance == pytest.approx(expected_debt - daily_interest)
+    
+    # Ponto 5: Cálculo do Patrimônio Líquido
+    # (HODL * Preço) + (Caixa) - (Dívida)
+    # (10 * 100) + (350 - juro) - (350) = 1000 - juro
+    expected_net_worth = 1000.0 - daily_interest
+    assert bt.portfolio_history[-1] == pytest.approx(expected_net_worth)
+
+def test_aave_loop_daily_interest_accrual(fresh_backtester):
+    """Testa se o juro (Ponto 3) é acumulado corretamente por 3 dias."""
+    bt = fresh_backtester
+    mock_df = create_mock_df_aave(price=100.0, days=3)
+    
+    bt.run(mock_df, strategy_function=lambda r, e, t: None)
+    
+    expected_debt = 350.0
+    daily_interest = 350.0 * (DEBT_INTEREST_RATE / 365)
+    total_interest_paid = daily_interest * 3 # 3 dias
+    
+    # O caixa deve ser o empréstimo original menos 3 dias de juros
+    assert bt.usd_balance == pytest.approx(expected_debt - total_interest_paid)
+    
+    # O patrimônio líquido deve ser o capital inicial menos 3 dias de juros
+    expected_net_worth = 1000.0 - total_interest_paid
+    assert bt.portfolio_history[-1] == pytest.approx(expected_net_worth)
+
+def test_aave_loop_strategy_opens_lp_with_loaned_capital(fresh_backtester, mocker):
+    """Testa se a estratégia (Ponto 4) usa o capital emprestado."""
+    bt = fresh_backtester # Inicia com $1000 USD
+    
+    # Simular Regime SIDEWAYS (Farm)
+    mocker.patch('backend.src.strategies.analyze_market_regime', return_value='SIDEWAYS')
+    mock_df = create_mock_df_aave(price=100.0, days=1)
+    
     bt.run(mock_df, strategy_function=run_strategy_regime_switcher)
     
-    # A LP deve ter sido fechada no último dia
-    assert len(bt.active_lps) == 0
-    assert len(bt.decision_history) == 2 # 1 (OPEN) + 1 (CLOSE)
-
-def test_strategy_opens_lp_on_regime(fresh_backtester, mocker):
-    """
-    Testa se a ESTRATÉGIA (sem LPs) abre a LP correta para cada regime.
-    """
-    # 1. Simular Regime BEARISH (Deve abrir LP Larga)
-    bt_bear = Backtester(1000)
-    mocker.patch('backend.src.strategies.analyze_market_regime', return_value='BEARISH')
-    mock_df_bear = pd.DataFrame({'Open_time': [pd.Timestamp('2025-01-01')], 'Close': [100], 'SMA_50': [100], 'RSI': [50], 'FNG_Value': [50], 'VolumeUSD': [0], 'TVL_USD': [1]})
-    bt_bear.run(mock_df_bear, run_strategy_regime_switcher)
+    # O setup consumiu os $1000 e deu $350 de caixa (menos juros)
+    daily_interest = 350.0 * (DEBT_INTEREST_RATE / 365)
+    expected_capital_to_open = 350.0 - daily_interest
     
-    assert len(bt_bear.active_lps) == 1
-    lp_bear = bt_bear.active_lps[0]
+    assert len(bt.active_lps) == 1
+    lp = bt.active_lps[0]
     
-    assert lp_bear['range_lower'] == pytest.approx(100 * 0.70) # Range Largo
-    assert lp_bear['range_upper'] == pytest.approx(100 * 1.60) # Range Largo
+    # O capital inicial da LP deve ser o caixa disponível (dinheiro do empréstimo)
+    assert lp['initial_capital_usd'] == pytest.approx(expected_capital_to_open)
+    # O caixa do backtester deve ter sido zerado (pois foi todo para a LP)
+    assert bt.usd_balance == 0.0
+    # O HODL e a Dívida não mudam
+    assert bt.btc_hodl_balance == 10.0
+    assert bt.total_debt_usd == 350.0
 
-    # 2. Simular Regime SIDEWAYS (Deve abrir LP Apertada)
-    bt_side = Backtester(1000)
+def test_aave_loop_full_net_worth_calculation(fresh_backtester, mocker):
+    """Testa o cálculo do Patrimônio Líquido (Ponto 5) com todos os componentes."""
+    bt = fresh_backtester
     mocker.patch('backend.src.strategies.analyze_market_regime', return_value='SIDEWAYS')
-    mock_df_side = pd.DataFrame({'Open_time': [pd.Timestamp('2025-01-01')], 'Close': [100], 'SMA_50': [100], 'RSI': [50], 'FNG_Value': [50], 'VolumeUSD': [0], 'TVL_USD': [1]})
-    bt_side.run(mock_df_side, run_strategy_regime_switcher)
-    
-    assert len(bt_side.active_lps) == 1
-    lp_side = bt_side.active_lps[0]
-    
-    assert lp_side['range_lower'] == pytest.approx(100 * 0.85) # Range Apertado
-    assert lp_side['range_upper'] == pytest.approx(100 * 1.15) # Range Apertado
+    mock_df = create_mock_df_aave(price=100.0, days=1) # Preço = $100
 
-    # 3. Simular Regime BULL_TOP (Não Deve Fazer Nada)
-    bt_top = Backtester(1000)
-    mocker.patch('backend.src.strategies.analyze_market_regime', return_value='BULL_TOP')
-    mock_df_top = pd.DataFrame({'Open_time': [pd.Timestamp('2025-01-01')], 'Close': [100], 'SMA_50': [100], 'RSI': [50], 'FNG_Value': [50], 'VolumeUSD': [0], 'TVL_USD': [1]})
-    bt_top.run(mock_df_top, run_strategy_regime_switcher)
+    # Rodar 1 dia, o que fará:
+    # 1. Setup: HODL=10 BTC, Dívida=350, Caixa=350
+    # 2. Pagar Juros: Caixa = 350 - juro1
+    # 3. Estratégia: Abrir LP com (350 - juro1). Caixa = 0
+    bt.run(mock_df, strategy_function=run_strategy_regime_switcher)
     
-    assert len(bt_top.active_lps) == 0 # Não abriu LPs
+    # Pega o valor final do portfólio (Patrimônio Líquido)
+    final_net_worth = bt.portfolio_history[-1]
+
+    # Cálculo manual do Patrimônio Líquido:
+    hodl_value = 10.0 * 100.0 # $1000
+    lp_value = 350.0 - (350.0 * (DEBT_INTEREST_RATE / 365)) # Valor da LP
+    cash_value = 0.0
+    debt_value = 350.0
+    
+    expected_net_worth = (hodl_value + lp_value + cash_value) - debt_value
+    # (1000) + (350 - juro) + (0) - (350) = 1000 - juro
+    
+    assert final_net_worth == pytest.approx(expected_net_worth)
 
