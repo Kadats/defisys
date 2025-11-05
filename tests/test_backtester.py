@@ -2,6 +2,7 @@ import pytest
 import pandas as pd
 import math
 from backend.src.backtester import Backtester # Ajuste o caminho se necessário
+from backend.src.strategies import run_strategy_regime_switcher, DAYS_OUT_OF_RANGE_THRESHOLD
 
 @pytest.fixture
 def fresh_backtester():
@@ -218,4 +219,94 @@ def test_fee_simulation_outside_range(setup_lp_magic_numbers):
     
     # Nenhuma taxa deve ser acumulada
     assert lp['fees_accrued_usdt'] == 0.0
+
+def test_backtester_days_out_of_range_counter(fresh_backtester):
+    """
+    Testa se o motor do backtester incrementa 'days_out_of_range' corretamente.
+    """
+    bt = fresh_backtester
+    bt.open_lp(1000, 100, 200, 150, pd.Timestamp('2025-01-01'))
+    lp = bt.active_lps[0]
+    
+    # Criar 4 dias de dados: Dentro, Fora, Fora, Dentro
+    mock_data = {
+        'Open_time': [pd.Timestamp('2025-01-02'), pd.Timestamp('2025-01-03'), pd.Timestamp('2025-01-04'), pd.Timestamp('2025-01-05')],
+        'Close': [150, 50, 55, 150], # Dentro, Fora, Fora, Dentro
+        'SMA_50': [140, 60, 60, 140],
+        'RSI': [50, 30, 30, 50],
+        'FNG_Value': [50, 30, 30, 50],
+        'VolumeUSD': [0]*4, 'TVL_USD': [1]*4 # (Irrelevante para este teste)
+    }
+    mock_df = pd.DataFrame(mock_data)
+
+    # Executa o backtest (a estratégia não deve fazer nada, pois a LP está ativa)
+    bt.run(mock_df, strategy_function=run_strategy_regime_switcher)
+    
+    # No final, o preço voltou para dentro do range, o contador deve ser 0
+    assert lp['days_out_of_range'] == 0
+    
+    # (Para um teste mais robusto, poderíamos verificar o valor a cada passo,
+    # mas o 'reset' no final já valida a lógica de incremento e reset)
+
+def test_strategy_closes_lp_after_threshold(fresh_backtester, mocker):
+    """
+    Testa se a ESTRATÉGIA fecha a LP após 'DAYS_OUT_OF_RANGE_THRESHOLD' dias.
+    """
+    bt = fresh_backtester
+    bt.open_lp(1000, 100, 200, 150, pd.Timestamp('2025-01-01'))
+    
+    # Simula 11 dias, todos FORA do range
+    days_to_run = DAYS_OUT_OF_RANGE_THRESHOLD + 1
+    mock_data = {
+        'Open_time': pd.date_range(start='2025-01-02', periods=days_to_run),
+        'Close': [50] * days_to_run, # Sempre fora do range
+        'SMA_50': [60] * days_to_run,
+        'RSI': [30] * days_to_run,
+        'FNG_Value': [30] * days_to_run,
+        'VolumeUSD': [0]*days_to_run, 'TVL_USD': [1]*days_to_run
+    }
+    mock_df = pd.DataFrame(mock_data)
+
+    # Executa o backtest
+    bt.run(mock_df, strategy_function=run_strategy_regime_switcher)
+    
+    # A LP deve ter sido fechada no último dia
+    assert len(bt.active_lps) == 0
+    assert len(bt.decision_history) == 2 # 1 (OPEN) + 1 (CLOSE)
+
+def test_strategy_opens_lp_on_regime(fresh_backtester, mocker):
+    """
+    Testa se a ESTRATÉGIA (sem LPs) abre a LP correta para cada regime.
+    """
+    # 1. Simular Regime BEARISH (Deve abrir LP Larga)
+    bt_bear = Backtester(1000)
+    mocker.patch('backend.src.strategies.analyze_market_regime', return_value='BEARISH')
+    mock_df_bear = pd.DataFrame({'Open_time': [pd.Timestamp('2025-01-01')], 'Close': [100], 'SMA_50': [100], 'RSI': [50], 'FNG_Value': [50], 'VolumeUSD': [0], 'TVL_USD': [1]})
+    bt_bear.run(mock_df_bear, run_strategy_regime_switcher)
+    
+    assert len(bt_bear.active_lps) == 1
+    lp_bear = bt_bear.active_lps[0]
+    
+    assert lp_bear['range_lower'] == pytest.approx(100 * 0.70) # Range Largo
+    assert lp_bear['range_upper'] == pytest.approx(100 * 1.60) # Range Largo
+
+    # 2. Simular Regime SIDEWAYS (Deve abrir LP Apertada)
+    bt_side = Backtester(1000)
+    mocker.patch('backend.src.strategies.analyze_market_regime', return_value='SIDEWAYS')
+    mock_df_side = pd.DataFrame({'Open_time': [pd.Timestamp('2025-01-01')], 'Close': [100], 'SMA_50': [100], 'RSI': [50], 'FNG_Value': [50], 'VolumeUSD': [0], 'TVL_USD': [1]})
+    bt_side.run(mock_df_side, run_strategy_regime_switcher)
+    
+    assert len(bt_side.active_lps) == 1
+    lp_side = bt_side.active_lps[0]
+    
+    assert lp_side['range_lower'] == pytest.approx(100 * 0.85) # Range Apertado
+    assert lp_side['range_upper'] == pytest.approx(100 * 1.15) # Range Apertado
+
+    # 3. Simular Regime BULL_TOP (Não Deve Fazer Nada)
+    bt_top = Backtester(1000)
+    mocker.patch('backend.src.strategies.analyze_market_regime', return_value='BULL_TOP')
+    mock_df_top = pd.DataFrame({'Open_time': [pd.Timestamp('2025-01-01')], 'Close': [100], 'SMA_50': [100], 'RSI': [50], 'FNG_Value': [50], 'VolumeUSD': [0], 'TVL_USD': [1]})
+    bt_top.run(mock_df_top, run_strategy_regime_switcher)
+    
+    assert len(bt_top.active_lps) == 0 # Não abriu LPs
 

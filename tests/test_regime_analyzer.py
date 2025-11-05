@@ -3,8 +3,9 @@ import pandas as pd
 from backend.src.regime_analyzer import (
     analyze_market_regime,
     FNG_FEAR_THRESHOLD,
-    RSI_BULL_THRESHOLD,
-    RSI_BEAR_THRESHOLD
+    FNG_GREED,
+    RSI_BEAR_THRESHOLD,
+    RSI_BULL
 )
 
 def create_mock_row(price: float, sma_50: float, rsi: float, fng: float) -> pd.Series:
@@ -17,6 +18,8 @@ def create_mock_row(price: float, sma_50: float, rsi: float, fng: float) -> pd.S
     }
     return pd.Series(data)
 
+
+# --- Testes de BEARISH (Compra) ---
 def test_regime_is_bearish_on_fear():
     """Testa se o regime é BEARISH baseado no F&G Baixo (Medo)."""
     # Preço abaixo da média E Medo Extremo (RSI é neutro)
@@ -31,17 +34,33 @@ def test_regime_is_bearish_on_rsi():
     regime = analyze_market_regime(row)
     assert regime == 'BEARISH'
 
-def test_regime_is_bullish():
-    """Testa se o regime é BULLISH."""
-    # Preço acima da média E RSI Alto
-    row = create_mock_row(price=110, sma_50=100, rsi=RSI_BULL_THRESHOLD, fng=50)
+def test_regime_is_bull_top_on_fng_greed():
+    """Testa se o regime é BULL_TOP baseado na Ganância Extrema (F&G)."""
+    # Preço acima da média E F&G em euforia
+    row = create_mock_row(price=110, sma_50=100, rsi=60, fng=FNG_GREED)
     regime = analyze_market_regime(row)
-    assert regime == 'BULLISH'
+    assert regime == 'BULL_TOP'
 
-def test_regime_is_sideways_on_neutral_rsi():
-    """Testa se o regime é SIDEWAYS se o RSI for neutro (mesmo com preço acima da média)."""
-    # Preço acima da média, mas RSI é neutro (não é BULLISH o suficiente)
-    row = create_mock_row(price=110, sma_50=100, rsi=RSI_BULL_THRESHOLD - 1, fng=50)
+def test_regime_is_bull_top_on_rsi_bull():
+    """Testa se o regime é BULL_TOP baseado no RSI Sobrecomprado."""
+    # Preço acima da média E RSI em euforia
+    row = create_mock_row(price=110, sma_50=100, rsi=RSI_BULL, fng=50)
+    regime = analyze_market_regime(row)
+    assert regime == 'BULL_TOP'
+
+# --- Testes de SIDEWAYS (Farm) ---
+def test_regime_is_sideways_on_healthy_bull_trend():
+    """
+    Testa se o regime é SIDEWAYS (Farm) durante uma tendência de alta saudável
+    (que NÃO é euforia).
+    """
+    # Preço acima da média, mas F&G e RSI estão neutros/saudáveis
+    row = create_mock_row(
+        price=110, 
+        sma_50=100, 
+        rsi=(RSI_BULL - 1), # Abaixo da euforia
+        fng=(FNG_GREED - 1)  # Abaixo da euforia
+    ) 
     regime = analyze_market_regime(row)
     assert regime == 'SIDEWAYS'
 
@@ -57,7 +76,7 @@ def test_regime_is_sideways_on_conflicting_signals():
     # Preço acima da média (sugere alta), mas F&G com medo (sugere baixa)
     # Nossa lógica atual prioriza a tendência (preço > sma) e só entra em BULLISH se o RSI for alto
     # Como o RSI é neutro, deve cair em SIDEWAYS.
-    row = create_mock_row(price=110, sma_50=100, rsi=50, fng=FNG_FEAR_THRESHOLD - 5)
+    row = create_mock_row(price=110, sma_50=100, rsi=50, fng=FNG_FEAR_THRESHOLD)
     regime = analyze_market_regime(row)
     assert regime == 'SIDEWAYS'
 

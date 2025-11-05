@@ -1,38 +1,36 @@
 import pandas as pd
 
-# Limiares de Decisão (V1 - Podemos ajustar após o backtest)
-FNG_FEAR_THRESHOLD = 30    # Fear & Greed abaixo de 30 = Medo
-RSI_BULL_THRESHOLD = 60    # RSI acima de 60 = Momentum de alta
-RSI_BEAR_THRESHOLD = 40    # RSI abaixo de 40 = Momentum de baixa
+# Limiares de Decisão (V2 - Refinados)
+FNG_FEAR_THRESHOLD = 30
+FNG_GREED = 80 # Euforia/Ganância Extrema
+RSI_BEAR_THRESHOLD = 40
+RSI_BULL = 75 # Sobrecobrado/Euforia
 
 def analyze_market_regime(row: pd.Series) -> str:
     """
-    Analisa os indicadores da linha (row) para classificar o regime de mercado.
-    Retorna: 'BULLISH', 'BEARISH', ou 'SIDEWAYS'.
+    Analisa os indicadores para decidir que TIPO de LP abrir, 
+    caso estejamos sem posição.
+    Retorna: 'BEARISH' (Comprar), 'SIDEWAYS' (Farm), 'BULL_TOP' (Não Fazer Nada).
     """
     
-    # Coleta os indicadores (com valores padrão caso não existam)
     price = row.get('Close', 0)
-    sma_trend = row.get('SMA_50', price) # Usa o próprio preço se SMA não existir
-    rsi = row.get('RSI', 50) # Começa neutro
-    fng_value = row.get('FNG_Value', 50) # Começa neutro (do F&G)
+    sma_trend = row.get('SMA_50', price) 
+    rsi = row.get('RSI', 50) 
+    fng_value = row.get('FNG_Value', 50)
 
-    # --- Lógica de Decisão V1 ---
-    
-    # 1. Condição de Baixa (BEARISH)
-    # Tendência de baixa (preço < média) E (medo extremo OU momentum de baixa)
+    # 1. Condição de Topo (BULL_TOP) -> Sinal de "Não Comprar"
+    # Preço acima da tendência E (ganância extrema OU RSI sobrecomprado)
+    is_bull_top = (price > sma_trend) and (fng_value >= FNG_GREED or rsi >= RSI_BULL)
+    if is_bull_top:
+        return 'BULL_TOP'
+        
+    # 2. Condição de Fundo (BEARISH) -> Sinal de "Comprar"
+    # Preço abaixo da tendência E (medo OU momentum de baixa)
     is_bearish = (price < sma_trend) and (fng_value <= FNG_FEAR_THRESHOLD or rsi <= RSI_BEAR_THRESHOLD)
     if is_bearish:
         return 'BEARISH'
-        
-    # 2. Condição de Alta (BULLISH)
-    # Tendência de alta (preço > média) E (momentum de alta)
-    is_bullish = (price > sma_trend) and (rsi >= RSI_BULL_THRESHOLD)
-    if is_bullish:
-        return 'BULLISH'
 
-    # 3. Condição Padrão (SIDEWAYS)
-    # Se não for nenhum dos anteriores, o mercado está lateralizado/indefinido.
+    # 3. Condição Padrão (SIDEWAYS) -> Sinal de "Farm"
+    # (Inclui a "Tendência de Alta Saudável")
     return 'SIDEWAYS'
 
-    
