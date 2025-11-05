@@ -38,4 +38,4 @@ dist/
 *.[iI]dentifier
 
 # backtest_reports
-backtest_reports.txt
+backtest_report.txt
