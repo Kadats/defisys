@@ -1,13 +1,14 @@
-# Em backend/src/backtester.py
 import pandas as pd
 import numpy as np
-import math  # <-- MUDANÇA 1: Adicionar import
+import math  
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Taxa da pool que estamos simulando (0.3% para WETH/USDT ou WBTC/USDT)
-POOL_FEE_RATE = 0.003
+POOL_FEE_RATE = 0.003 # 0.3% de taxa por volume de negociação
+LOAN_TO_VALUE_RATIO = 0.35 # 35% de empréstimo
+DEBT_INTEREST_RATE = 0.075 # 7.5% APY
 
 class Backtester:
     """
@@ -22,7 +23,10 @@ class Backtester:
         # Estado do Portfólio
         self.initial_capital = initial_capital_usd
         self.usd_balance = initial_capital_usd
-        self.btc_hodl_balance = 0.0
+        self.btc_hodl_balance = 0.0 # Colateral (ainda não comprado)
+        self.total_debt_usd = 0.0   # Dívida (ainda não contraída)
+        self.loan_apy = DEBT_INTEREST_RATE
+        
         self.active_lps = [] # Lista para guardar as posições de LP ativas
         
         # Rastreamento
@@ -66,23 +70,29 @@ class Backtester:
         return value_usd, amount_btc, amount_usdt
 
     def _calculate_portfolio_value(self, current_btc_price: float) -> float:
-        """Calcula o valor total do portfólio em USD."""
+        """Calcula o valor líquido total do portfólio (Patrimônio Líquido)."""
         
-        # Valor das LPs ativas
+        # 1. Valor das LPs ativas (Ativos)
         lp_total_value = 0.0
         for lp in self.active_lps:
-            # Pega o valor dos ativos (considerando IL)
             asset_value, _, _ = self._get_lp_value(lp, current_btc_price)
-            
-            # Adiciona as taxas acumuladas
             fees_value = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_btc_price)
-            
             lp_total_value += asset_value + fees_value
             
-        # Valor do BTC em HODL
+        # 2. Valor do Colateral HODL (Ativos)
         hodl_value = self.btc_hodl_balance * current_btc_price
         
-        return self.usd_balance + hodl_value + lp_total_value
+        # 3. Valor do Caixa (Ativos)
+        # (self.usd_balance é o caixa operacional das LPs, que pode ser positivo ou negativo)
+        cash_value = self.usd_balance
+        
+        # 4. Valor da Dívida (Passivo)
+        debt_value = self.total_debt_usd
+        
+        # Patrimônio Líquido = (HODL + LPs + Caixa) - Dívida
+        net_value = (hodl_value + lp_total_value + cash_value) - debt_value
+        
+        return net_value
 
     # --- API PÚBLICA (Funções que a Estratégia pode chamar) ---
     def buy_and_hodl(self, amount_usd: float, current_btc_price: float):
@@ -233,18 +243,47 @@ class Backtester:
  
     def run(self, df: pd.DataFrame, strategy_function):
         """
-        Executa o backtest iterando pelo DataFrame e chamando a
-        função de estratégia a cada passo.
+        Executa o backtest iterando pelo DataFrame.
         """
         if df.empty:
             logger.error("DataFrame vazio. Abortando backtest.")
             return {}
 
-        logger.info(f"Iniciando Backtester v2. Processando {len(df)} velas...")
+        logger.info(f"Iniciando Backtester v2 (AAVE Loop). Processando {len(df)} velas...")
 
+        # --- MUDANÇA: Lógica de Setup Inicial (Ponto 1 e 2) ---
+        # Só executa o setup se a dívida ainda não foi contraída (estado inicial)
+        if self.total_debt_usd == 0.0:
+            try:
+                initial_price = df.iloc[0]['Close']
+                
+                # Ponto 1: Comprar o colateral
+                # Só compra se AINDA tivermos o capital inicial em USD
+                if self.usd_balance == self.initial_capital:
+                    self.btc_hodl_balance = self.usd_balance / initial_price
+                    self.usd_balance = 0 # Gastamos todo o capital inicial
+                    logger.info(f"Setup Inicial: Comprado {self.btc_hodl_balance:.6f} BTC @ ${initial_price:.2f} como colateral.")
+                
+                # Ponto 2: Simular o empréstimo
+                collateral_value_usd = self.initial_capital # LTV é baseado no capital inicial
+                self.total_debt_usd = collateral_value_usd * LOAN_TO_VALUE_RATIO
+                # Adiciona o empréstimo ao nosso caixa (que era 0)
+                self.usd_balance += self.total_debt_usd 
+                logger.info(f"Setup Inicial: Empréstimo de ${self.total_debt_usd:.2f} (35% LTV) contraído.")
+                
+            except IndexError:
+                logger.error("DataFrame não contém dados suficientes para iniciar o setup. Abortando.")
+                return {}
+
+        # --- Início do Loop Diário ---
         for index, row in df.iterrows():
             current_price = row['Close']
             timestamp = row['Open_time']
+            
+            # --- Simular Juros Diários (Ponto 3) ---
+            daily_interest_rate = (self.loan_apy / 365)
+            interest_cost = self.total_debt_usd * daily_interest_rate
+            self.usd_balance -= interest_cost # O custo dos juros é pago pelo nosso caixa operacional
             
             # --- 1. Atualizar o estado das LPs ANTES da estratégia ---
             for lp in self.active_lps:
@@ -269,13 +308,11 @@ class Backtester:
                     lp['days_out_of_range'] = 0 # Resetar o contador
 
             # --- 2. Chamar a Estratégia ---
-            # (Esta linha estava com a indentação errada)
-            # Ela deve estar alinhada com o 'for lp in...' acima, não dentro dele.
             strategy_function(row, self, timestamp)
 
             # --- 3. Registrar o Valor do Portfólio ---
-            total_value = self._calculate_portfolio_value(current_price)
-            self.portfolio_history.append(total_value)
+            total_net_value = self._calculate_portfolio_value(current_price)
+            self.portfolio_history.append(total_net_value)
 
         # --- Fim do Backtest ---
         final_portfolio_value = self.portfolio_history[-1] if self.portfolio_history else self.initial_capital
@@ -287,13 +324,14 @@ class Backtester:
         
         logger.info("Backtest v2 Concluído. Valor Final: $%.2f", final_portfolio_value)
 
+        # Atualiza o relatório final
         return {
             'initial_capital_usd': self.initial_capital,
             'final_usd_value': final_portfolio_value,
             'profit_usd': final_portfolio_value - self.initial_capital,
             'profit_percentage_usd': ((final_portfolio_value / self.initial_capital) - 1) * 100,
             'btc_benchmark_final_value': hodl_final_value,
-            'btc_benchmark_profit_percentage': ((hodl_final_value / self.initial_capital) - 1) * 100,
+            'btc_benchmark_profit_percentage': ((final_portfolio_value / self.initial_capital) - 1) * 100,
             'decision_history': self.decision_history,
         }
 
