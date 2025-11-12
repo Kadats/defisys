@@ -3,6 +3,9 @@ import numpy as np
 import math
 import logging
 
+from defi_data_toolkit.database import log_open_position, log_close_position
+from .config import DB_FILE
+
 logger = logging.getLogger(__name__)
 
 POOL_FEE_RATE = 0.003 
@@ -72,7 +75,7 @@ class Backtester:
         """Adiciona BTC ao balanço de colateral HODL."""
         self.btc_hodl_balance += btc_amount
 
-    def open_lp(self, capital_usd: float, range_lower: float, range_upper: float, current_btc_price: float, timestamp):
+    def open_lp(self, capital_usd: float, range_lower: float, range_upper: float, current_btc_price: float, timestamp, strategy: str = "UNKNOWN"):
         """Abre uma nova posição de LP com matemática da Uniswap v3."""
     
         if range_lower >= range_upper:
@@ -98,23 +101,37 @@ class Backtester:
             amount_usdt = L * (sqrt_pc - sqrt_pa)
             amount_btc = L * ( (1/sqrt_pc) - (1/sqrt_pb) )
 
-        # --- CORREÇÃO DA INDENTAÇÃO AQUI ---
-        # Este bloco inteiro estava alinhado incorretamente.
         new_lp = {
-            "id": len(self.active_lps) + 1, "L": L, "range_lower": range_lower,
+            "L": L, "range_lower": range_lower,
             "range_upper": range_upper, "open_timestamp": timestamp,
             "entry_price": current_btc_price, "initial_capital_usd": capital_usd,
             "fees_accrued_usdt": 0.0, "fees_accrued_btc": 0.0,
             "initial_amount_btc": amount_btc, "initial_amount_usdt": amount_usdt,
             "days_out_of_range": 0 
         }
+
+        position_id = log_open_position(
+            db_file=DB_FILE,
+            open_timestamp=int(timestamp.value / 10**6), # Converter para ms
+            strategy=strategy,
+            capital_usd=capital_usd,
+            open_price=current_btc_price,
+            range_lower=range_lower,
+            range_upper=range_upper
+        )
+        
+        if position_id is None:
+            logger.error("Falha ao registrar 'open_position' no DB. Abortando abertura de LP.")
+            return
+
+        # Adiciona o ID do DB à nossa LP em memória
+        new_lp["id"] = position_id
+        
         self.active_lps.append(new_lp)
         self.decision_history.append(
-            f"[{timestamp.date()}] OPEN LP: ${capital_usd:.2f} @ ${current_btc_price:.2f} | "
-            f"Range: ${range_lower:.2f}-${range_upper:.2f} | "
-            f"Assets: {amount_btc:.6f} BTC + {amount_usdt:.2f} USDT"
+            f"[{timestamp.date()}] OPEN LP (ID: {position_id}): ${capital_usd:.2f} @ ${current_btc_price:.2f} | "
+            f"Range: ${range_lower:.2f}-${range_upper:.2f} | Strategy: {strategy}"
         )
-        # --- FIM DA CORREÇÃO DE INDENTAÇÃO ---
 
     def close_lp(self, lp_id: int, current_btc_price: float, timestamp):
         lp_to_close = next((lp for lp in self.active_lps if lp['id'] == lp_id), None)
@@ -126,11 +143,21 @@ class Backtester:
         fees_value = lp_to_close['fees_accrued_usdt'] + (lp_to_close['fees_accrued_btc'] * current_btc_price)
         final_value = asset_value + fees_value
 
+        final_profit = final_value - lp_to_close['initial_capital_usd']
+        
+        log_close_position(
+            db_file=DB_FILE,
+            position_id=lp_id,
+            close_timestamp=int(timestamp.value / 10**6), # Converter para ms
+            close_price=current_btc_price,
+            final_profit=final_profit
+        )
+
         self.usd_balance += final_value
         self.active_lps.remove(lp_to_close)
         self.decision_history.append(
             f"[{timestamp.date()}] CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price:.2f} "
-            f"(Ativos: ${asset_value:.2f}, Taxas: ${fees_value:.2f})"
+            f"(Lucro/Prejuízo da LP: ${final_profit:.2f})"
         )
 
     def _handle_liquidation(self, timestamp):

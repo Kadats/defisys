@@ -35,8 +35,11 @@ def test_open_lp_price_within_range(fresh_backtester):
 
 @pytest.fixture
 def setup_lp_magic_numbers(fresh_backtester):
+    """Fixture que cria uma LP manual para testes de matemática."""
     bt = fresh_backtester
     bt.open_lp(1000.0, 100.0, 400.0, 225.0, pd.Timestamp('2025-01-01'))
+    # Garante que a LP foi criada antes de retornar
+    assert len(bt.active_lps) == 1
     return bt, bt.active_lps[0]
 
 def test_lp_value_price_goes_up_above_range(setup_lp_magic_numbers):
