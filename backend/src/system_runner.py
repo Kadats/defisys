@@ -1,4 +1,3 @@
-# Em backend/src/system_runner.py
 import logging
 import pandas as pd
 import os
@@ -13,24 +12,28 @@ logger = logging.getLogger(__name__)
 
 # (A função log_summary_report permanece a mesma)
 def log_summary_report(results, latest_indicators=None):
-    """Registra um resumo simples do relatorio de backtest e indicadores recentes."""
-    try:
-        logger.info("--- RELATORIO DE BACKTEST (v2 Engine) ---")
-        logger.info("Capital Inicial: $%0.2f", results.get('initial_capital_usd'))
-        logger.info("Capital Final: $%0.2f", results.get('final_usd_value'))
-        logger.info("Lucro/Prejuizo: $%0.2f (%0.2f%%)", results.get('profit_usd'), results.get('profit_percentage_usd'))
-        logger.info("Performance do Buy and Hold (BTC): (%0.2f%%)", results.get('btc_benchmark_profit_percentage'))
+    """
+    Registra um resumo do backtest no logger e salva um relatório
+    completo em um arquivo .txt.
+    """
+    
+    # --- Parte 1: Logar no Console (REMOVIDA/COMENTADA) ---
+    # try:
+    #     logger.info("--- RELATORIO DE BACKTEST (v2 Engine) ---")
+    #     logger.info("Capital Inicial: $%0.2f", results.get('initial_capital_usd'))
+    #     logger.info("Capital Final: $%0.2f", results.get('final_usd_value'))
+    #     logger.info("Lucro/Prejuizo: $%0.2f (%0.2f%%)", results.get('profit_usd'), results.get('profit_percentage_usd'))
+    #     logger.info("Performance do Buy and Hold (BTC): (%0.2f%%)", results.get('btc_benchmark_profit_percentage'))
 
-        if latest_indicators is not None:
-             # Ajustado para mostrar scores, se disponíveis
-            cols_to_show = ['Open_time', 'Close', 'Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']
-            cols_available = [col for col in cols_to_show if col in latest_indicators.columns]
-            logger.info("--- INDICADORES RECENTES ---")
-            logger.info("\n%s", latest_indicators[cols_available].to_string())
-    except Exception:
-        logger.exception("Erro ao logar o sumario do relatorio")
+    #     if latest_indicators is not None:
+    #          cols_to_show = ['Open_time', 'Close', 'FNG_Value', 'RSI', 'Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']
+    #          cols_available = [col for col in cols_to_show if col in latest_indicators.columns]
+    #          logger.info("--- INDICADORES RECENTES ---")
+    #          logger.info("\n%s", latest_indicators[cols_available].to_string())
+    # except Exception:
+    #     logger.exception("Erro ao logar o sumario do relatorio no console")
 
-    # Salva o relatorio em um arquivo .txt
+    # --- Parte 2: Salvar Relatório em Arquivo .txt (MANTIDA) ---
     try:
         report_path = os.path.join(PROJECT_ROOT, "backtest_report.txt")
         decision_history = results.get('decision_history', [])
@@ -52,6 +55,7 @@ def log_summary_report(results, latest_indicators=None):
             else:
                 f.write("Nenhuma decisão foi tomada.\n")
         
+        # Manter este log para sabermos que o arquivo foi salvo
         logger.info(f"Relatório de backtest salvo em: {report_path}")
         
     except Exception:
@@ -99,3 +103,4 @@ def run_trading_system():
         "backtest_report": backtest_results,
         "full_dataframe": full_df # Continuamos a retornar o DF completo
     }
+
