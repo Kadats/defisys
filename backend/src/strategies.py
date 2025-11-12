@@ -2,6 +2,8 @@ import pandas as pd
 import logging
 from .backtester import Backtester, LOAN_TO_VALUE_RATIO 
 from .regime_analyzer import analyze_market_regime
+# --- MUDANÇA 1: Importar o DB_FILE ---
+from .config import DB_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,7 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
             collateral_value = engine.btc_hodl_balance * current_price
             amount_to_borrow = collateral_value * LOAN_TO_VALUE_RATIO
             engine.total_debt_usd += amount_to_borrow
-            engine.usd_balance += amount_to_borrow # usd_balance agora é 500
+            engine.usd_balance += amount_to_borrow # usd_balance agora é (ex) 500
             logger.info(f"[{timestamp.date()}] Loop: Pegando empréstimo de ${amount_to_borrow:.2f} (50% LTV)")
             
             # 3. Executar Loop Recursivo (Ponto 3)
@@ -55,20 +57,21 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
             btc_to_collateral = btc_bought * 0.50 # 2.5 BTC
             btc_to_lp = btc_bought * 0.50         # 2.5 BTC
             
-            # --- CORREÇÃO DO BUG DE DINHEIRO ---
+            # --- CORREÇÃO DO BUG DE LÓGICA (Gastar o dinheiro) ---
             # 4. Adicionar ao colateral (gasta 50% do caixa)
-            capital_for_collateral = btc_to_collateral * current_price # 2.5 * 100 = $250
+            capital_for_collateral_usd = btc_to_collateral * current_price # 2.5 * 100 = $250
             engine.add_collateral(btc_to_collateral)
-            engine.usd_balance -= capital_for_collateral # 500 - 250 = 250
+            engine.usd_balance -= capital_for_collateral_usd # 500 - 250 = 250
             logger.info(f"[{timestamp.date()}] Loop: {btc_to_collateral:.6f} BTC adicionado ao colateral.")
             
             # 5. Abrir LP (gasta os 50% restantes do caixa)
-            capital_for_lp_usd = engine.usd_balance # $250 restantes
+            # --- CORREÇÃO DO BUG (UnboundLocalError) ---
+            capital_for_lp_usd = engine.usd_balance # Usa o que sobrou ($250)
             range_lower = current_price * 0.70 # Range Largo de Compra
             range_upper = current_price * 1.60
             
             logger.info(f"[{timestamp.date()}] Loop: Abrindo LP de Range Largo com ${capital_for_lp_usd:.2f} (Range: ${range_lower:.2f}-${range_upper:.2f})")
-            engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp)
+            engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BEARISH_LOOP")
             engine.usd_balance -= capital_for_lp_usd # 250 - 250 = 0
             
         else:
@@ -87,14 +90,14 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
                 range_lower = current_price * 0.70 
                 range_upper = current_price * 1.60
                 logger.info(f"[{timestamp.date()}] Regime: BEARISH (Pós-Loop). Abrindo LP de Range Largo (Range: ${range_lower:.2f}-${range_upper:.2f})")
-                engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp)
+                engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy="BEARISH_LOOP")
                 engine.usd_balance -= capital_to_allocate # Deduz o capital
             
             elif regime == 'SIDEWAYS':
                 range_lower = current_price * 0.85 
                 range_upper = current_price * 1.15
                 logger.info(f"[{timestamp.date()}] Regime: SIDEWAYS (Pós-Loop). Abrindo LP de Farm (Range: ${range_lower:.2f}-${range_upper:.2f})")
-                engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp)
+                engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy="SIDEWAYS_FARM")
                 engine.usd_balance -= capital_to_allocate # Deduz o capital
 
             elif regime == 'BULL_TOP':
