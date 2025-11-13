@@ -250,3 +250,40 @@ def get_full_prepared_data():
         all_klines_df['Oportunidade_Score'] = 0.5
 
     return all_klines_df
+
+def get_positions_from_db(db_file: str = DB_FILE, include_open: bool = True, include_closed: bool = True) -> pd.DataFrame:
+    """
+    Carrega o log de posições (abertas e/ou fechadas) do banco de dados.
+    """
+    conn = create_connection(db_file)
+    if not conn:
+        return pd.DataFrame()
+        
+    try:
+        base_query = "SELECT * FROM positions_log"
+        conditions = []
+        if include_open and not include_closed:
+            conditions.append("close_timestamp IS NULL")
+        elif include_closed and not include_open:
+            conditions.append("close_timestamp IS NOT NULL")
+        
+        if conditions:
+            base_query += " WHERE " + " AND ".join(conditions)
+            
+        base_query += " ORDER BY open_timestamp DESC" # Mostrar as mais recentes primeiro
+            
+        df = pd.read_sql(base_query, conn)
+        
+        if not df.empty:
+            df['open_timestamp'] = pd.to_datetime(df['open_timestamp'], unit='ms')
+            if 'close_timestamp' in df.columns:
+                df['close_timestamp'] = pd.to_datetime(df['close_timestamp'], unit='ms', errors='coerce') # Lida com NaT
+        return df
+        
+    except Exception as e:
+        logger.error(f"Erro ao ler 'positions_log' do DB: {e}. A tabela pode não existir ainda.")
+        return pd.DataFrame() # Retorna DF vazio se a tabela não existir
+    finally:
+        if conn:
+            conn.close()
+
