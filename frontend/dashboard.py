@@ -1,8 +1,8 @@
-# frontend/dashboard.py
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
+from datetime import datetime
 
 # --- Configurações da Página ---
 st.set_page_config(
@@ -12,25 +12,56 @@ st.set_page_config(
 )
 
 # --- Título e Cabeçalho ---
-st.title("DefiSys - Dashboard de Estratégia DeFi 📈")
+st.title("DefiSys - Dashboard de Posições 📈")
+st.caption(f"Dados atualizados em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-# --- Função para buscar dados da nossa API ---
-@st.cache_data(ttl=600) # Cache de 10 minutos para os dados
-def load_data_from_api():
-    API_URL = "http://127.0.0.1:8000/api/v1/run_backtest"
+# --- Constantes da API ---
+API_BASE_URL = "http://127.0.0.1:8000/api/v1"
+
+# --- Funções de Carregamento de Dados ---
+@st.cache_data(ttl=300) # Cache de 5 minutos
+def load_chart_data():
+    """Busca dados de velas da API."""
     try:
-        # Usar st.spinner para dar um feedback visual durante o carregamento
-        with st.spinner("A executar o backtest e a buscar os dados mais recentes... Isto pode demorar um pouco."):
-            response = requests.get(API_URL, timeout=300)
-            response.raise_for_status()
-        st.success("Dados carregados com sucesso!")
-        return response.json()
+        response = requests.get(f"{API_BASE_URL}/chart_data", timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict) and "error" in data:
+            st.error(f"Erro da API ao buscar dados do gráfico: {data['error']}")
+            return pd.DataFrame()
+        df = pd.DataFrame(data)
+        df['Open_time'] = pd.to_datetime(df['Open_time'])
+        return df
     except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao conectar à API do backend: {e}")
-        return None
+        st.error(f"Erro ao conectar à API para buscar dados do gráfico: {e}")
+        return pd.DataFrame()
 
-# --- Função para plotar o gráfico de preços ---
-def plot_price_chart(df: pd.DataFrame):
+@st.cache_data(ttl=60) # Cache de 1 minuto
+def load_positions_data():
+    """Busca dados de posições (abertas e fechadas) da API."""
+    try:
+        response = requests.get(f"{API_BASE_URL}/positions", timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        open_df = pd.DataFrame(data.get('open_positions', []))
+        closed_df = pd.DataFrame(data.get('closed_positions', []))
+        
+        # Converte datas para melhor exibição
+        if not open_df.empty:
+            open_df['open_timestamp'] = pd.to_datetime(open_df['open_timestamp'])
+        if not closed_df.empty:
+            closed_df['open_timestamp'] = pd.to_datetime(closed_df['open_timestamp'])
+            closed_df['close_timestamp'] = pd.to_datetime(closed_df['close_timestamp'])
+            
+        return open_df, closed_df
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro ao conectar à API para buscar posições: {e}")
+        return pd.DataFrame(), pd.DataFrame()
+
+# --- Função de Plotagem ---
+def plot_price_chart(df: pd.DataFrame, open_positions: pd.DataFrame):
+    """Cria o gráfico de velas e plota as posições abertas."""
     fig = go.Figure(data=[go.Candlestick(
         x=df['Open_time'],
         open=df['Open'],
@@ -39,74 +70,58 @@ def plot_price_chart(df: pd.DataFrame):
         close=df['Close'],
         name='Preço BTC'
     )])
+    
+    # Adicionar LPs abertas ao gráfico
+    for _, lp in open_positions.iterrows():
+        fig.add_hline(
+            y=lp['range_lower'],
+            line_dash="dot",
+            line_color="green",
+            annotation_text=f"LP {lp['id']} (Low)",
+            annotation_position="bottom right"
+        )
+        fig.add_hline(
+            y=lp['range_upper'],
+            line_dash="dot",
+            line_color="red",
+            annotation_text=f"LP {lp['id']} (High)",
+            annotation_position="top right"
+        )
+
     fig.update_layout(
-        title='Preço Histórico do BTC/USDT',
+        title='Preço (Últimos 365 dias) e Posições Abertas',
         yaxis_title='Preço (USDT)',
         xaxis_title='Data',
-        xaxis_rangeslider_visible=True, # Reativado para melhor navegação
+        xaxis_rangeslider_visible=False,
         template='plotly_dark'
     )
     return fig
 
-
 # --- Carregar os Dados ---
-data = load_data_from_api()
+with st.spinner("Carregando dados do gráfico..."):
+    df_chart = load_chart_data()
+with st.spinner("Carregando dados das posições..."):
+    df_open, df_closed = load_positions_data()
 
 # --- Exibir o Dashboard ---
-if data:
-    report = data['report']
-    df_history = pd.DataFrame(data['historical_data'])
-    df_history['Open_time'] = pd.to_datetime(df_history['Open_time'])
-
-    # --- Seção de Resumo (KPIs) ---
-    st.header("Resultados do Último Backtest")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Resultado da Estratégia", f"${report['profit_usd']:.2f}", f"{report['profit_percentage_usd']:.2f}%")
-    col2.metric("Resultado Buy & Hold", f"${(report['btc_benchmark_final_value'] - report['initial_capital_usd']):.2f}", f"{report['btc_benchmark_profit_percentage']:.2f}%")
-    col3.metric("Alpha vs. HODL", f"{(report['profit_percentage_usd'] - report['btc_benchmark_profit_percentage']):.2f}%")
-    col4.metric("Capital Final", f"${report['final_usd_value']:.2f}")
-
-    st.divider() # Adiciona uma linha divisória
-
-    # --- Estrutura com Abas ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Análise Gráfica", "📈 Indicadores Compostos", "📄 Dados Brutos", "🗂️ Histórico de Decisões"])
-
-    with tab1:
-        st.plotly_chart(plot_price_chart(df_history), use_container_width=True)
-
-    with tab2:
-        st.header("Painel de Indicadores Compostos")
-        scores_df = df_history[['Open_time', 'Sentimento_Score', 'Volatilidade_Score', 'Oportunidade_Score']].dropna()
-        
-        # Renomeia colunas para os gráficos
-        scores_df_renamed = scores_df.rename(columns={
-            'Open_time': 'index',
-            'Sentimento_Score': 'Sentimento (0-1)',
-            'Volatilidade_Score': 'Volatilidade (0-1)',
-            'Oportunidade_Score': 'Oportunidade (0-1)'
-        }).set_index('index')
-
-        st.line_chart(scores_df_renamed)
-
-    with tab3:
-        st.header("Dados Históricos Completos")
-        st.dataframe(df_history)
-
-    with tab4:
-        st.header("Histórico de Decisões")
-        # Extrai o histórico de decisões da resposta da API
-        decision_history = data.get('decision_history', [])
-        if decision_history:
-            df_decisions = pd.DataFrame(decision_history)
-            # Tenta converter a coluna Data para datetime, se existir
-            if 'Data' in df_decisions.columns:
-                try:
-                    df_decisions['Data'] = pd.to_datetime(df_decisions['Data'])
-                except Exception:
-                    pass
-            st.dataframe(df_decisions)
-        else:
-            st.info("Nenhum histórico de decisões disponível.")
+if not df_chart.empty:
+    st.plotly_chart(plot_price_chart(df_chart, df_open), use_container_width=True)
 else:
-    st.warning("Não foi possível carregar os dados do backend. Certifique-se de que a API está a rodar com 'make run-api'.")
+    st.warning("Não foi possível carregar os dados do gráfico.")
+
+# --- Abas para Posições ---
+st.header("Gerenciamento de Posições")
+tab1, tab2 = st.tabs(["Posições Abertas", "Histórico de Posições Fechadas"])
+
+with tab1:
+    if not df_open.empty:
+        st.dataframe(df_open)
+    else:
+        st.info("Nenhuma posição aberta no momento.")
+
+with tab2:
+    if not df_closed.empty:
+        st.dataframe(df_closed)
+    else:
+        st.info("Nenhum histórico de posições fechadas.")
 
