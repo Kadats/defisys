@@ -1,12 +1,14 @@
 import logging
 import pandas as pd
 import os
-# Orquestracao e backtest
+
 from .data_provider import get_full_prepared_data
 from .backtester import Backtester
 from .strategies import run_strategy_regime_switcher
 from .config import PROJECT_ROOT
-
+from .prediction_engine import train_prediction_model, get_predictions
+from defi_data_toolkit.database import save_predictions_to_db
+from .config import PROJECT_ROOT, DB_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -64,43 +66,46 @@ def log_summary_report(results, latest_indicators=None):
 
 def run_trading_system():
     """
-    Orquestra o fluxo de alto nivel usando o novo Backtester Engine.
+    Orquestra o fluxo de alto nivel: Dados -> Modelo de ML -> Backtest.
     """
     logger.info("Iniciando o sistema de trade...")
 
-    # 1. Obter os dados já preparados
+    # 1. Obter os dados (agora com features e alvos de ML)
     logger.info("Fase 1: Preparando todos os dados de mercado e indicadores...")
-    # Corrigido: Usar a função correta do data_provider da toolkit
     full_df = get_full_prepared_data() 
     if full_df is None or full_df.empty:
-        logger.error("Não foi possível obter os dados para o backtest. Encerrando.")
-        # Retorna estrutura compatível com a API
+        logger.error("Não foi possível obter os dados. Encerrando.")
         return {"backtest_report": {"error": "Failed to get data"}, "full_dataframe": pd.DataFrame()} 
 
-    # 2. Configurar e Executar o Backtester v2
-    logger.info("Fase 2: Executando o backtest da estratégia v1...")
+    # --- MUDANÇA 2: Treinar o Modelo de ML ---
+    logger.info("Fase 2: Treinando o modelo de predição...")
+    model, scaler = train_prediction_model(full_df)
+    
+    # Gerar predições para todo o histórico (para análise)
+    full_df_with_predictions = get_predictions(model, scaler, full_df)
+
+    # --- Salvar as predições no DB ---
+    logger.info("Fase 2b: Salvando predições no banco de dados...")
+    save_predictions_to_db(full_df_with_predictions, DB_FILE)
+
+    # 3. Configurar e Executar o Backtester
+    logger.info("Fase 3: Executando o backtest da estratégia...")
     initial_capital = 1000.0
     engine = Backtester(initial_capital_usd=initial_capital)
     
-    # Passa o DataFrame E a função da estratégia para o motor
-    backtest_results = engine.run(full_df, strategy_function=run_strategy_regime_switcher) 
+    # O backtester roda no DataFrame que agora contém as predições
+    backtest_results = engine.run(full_df_with_predictions, strategy_function=run_strategy_regime_switcher) 
 
-    # 3. Logar o relatório final
-    latest_indicators = full_df.tail(5) if not full_df.empty else None
+    # 4. Logar o relatório final
+    latest_indicators = full_df_with_predictions.tail(5) if not full_df_with_predictions.empty else None
     log_summary_report(backtest_results, latest_indicators)
 
     logger.info("Processamento do sistema de trade concluído.")
-
-    # 4. Retornar os resultados para a API
-    # Garantir que o dataframe retornado é compatível com JSON (pode precisar de sanitização como na api.py)
-    # Vamos assumir que a sanitização acontece na api.py por enquanto
     
-    # Verifica se backtest_results não está vazio antes de retornar
     if not backtest_results:
         backtest_results = {"error": "Backtest execution failed"}
         
     return {
         "backtest_report": backtest_results,
-        "full_dataframe": full_df # Continuamos a retornar o DF completo
+        "full_dataframe": full_df_with_predictions # Retornar o DF com as predições
     }
-
