@@ -71,6 +71,36 @@ def plot_price_chart(df: pd.DataFrame, open_positions: pd.DataFrame):
         name='Preço BTC'
     )])
     
+    # --- MUDANÇA 1: Filtrar os dados para os marcadores ---
+    
+    # 1. Marcadores de "Predição de Queda" (O que o modelo DISSE)
+    df_pred_fall = df[df['prediction'] == 1]
+    
+    # 2. Marcadores de "Acerto" (Predição de queda + Queda real)
+    df_pred_correct = df[(df['prediction'] == 1) & (df['prediction_correct'] == 1)]
+    
+    # 3. Marcadores de "Erro" (Predição de queda + Queda NÃO aconteceu)
+    df_pred_wrong = df[(df['prediction'] == 1) & (df['prediction_correct'] == 0)]
+
+    # --- Plotar os marcadores ---
+    # (Plotamos erros e acertos separadamente para cores diferentes)
+    
+    fig.add_trace(go.Scatter(
+        x=df_pred_correct['Open_time'],
+        y=df_pred_correct['High'] * 1.05, # Plotar 5% acima da vela
+        mode='markers',
+        marker=dict(color='green', symbol='triangle-down', size=10),
+        name='Acerto (Previu Queda e Caiu)'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=df_pred_wrong['Open_time'],
+        y=df_pred_wrong['High'] * 1.05, # Plotar 5% acima da vela
+        mode='markers',
+        marker=dict(color='red', symbol='x', size=10),
+        name='Erro (Previu Queda e Não Caiu)'
+    ))
+
     # Adicionar LPs abertas ao gráfico
     for _, lp in open_positions.iterrows():
         fig.add_hline(
@@ -95,7 +125,7 @@ def plot_price_chart(df: pd.DataFrame, open_positions: pd.DataFrame):
         xaxis_rangeslider_visible=False,
         template='plotly_dark'
     )
-    return fig
+    return fig, len(df_pred_fall), len(df_pred_correct)
 
 # --- Carregar os Dados ---
 with st.spinner("Carregando dados do gráfico..."):
@@ -105,7 +135,17 @@ with st.spinner("Carregando dados das posições..."):
 
 # --- Exibir o Dashboard ---
 if not df_chart.empty:
-    st.plotly_chart(plot_price_chart(df_chart, df_open), use_container_width=True)
+    fig, total_predictions, total_correct = plot_price_chart(df_chart, df_open)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # --- MUDANÇA 4: Exibir as estatísticas (O que você pediu) ---
+    st.subheader("Análise do Modelo (Previsão de Queda)")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total de Predições de Queda", total_predictions)
+    col2.metric("Total de Acertos", total_correct)
+    accuracy = (total_correct / total_predictions * 100) if total_predictions > 0 else 0
+    col3.metric("Taxa de Acerto (Precisão)", f"{accuracy:.2f}%")
+    
 else:
     st.warning("Não foi possível carregar os dados do gráfico.")
 
