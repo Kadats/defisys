@@ -16,6 +16,13 @@ def sanitize_df_for_json(df: pd.DataFrame) -> list:
     for col in df.select_dtypes(include=['datetime64[ns]']).columns:
         df[col] = df[col].astype(str)
     return df.to_dict(orient='records')
+# Helper para limpar dados para JSON
+def sanitize_df_for_json(df: pd.DataFrame) -> list:
+    df = df.replace([np.inf, -np.inf], None)
+    df = df.where(pd.notnull(df), None)
+    for col in df.select_dtypes(include=['datetime64[ns]']).columns:
+        df[col] = df[col].astype(str)
+    return df.to_dict(orient='records')
 
 @app.get("/api/v1/chart_data")
 def get_chart_data():
@@ -70,8 +77,12 @@ def get_positions():
         return {
             "open_positions": sanitize_df_for_json(open_df),
             "closed_positions": sanitize_df_for_json(closed_df)
+            "open_positions": sanitize_df_for_json(open_df),
+            "closed_positions": sanitize_df_for_json(closed_df)
         }
     except Exception as e:
+        logger.exception(f"Erro ao buscar positions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
         logger.exception(f"Erro ao buscar positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
