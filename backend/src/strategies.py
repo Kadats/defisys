@@ -1,9 +1,9 @@
 import pandas as pd
 import logging
-from .backtester import Backtester, LOAN_TO_VALUE_RATIO 
-from .regime_analyzer import analyze_market_regime
+from backtester import Backtester, LOAN_TO_VALUE_RATIO 
+from regime_analyzer import analyze_market_regime
 # --- MUDANÇA 1: Importar o DB_FILE ---
-from .config import DB_FILE
+from config import DB_FILE
 
 logger = logging.getLogger(__name__)
 

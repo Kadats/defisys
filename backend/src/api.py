@@ -3,8 +3,8 @@ import logging
 import pandas as pd
 import numpy as np
 import math
-from .data_provider import get_data_from_db, get_positions_from_db
-from .config import DB_FILE, DEFAULT_SYMBOL, DEFAULT_INTERVAL
+from data_provider import get_data_from_db, get_positions_from_db
+from config import DB_FILE, DEFAULT_SYMBOL, DEFAULT_INTERVAL
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="DefiSys API")

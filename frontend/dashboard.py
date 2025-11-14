@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import requests
 import pandas as pd
@@ -16,7 +17,9 @@ st.title("DefiSys - Dashboard de Posições 📈")
 st.caption(f"Dados atualizados em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Constantes da API ---
-API_BASE_URL = "http://127.0.0.1:8000/api/v1"
+# Usa APP_BACKEND_URL se existir, senão cai num default
+BACKEND_BASE = os.getenv("APP_BACKEND_URL", "http://localhost:8000")
+API_BASE_URL = f"{BACKEND_BASE}/api/v1"
 
 # --- Funções de Carregamento de Dados ---
 @st.cache_data(ttl=300) # Cache de 5 minutos

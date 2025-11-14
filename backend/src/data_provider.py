@@ -27,7 +27,7 @@ from defi_data_toolkit.indicators import (
     calculate_composite_opportunity
 )
 
-from .config import (
+from config import (
     DB_FILE,
     DEFAULT_SYMBOL,
     DEFAULT_INTERVAL,

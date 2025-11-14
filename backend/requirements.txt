@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pandas
+numpy
+pydantic-settings
+
+
+defi-data-toolkit @ git+https://github.com/Kadats/defi-data-toolkit.git@main
+

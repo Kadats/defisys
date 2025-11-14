@@ -4,7 +4,7 @@ import math
 import logging
 
 from defi_data_toolkit.database import log_open_position, log_close_position
-from .config import DB_FILE
+from config import DB_FILE
 
 logger = logging.getLogger(__name__)
 
