@@ -76,7 +76,7 @@ def get_positions():
         
         return {
             "open_positions": sanitize_df_for_json(open_df),
-            "closed_positions": sanitize_df_for_json(closed_df)
+            "closed_positions": sanitize_df_for_json(closed_df),
             "open_positions": sanitize_df_for_json(open_df),
             "closed_positions": sanitize_df_for_json(closed_df)
         }
