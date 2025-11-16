@@ -2,10 +2,10 @@ import logging
 import pandas as pd
 import os
 # Orquestracao e backtest
-from .data_provider import get_full_prepared_data
-from .backtester import Backtester
-from .strategies import run_strategy_regime_switcher
-from .config import PROJECT_ROOT
+from data_provider import get_full_prepared_data
+from backtester import Backtester
+from strategies import run_strategy_regime_switcher
+from config import PROJECT_ROOT
 
 
 logger = logging.getLogger(__name__)
