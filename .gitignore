@@ -39,3 +39,7 @@ dist/
 
 # backtest_reports
 backtest_report.txt
+
+# Logs
+backend/logs/
+*.log
