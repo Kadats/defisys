@@ -32,7 +32,7 @@ O projeto está totalmente dockerizado para garantir paridade entre ambientes.
 
 1.  **Clone o repositório (com submodules):**
     ```bash
-    git clone --recurse-submodules [https://github.com/SEU_USUARIO/defisys.git](https://github.com/SEU_USUARIO/defisys.git)
+    git clone --recurse-submodules [https://github.com/Kadats/defisys.git](https://github.com/Kadats/defisys.git)
     cd defisys
     ```
 
