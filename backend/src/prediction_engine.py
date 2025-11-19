@@ -17,7 +17,13 @@ FEATURES = [
     'Implied_Volatility',
     'FundingRate',
     'OpenInterest',
-    'VolumeUSD'
+    'VolumeUSD',
+    'MACD', 
+    'MACD_Histogram', # Ajuda a ver a virada de tendência
+    'ATR',            # Volatilidade absoluta
+    'BB_Position',    # Preço relativo às bandas (sobrecompra/venda)
+    'Stoch_K',        # Momentum rápido
+    'OBV'             # Fluxo de volume acumulado
 ]
 
 # A coluna que queremos prever
