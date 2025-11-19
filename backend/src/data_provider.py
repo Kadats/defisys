@@ -166,7 +166,12 @@ def get_full_prepared_data():
             all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
             sentiment_data_df['Date'] = sentiment_data_df['Timestamp'].dt.date
             daily_sentiment = sentiment_data_df.groupby('Date').last().reset_index()
-            all_klines_df = pd.merge(all_klines_df, daily_sentiment[['Date', 'Sentimento_Score']], on='Date', how='left')
+            cols_to_merge = ['Date', 'Sentimento_Score', 'FundingRate', 'OpenInterest']
+            all_klines_df = pd.merge(all_klines_df, daily_sentiment[cols_to_merge], on='Date', how='left')
+            
+            # Preencher vazios
+            all_klines_df['FundingRate'] = all_klines_df['FundingRate'].ffill().bfill()
+            all_klines_df['OpenInterest'] = all_klines_df['OpenInterest'].ffill().bfill()
             all_klines_df['Sentimento_Score'] = all_klines_df['Sentimento_Score'].ffill().bfill()
             if 'Date' in all_klines_df.columns:
                  all_klines_df.drop(columns=['Date'], inplace=True)
@@ -253,9 +258,8 @@ def get_full_prepared_data():
 
         # 4. Limpar dados
         COLUNAS_NECESSARIAS = [
-            'SMA_50', 'RSI', 'FNG_Value', 'Volatilidade_Score', 'Oportunidade_Score',
-            'dist_from_sma_50', # Nossa nova feature
-            'target_price_fell' # Nosso novo alvo
+            'SMA_50', 'RSI', 'FNG_Value', 'dist_from_sma_50', 'target_price_fell',
+            'Implied_Volatility', 'FundingRate', 'OpenInterest', 'VolumeUSD'
         ]
         
         all_klines_df = all_klines_df.dropna(subset=COLUNAS_NECESSARIAS)
