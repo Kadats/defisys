@@ -139,13 +139,41 @@ def get_full_prepared_data():
 
     logger.info("DataFrame de velas carregado com %d velas para calculo.", len(all_klines_df))
     
-    # --- CORREÇÃO: Calcular TODOS os indicadores que o ML precisa ---
+    # --- Calcular TODOS os indicadores disponíveis ---
+    # 1. Tendência
     all_klines_df['SMA_20'] = calculate_sma(all_klines_df, column='Close', window=20)
     all_klines_df['SMA_50'] = calculate_sma(all_klines_df, column='Close', window=50)
     all_klines_df['EMA_20'] = calculate_ema(all_klines_df, column='Close', window=20)
-    all_klines_df['RSI'] = calculate_rsi(all_klines_df, column='Close', window=14)
+    
+    # MACD retorna um DataFrame, precisamos concatenar ou atribuir colunas
+    macd_df = calculate_macd(all_klines_df, column='Close')
+    all_klines_df['MACD'] = macd_df['MACD']
+    all_klines_df['MACD_Signal'] = macd_df['MACD_Signal']
+    all_klines_df['MACD_Histogram'] = macd_df['MACD_Histogram']
+
+    # 2. Volatilidade
     all_klines_df['ATR'] = calculate_atr(all_klines_df, window=14)
-    # (Adicione outros aqui se necessário)
+    
+    bb_df = calculate_bollinger_bands(all_klines_df, column='Close', window=20)
+    all_klines_df['BB_Upper'] = bb_df['BB_Upper']
+    all_klines_df['BB_Lower'] = bb_df['BB_Lower']
+    # Criar feature relativa: Onde o preço está em relação às bandas? (0=Lower, 1=Upper)
+    # Evita divisão por zero
+    bb_range = (all_klines_df['BB_Upper'] - all_klines_df['BB_Lower']).replace(0, 1)
+    all_klines_df['BB_Position'] = (all_klines_df['Close'] - all_klines_df['BB_Lower']) / bb_range
+
+    # 3. Momentum
+    all_klines_df['RSI'] = calculate_rsi(all_klines_df, column='Close', window=14)
+    
+    stoch_df = calculate_stochastic_oscillator(all_klines_df)
+    all_klines_df['Stoch_K'] = stoch_df['Stoch_K']
+    all_klines_df['Stoch_D'] = stoch_df['Stoch_D']
+
+    # 4. Volume
+    all_klines_df['OBV'] = calculate_obv(all_klines_df)
+    
+    # Limpeza inicial de NaNs gerados pelos indicadores (ex: os primeiros 50 dias)
+    all_klines_df.dropna(inplace=True)
 
     # --- FASE 3: CALCULO DE INDICADORES COMPOSTOS (merge de fontes auxiliares) ---
     conn = create_connection(DB_FILE)
@@ -259,7 +287,8 @@ def get_full_prepared_data():
         # 4. Limpar dados
         COLUNAS_NECESSARIAS = [
             'SMA_50', 'RSI', 'FNG_Value', 'dist_from_sma_50', 'target_price_fell',
-            'Implied_Volatility', 'FundingRate', 'OpenInterest', 'VolumeUSD'
+            'Implied_Volatility', 'FundingRate', 'OpenInterest', 'VolumeUSD',
+            'MACD', 'MACD_Histogram', 'ATR', 'BB_Position', 'Stoch_K', 'OBV'
         ]
         
         all_klines_df = all_klines_df.dropna(subset=COLUNAS_NECESSARIAS)
