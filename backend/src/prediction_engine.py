@@ -13,9 +13,11 @@ logger = logging.getLogger(__name__)
 FEATURES = [
     'RSI',
     'FNG_Value',
-    'Volatilidade_Score',
-    'Oportunidade_Score',
-    'dist_from_sma_50' # A feature que acabamos de criar
+    'dist_from_sma_50',
+    'Implied_Volatility',
+    'FundingRate',
+    'OpenInterest',
+    'VolumeUSD'
 ]
 
 # A coluna que queremos prever
