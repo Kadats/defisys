@@ -23,10 +23,10 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 
 	# Defaults
 	DEFAULT_SYMBOL: str = "BTCUSDT"
-	DEFAULT_INTERVAL: str = "1d"
+	DEFAULT_INTERVAL: str = "4h"
 	DEFAULT_KLINES_LIMIT: int = 1000
-	# Increase historical days to ensure enough data for long-window indicators (SMA-200)
-	DEFAULT_HISTORICAL_DAYS: int = 1000
+	# Collect 5 years of 4h klines for SMA_200 indicator (1825 days = ~5 years)
+	DEFAULT_HISTORICAL_DAYS: int = 1825
 
 	# The Graph - Uniswap v3 configuration (configurable)
 	# Base gateway URL (no API key or subgraph id included)
@@ -73,9 +73,9 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 
 			# Defaults
 			self.DEFAULT_SYMBOL = os.environ.get('DEFAULT_SYMBOL', "BTCUSDT")
-			self.DEFAULT_INTERVAL = os.environ.get('DEFAULT_INTERVAL', "1d")
+			self.DEFAULT_INTERVAL = os.environ.get('DEFAULT_INTERVAL', "4h")
 			self.DEFAULT_KLINES_LIMIT = int(os.environ.get('DEFAULT_KLINES_LIMIT', 1000))
-			self.DEFAULT_HISTORICAL_DAYS = int(os.environ.get('DEFAULT_HISTORICAL_DAYS', 365))
+			self.DEFAULT_HISTORICAL_DAYS = int(os.environ.get('DEFAULT_HISTORICAL_DAYS', 1825))
 			self.SIMULATED_GAS_FEE_USD = float(os.environ.get('SIMULATED_GAS_FEE_USD', 0.50))
 
 
