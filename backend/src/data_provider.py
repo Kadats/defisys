@@ -143,6 +143,8 @@ def get_full_prepared_data():
     # 1. Tendência
     all_klines_df['SMA_20'] = calculate_sma(all_klines_df, column='Close', window=20)
     all_klines_df['SMA_50'] = calculate_sma(all_klines_df, column='Close', window=50)
+    # Long-term trend indicator (SMA 200)
+    all_klines_df['SMA_200'] = calculate_sma(all_klines_df, column='Close', window=200)
     all_klines_df['EMA_20'] = calculate_ema(all_klines_df, column='Close', window=20)
     
     # MACD retorna um DataFrame, precisamos concatenar ou atribuir colunas
@@ -172,7 +174,8 @@ def get_full_prepared_data():
     # 4. Volume
     all_klines_df['OBV'] = calculate_obv(all_klines_df)
     
-    # Limpeza inicial de NaNs gerados pelos indicadores (ex: os primeiros 50 dias)
+    # Limpeza inicial de NaNs gerados pelos indicadores (ex: os primeiros 200 dias para SMA_200)
+    # This will drop rows that lack full indicator values (including SMA_200).
     all_klines_df.dropna(inplace=True)
 
     # --- FASE 3: CALCULO DE INDICADORES COMPOSTOS (merge de fontes auxiliares) ---
@@ -273,6 +276,8 @@ def get_full_prepared_data():
     try:
         # 1. Criar Features Adicionais (Feature Engineering)
         all_klines_df['dist_from_sma_50'] = (all_klines_df['Close'] - all_klines_df['SMA_50']) / all_klines_df['SMA_50']
+        # Distância percentual do preço até SMA 200 (secular trend)
+        all_klines_df['dist_from_sma_200'] = (all_klines_df['Close'] - all_klines_df['SMA_200']) / all_klines_df['SMA_200']
 
         # 2. Criar a coluna "Alvo" (Target)
         future_price = all_klines_df['Close'].shift(-PREDICTION_HORIZON_DAYS)
@@ -286,7 +291,7 @@ def get_full_prepared_data():
 
         # 4. Limpar dados
         COLUNAS_NECESSARIAS = [
-            'SMA_50', 'RSI', 'FNG_Value', 'dist_from_sma_50', 'target_price_fell',
+            'SMA_50', 'RSI', 'FNG_Value', 'dist_from_sma_50', 'dist_from_sma_200', 'target_price_fell',
             'Implied_Volatility', 'FundingRate', 'OpenInterest', 'VolumeUSD',
             'MACD', 'MACD_Histogram', 'ATR', 'BB_Position', 'Stoch_K', 'OBV'
         ]

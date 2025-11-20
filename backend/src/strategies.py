@@ -1,8 +1,7 @@
 import pandas as pd
 import logging
 from .backtester import Backtester, LOAN_TO_VALUE_RATIO 
-# --- MUDANÇA 1: Não precisamos mais do 'regime_analyzer' ---
-# from .regime_analyzer import analyze_market_regime 
+from .regime_analyzer import analyze_market_regime
 from .config import DB_FILE
 
 logger = logging.getLogger(__name__)
@@ -28,10 +27,14 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
 
     # --- 2. LÓGICA DE ABERTURA ---
     
-    # --- MUDANÇA 2: Ler a predição do modelo (do DataFrame) ---
-    # O 'prediction_engine' já adicionou esta coluna ao 'row'.
+    # --- MUDANÇA 2: Ler a predição do modelo (do DataFrame) se existir ---
+    # O 'prediction_engine' pode ter adicionado esta coluna ao 'row'.
     # 1 = Previu Queda (BEARISH), 0 = Previu Estabilidade (SIDEWAYS)
-    prediction = row.get('prediction', 0) 
+    prediction = row.get('prediction', None)
+    if prediction is None:
+        # Backward-compatibility: if no prediction is present, use the legacy regime analyzer
+        regime = analyze_market_regime(row)
+        prediction = 1 if regime == 'BEARISH' else 0
     
     
     # == ESTADO 1: Pré-Empréstimo (Esperando o sinal de compra) ==

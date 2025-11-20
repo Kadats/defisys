@@ -14,6 +14,7 @@ FEATURES = [
     'RSI',
     'FNG_Value',
     'dist_from_sma_50',
+    'dist_from_sma_200',
     'Implied_Volatility',
     'FundingRate',
     'OpenInterest',
@@ -89,8 +90,8 @@ def get_predictions(model, scaler, df: pd.DataFrame) -> pd.DataFrame:
         X_full = df[FEATURES]
         X_full_scaled = scaler.transform(X_full)
         
-        # Gera a predição (0 ou 1)
-        df['prediction'] = model.predict(X_full)
+        # Gera a predição (0 ou 1) usando os dados normalizados
+        df['prediction'] = model.predict(X_full_scaled)
         
         # Compara a predição com o resultado real (para o frontend)
         df['prediction_correct'] = (df['prediction'] == df[TARGET]).astype(int)
