@@ -13,6 +13,9 @@ LOAN_TO_VALUE_RATIO = 0.50
 DEBT_INTEREST_RATE = 0.075 
 LIQUIDATION_THRESHOLD = 0.80 
 LIQUIDATION_PENALTY = 0.10 
+# Health Factor risk management thresholds
+HF_WARNING_THRESHOLD = 1.5
+HF_CRITICAL_THRESHOLD = 1.1
 
 class Backtester:
     
@@ -175,6 +178,58 @@ class Backtester:
         self.active_lps.clear()
         self.decision_history.append(f"[{timestamp.date()}] !!! LIQUIDAÇÃO TOTAL !!!")
 
+    def _check_and_rebalance_health(self, current_price: float):
+        """Checks health factor and attempts to defend the position by using
+        available cash to buy collateral or closing LPs in emergency.
+
+        This method is conservative: it first tries to use USD cash to buy
+        BTC collateral; if that is insufficient and the HF is critical, it
+        will close the most recent LP to free liquidity and pay down debt.
+        """
+        # Nothing to do if no debt
+        if self.total_debt_usd <= 0:
+            return
+
+        collateral_value = self.btc_hodl_balance * current_price
+        hf = (collateral_value * LIQUIDATION_THRESHOLD) / self.total_debt_usd if self.total_debt_usd > 0 else 999.0
+
+        # Safe zone
+        if hf > HF_WARNING_THRESHOLD:
+            return
+
+        # Danger zone: try to rebalance using available cash
+        if self.usd_balance > 10:
+            amount_to_use = self.usd_balance
+            # Buy and add to collateral
+            self.buy_and_hodl(amount_to_use, current_price)
+            # usd_balance reduced by buy_and_hodl
+            # buy_and_hodl already subtracts from usd_balance and increases btc_hodl_balance
+            logger.info("REBALANCE: Usando Caixa para comprar Colateral e defender HF")
+
+            # Recompute HF
+            collateral_value = self.btc_hodl_balance * current_price
+            hf = (collateral_value * LIQUIDATION_THRESHOLD) / self.total_debt_usd if self.total_debt_usd > 0 else 999.0
+
+            # If rebalance succeeded, return
+            if hf > HF_WARNING_THRESHOLD:
+                return
+
+        # Critical zone: close most recent LP to free liquidity and pay debt
+        if hf < HF_CRITICAL_THRESHOLD and self.active_lps:
+            # Close the most recently opened LP (last in list)
+            lp = self.active_lps[-1]
+            # Close LP and receive funds into usd_balance
+            ts = pd.Timestamp.now()
+            self.close_lp(lp_id=lp['id'], current_btc_price=current_price, timestamp=ts)
+
+            # Immediately use available USD to pay down debt (as much as possible)
+            pay_amount = min(self.usd_balance, self.total_debt_usd)
+            if pay_amount > 0:
+                self.total_debt_usd -= pay_amount
+                self.usd_balance -= pay_amount
+                logger.info("EMERGENCY: Fechando LP e pagando dívida para evitar liquidação!")
+            return
+
 
     def run(self, df: pd.DataFrame, strategy_function):
         if df.empty:
@@ -229,6 +284,12 @@ class Backtester:
 
             # 4. Chamar a Estratégia
             # (A estratégia agora verá o self.usd_balance já com os juros descontados)
+            # Before taking new strategic decisions, ensure HF is acceptable
+            try:
+                self._check_and_rebalance_health(current_price)
+            except Exception as e:
+                logger.exception("Erro durante check/rebalance de HF: %s", e)
+
             strategy_function(row, self, timestamp)
             
             # 5. Registrar o Valor do Portfólio

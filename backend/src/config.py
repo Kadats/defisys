@@ -25,7 +25,8 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	DEFAULT_SYMBOL: str = "BTCUSDT"
 	DEFAULT_INTERVAL: str = "1d"
 	DEFAULT_KLINES_LIMIT: int = 1000
-	DEFAULT_HISTORICAL_DAYS: int = 365
+	# Increase historical days to ensure enough data for long-window indicators (SMA-200)
+	DEFAULT_HISTORICAL_DAYS: int = 1000
 
 	# The Graph - Uniswap v3 configuration (configurable)
 	# Base gateway URL (no API key or subgraph id included)
@@ -90,6 +91,7 @@ THEGRAPH_API_KEY = _settings.THEGRAPH_API_KEY
 DEFAULT_SYMBOL = _settings.DEFAULT_SYMBOL
 DEFAULT_INTERVAL = _settings.DEFAULT_INTERVAL
 DEFAULT_KLINES_LIMIT = _settings.DEFAULT_KLINES_LIMIT
+
 DEFAULT_HISTORICAL_DAYS = _settings.DEFAULT_HISTORICAL_DAYS
 LOG_LEVEL = _settings.LOG_LEVEL
 
