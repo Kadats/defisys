@@ -309,7 +309,7 @@ optional = false
 python-versions = ">=3.12"
 groups = ["main"]
 files = []
-develop = true
+develop = false
 
 [package.dependencies]
 numpy = ">=1.26.4,<2.0.0"
@@ -317,8 +317,10 @@ pandas = ">=2.3.3,<3.0.0"
 requests = ">=2.32.5,<3.0.0"
 
 [package.source]
-type = "directory"
-url = "../defi-data-toolkit"
+type = "git"
+url = "https://github.com/Kadats/defi-data-toolkit.git"
+reference = "HEAD"
+resolved_reference = "f5df947568c9d9beebd12dc4eee1fe729b6c2beb"
 
 [[package]]
 name = "fastapi"
@@ -2036,4 +2038,4 @@ watchmedo = ["PyYAML (>=3.10)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "4a4c8d7ade6d0a1b14f3098653a2c1b5a591d27da955cc71c6955c19b253f859"
+content-hash = "d33a9ad3c1e97f6d7f93ebcab79011e3cb9b7b42a0c3c75df8623abe24bd3c5d"
