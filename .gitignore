@@ -43,3 +43,7 @@ backtest_report.txt
 # Logs
 backend/logs/
 *.log
+
+# Local Files
+database/
+assets/
