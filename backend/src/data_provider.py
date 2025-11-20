@@ -77,19 +77,35 @@ def get_full_prepared_data():
         
     logger.info(f"Iniciando processo de coleta/preparacao para {DEFAULT_SYMBOL} ({DEFAULT_INTERVAL})...")
     
-    # 1. Coletar Velas (Klines)
+    # 1. Coletar Velas (Klines) - Com Paginação
+    # Calcula timestamps: 5 anos atrás até agora
     start_ts_klines = get_start_timestamp_for_collection(get_last_timestamp_from_db, klines_table_name, DB_FILE, DEFAULT_HISTORICAL_DAYS)
     end_ts_klines = int(datetime.now().timestamp() * 1000)
     
+    # Log de início da coleta com paginação
+    start_date = datetime.fromtimestamp(start_ts_klines / 1000)
+    end_date = datetime.fromtimestamp(end_ts_klines / 1000)
+    logger.info(f"Coletando {DEFAULT_SYMBOL} {DEFAULT_INTERVAL} klines com paginação...")
+    logger.info(f"  Período: {start_date.strftime('%Y-%m-%d %H:%M:%S')} até {end_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"  Limite por requisição: {DEFAULT_KLINES_LIMIT} velas (Binance)")
+    
     if start_ts_klines < end_ts_klines:
+        # fetch_all_klines já implementa paginação internamente
         klines_df = fetch_all_klines(
             DEFAULT_SYMBOL, DEFAULT_INTERVAL, start_ts_klines, end_ts_klines,
+            max_klines_per_request=DEFAULT_KLINES_LIMIT,
             binance_api_base_url=BINANCE_API_BASE_URL
         )
+        
         if not klines_df.empty:
+            logger.info(f"✓ Coletadas {len(klines_df)} velas com sucesso")
+            logger.info(f"  Período obtido: {klines_df['Open_time'].min()} até {klines_df['Open_time'].max()}")
             save_klines_to_db(klines_df, klines_table_name, DB_FILE)
+            logger.info(f"✓ Klines salvas no banco de dados (tabela: {klines_table_name})")
+        else:
+            logger.warning("Nenhuma vela foi coletada (DataFrame vazio)")
     else:
-        logger.warning("Nenhuma nova vela foi coletada.")
+        logger.warning("Nenhuma nova vela foi coletada (timestamps inválidos)")
 
     # 2. Coletar Fear & Greed
     start_ts_fng_sec = get_start_timestamp_for_collection(get_last_fng_timestamp_from_db, fng_table_name, DB_FILE, DEFAULT_HISTORICAL_DAYS)
