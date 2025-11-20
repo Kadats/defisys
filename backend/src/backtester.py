@@ -4,7 +4,7 @@ import math
 import logging
 
 from defi_data_toolkit.database import log_open_position, log_close_position
-from .config import DB_FILE
+from .config import DB_FILE, SIMULATED_GAS_FEE_USD
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +231,56 @@ class Backtester:
             return
 
 
+    def _check_and_harvest(self, current_price: float, timestamp):
+        """Smart Harvest: Collects accrued fees when it's profitable to do so.
+        
+        Rules:
+        1. Only harvest if (fees_usdt + fees_btc*price) > SIMULATED_GAS_FEE_USD * 10
+        2. Deduct SIMULATED_GAS_FEE_USD from usd_balance
+        3. Auto-compound: BTC fees -> collateral, USD fees -> usd_balance
+        4. Log harvest decision to decision_history
+        """
+        if not self.active_lps:
+            return
+
+        for lp in self.active_lps:
+            # Calculate total fees in USD
+            fees_btc_in_usd = lp['fees_accrued_btc'] * current_price
+            total_fees_usd = lp['fees_accrued_usdt'] + fees_btc_in_usd
+            
+            # Harvest threshold: only if fees justify the gas cost
+            harvest_threshold = SIMULATED_GAS_FEE_USD * 10
+            if total_fees_usd <= harvest_threshold:
+                continue
+            
+            # Deduct gas fee from USD balance
+            if self.usd_balance < SIMULATED_GAS_FEE_USD:
+                logger.warning(f"Insufficient USD balance to pay gas for harvesting LP {lp['id']}")
+                continue
+            
+            self.usd_balance -= SIMULATED_GAS_FEE_USD
+            
+            # Route BTC fees to collateral (auto-compound)
+            if lp['fees_accrued_btc'] > 0:
+                self.add_collateral(lp['fees_accrued_btc'])
+            
+            # Route USD fees to cash balance
+            if lp['fees_accrued_usdt'] > 0:
+                self.usd_balance += lp['fees_accrued_usdt']
+            
+            # Log the harvest
+            self.decision_history.append(
+                f"[{timestamp.date()}] HARVEST LP {lp['id']}: "
+                f"+{lp['fees_accrued_btc']:.6f} BTC to Collateral, "
+                f"+${lp['fees_accrued_usdt']:.2f} to USD, "
+                f"-${SIMULATED_GAS_FEE_USD:.2f} Gas"
+            )
+            
+            # Reset accrued fees after harvest
+            lp['fees_accrued_btc'] = 0.0
+            lp['fees_accrued_usdt'] = 0.0
+
+
     def run(self, df: pd.DataFrame, strategy_function):
         if df.empty:
             logger.error("DataFrame vazio. Abortando backtest.")
@@ -282,7 +332,13 @@ class Backtester:
                 else:
                     lp['days_out_of_range'] += 1
 
-            # 4. Chamar a Estratégia
+            # 4. Smart Harvest: Collect fees if profitable
+            try:
+                self._check_and_harvest(current_price, timestamp)
+            except Exception as e:
+                logger.exception("Erro durante smart harvest: %s", e)
+
+            # 5. Chamar a Estratégia
             # (A estratégia agora verá o self.usd_balance já com os juros descontados)
             # Before taking new strategic decisions, ensure HF is acceptable
             try:
@@ -292,7 +348,7 @@ class Backtester:
 
             strategy_function(row, self, timestamp)
             
-            # 5. Registrar o Valor do Portfólio
+            # 6. Registrar o Valor do Portfólio
             total_net_value = self._calculate_portfolio_value(current_price)
             self.portfolio_history.append(total_net_value)
 

@@ -182,21 +182,25 @@ def test_strategy_opens_new_lp_post_loop(fresh_backtester, mocker):
     assert bt.usd_balance == 0.0
 
 def test_backtester_pays_daily_interest_if_debt_exists(fresh_backtester, mocker):
-    """Testa se o juro é pago corretamente."""
+    """Testa se o juro é pago corretamente sem abrir LPs."""
     bt = fresh_backtester
-    bt.btc_hodl_balance = 10.0   # <-- Adicionado colateral
-    bt.total_debt_usd = 500.0 
-    bt.usd_balance = 100.0   
+    bt.btc_hodl_balance = 25.0   # Increased to maintain HF > 1.5 with rebalance logic
+    bt.total_debt_usd = 500.0
+    bt.usd_balance = 100.0
     
-    mocker.patch('backend.src.regime_analyzer.analyze_market_regime', return_value='BULL_TOP') 
+    # Use a no-op strategy to avoid LP opening
+    def noop_strategy(row, engine, timestamp):
+        pass
+    
     mock_df = create_mock_df_for_strategy('BULL_TOP', price=200, sma_50=150, rsi=80, fng=80, days=3)
 
-    bt.run(mock_df, strategy_function=run_strategy_regime_switcher)
+    bt.run(mock_df, strategy_function=noop_strategy)
     
     daily_interest = 500.0 * (DEBT_INTEREST_RATE / 365)
     total_interest_paid = daily_interest * 3
     
-    assert bt.usd_balance == pytest.approx(100.0 - total_interest_paid)
+    # With no-op strategy and sufficient collateral, only interest should be deducted
+    assert bt.usd_balance == pytest.approx(100.0 - total_interest_paid, rel=1e-6)
 
 def test_backtester_handles_liquidation_correctly(fresh_backtester, mocker):
     """Testa se o backtester é liquidado (HF <= 1.0) e zera o portfólio."""

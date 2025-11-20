@@ -49,6 +49,9 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Logging
 	LOG_LEVEL: str = "INFO"
 
+	# Smart Harvest - Gas fees simulation (Polygon/Ethereum)
+	SIMULATED_GAS_FEE_USD: float = 0.50
+
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
 			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -73,6 +76,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.DEFAULT_INTERVAL = os.environ.get('DEFAULT_INTERVAL', "1d")
 			self.DEFAULT_KLINES_LIMIT = int(os.environ.get('DEFAULT_KLINES_LIMIT', 1000))
 			self.DEFAULT_HISTORICAL_DAYS = int(os.environ.get('DEFAULT_HISTORICAL_DAYS', 365))
+			self.SIMULATED_GAS_FEE_USD = float(os.environ.get('SIMULATED_GAS_FEE_USD', 0.50))
 
 
 # Instantiate settings for module-level import
@@ -94,6 +98,7 @@ DEFAULT_KLINES_LIMIT = _settings.DEFAULT_KLINES_LIMIT
 
 DEFAULT_HISTORICAL_DAYS = _settings.DEFAULT_HISTORICAL_DAYS
 LOG_LEVEL = _settings.LOG_LEVEL
+SIMULATED_GAS_FEE_USD = _settings.SIMULATED_GAS_FEE_USD
 
 # New exports for The Graph multi-subgraph support
 THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS
