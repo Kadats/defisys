@@ -6,7 +6,9 @@ from .config import DB_FILE
 
 logger = logging.getLogger(__name__)
 
-DAYS_OUT_OF_RANGE_THRESHOLD = 10 
+DAYS_OUT_OF_RANGE_THRESHOLD = 10
+# Gas Reserve: Always keep this amount in USD for operational costs (harvests, rebalancing)
+GAS_RESERVE_USD = 50.0 
 
 def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: pd.Timestamp):
     """
@@ -43,13 +45,23 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
         # O sinal de compra agora é a previsão do modelo
         if prediction == 1: # (Equivalente ao antigo 'regime == BEARISH')
             # --- É O SINAL! HORA DE COMPRAR O COLATERAL E INICIAR O LOOP ---
+            # Apply gas buffer: keep GAS_RESERVE_USD in cash for operational costs
+            available_capital = engine.usd_balance - GAS_RESERVE_USD
+            if available_capital <= 0:
+                logger.warning(
+                    f"[{timestamp.date()}] Sinal BEARISH recebido, mas capital insuficiente "
+                    f"(USD: ${engine.usd_balance:.2f}, Reserva: ${GAS_RESERVE_USD:.2f}). Aguardando mais caixa."
+                )
+                return
+            
             logger.info(
                 f"[{timestamp.date()}] PRIMEIRO SINAL 'BEARISH' (ML Previu Queda). "
-                f"Comprando colateral inicial com ${engine.usd_balance:.2f} @ ${current_price:.2f}"
+                f"Comprando colateral inicial com ${available_capital:.2f} @ ${current_price:.2f} "
+                f"(Reserva: ${GAS_RESERVE_USD:.2f})"
             )
             # ... (Toda a lógica do Loop Recursivo permanece exatamente a mesma) ...
             # 1. Comprar colateral
-            engine.buy_and_hodl(engine.usd_balance, current_price) 
+            engine.buy_and_hodl(available_capital, current_price) 
             
             # 2. Pegar Empréstimo
             collateral_value = engine.btc_hodl_balance * current_price
@@ -86,21 +98,26 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
     # == ESTADO 2: Pós-Empréstimo (Já estamos alavancados e operando) ==
     else:
         if not engine.active_lps:
-            capital_to_allocate = engine.usd_balance
+            # Apply gas buffer: always keep GAS_RESERVE_USD for operational costs
+            capital_to_allocate = engine.usd_balance - GAS_RESERVE_USD
             if capital_to_allocate <= 10:
+                logger.debug(
+                    f"[{timestamp.date()}] Saldo insuficiente para LP (USD: ${engine.usd_balance:.2f}, "
+                    f"após reserva: ${capital_to_allocate:.2f}, mínimo: $10.00)"
+                )
                 return 
 
             if prediction == 1: # (Equivalente ao antigo 'regime == BEARISH')
                 range_lower = current_price * 0.70 
                 range_upper = current_price * 1.60
-                logger.info(f"[{timestamp.date()}] Regime: BEARISH (ML). Abrindo LP de Range Largo (Range: ${range_lower:.2f}-${range_upper:.2f})")
+                logger.info(f"[{timestamp.date()}] Regime: BEARISH (ML). Abrindo LP de Range Largo com ${capital_to_allocate:.2f} (Reserva: ${GAS_RESERVE_USD:.2f}) (Range: ${range_lower:.2f}-${range_upper:.2f})")
                 engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy="BEARISH_ML_LOOP")
                 engine.usd_balance -= capital_to_allocate 
             
             elif prediction == 0: # (Equivalente ao antigo 'regime == SIDEWAYS')
                 range_lower = current_price * 0.85 
                 range_upper = current_price * 1.15
-                logger.info(f"[{timestamp.date()}] Regime: SIDEWAYS (ML). Abrindo LP de Farm (Range: ${range_lower:.2f}-${range_upper:.2f})")
+                logger.info(f"[{timestamp.date()}] Regime: SIDEWAYS (ML). Abrindo LP de Farm com ${capital_to_allocate:.2f} (Reserva: ${GAS_RESERVE_USD:.2f}) (Range: ${range_lower:.2f}-${range_upper:.2f})")
                 engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy="SIDEWAYS_ML_FARM")
                 engine.usd_balance -= capital_to_allocate 
 
