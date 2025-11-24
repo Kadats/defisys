@@ -52,6 +52,10 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Smart Harvest - Gas fees simulation (Polygon/Ethereum)
 	SIMULATED_GAS_FEE_USD: float = 0.50
 
+	# Walk-Forward Validation: Train on past, test on recent
+	# Model trains only on data before this date, backtests from this date onward
+	TRAIN_TEST_SPLIT_DATE: str = "2022-01-01"
+
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
 			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -99,6 +103,9 @@ DEFAULT_KLINES_LIMIT = _settings.DEFAULT_KLINES_LIMIT
 DEFAULT_HISTORICAL_DAYS = _settings.DEFAULT_HISTORICAL_DAYS
 LOG_LEVEL = _settings.LOG_LEVEL
 SIMULATED_GAS_FEE_USD = _settings.SIMULATED_GAS_FEE_USD
+
+# Walk-Forward Validation split date
+TRAIN_TEST_SPLIT_DATE = _settings.TRAIN_TEST_SPLIT_DATE
 
 # New exports for The Graph multi-subgraph support
 THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS

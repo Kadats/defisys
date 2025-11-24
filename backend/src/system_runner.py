@@ -5,10 +5,9 @@ import os
 from .data_provider import get_full_prepared_data
 from .backtester import Backtester
 from .strategies import run_strategy_regime_switcher
-from .config import PROJECT_ROOT
+from .config import PROJECT_ROOT, DB_FILE, TRAIN_TEST_SPLIT_DATE
 from .prediction_engine import train_prediction_model, get_predictions
 from defi_data_toolkit.database import save_predictions_to_db
-from .config import PROJECT_ROOT, DB_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +66,9 @@ def log_summary_report(results, latest_indicators=None):
 def run_trading_system():
     """
     Orquestra o fluxo de alto nivel: Dados -> Modelo de ML -> Backtest.
+    Implementa Walk-Forward: treina em passado distante, testa em passado recente.
     """
-    logger.info("Iniciando o sistema de trade...")
+    logger.info("Iniciando o sistema de trade com validação Walk-Forward...")
 
     # 1. Obter os dados (agora com features e alvos de ML)
     logger.info("Fase 1: Preparando todos os dados de mercado e indicadores...")
@@ -77,27 +77,37 @@ def run_trading_system():
         logger.error("Não foi possível obter os dados. Encerrando.")
         return {"backtest_report": {"error": "Failed to get data"}, "full_dataframe": pd.DataFrame()} 
 
-    # --- MUDANÇA 2: Treinar o Modelo de ML ---
-    logger.info("Fase 2: Treinando o modelo de predição...")
-    model, scaler = train_prediction_model(full_df)
+    # --- MUDANÇA 2: Treinar o Modelo de ML com Split Temporal ---
+    logger.info(f"Fase 2: Treinando o modelo de predição com Split Temporal ({TRAIN_TEST_SPLIT_DATE})...")
+    model, scaler = train_prediction_model(full_df, train_test_split_date=TRAIN_TEST_SPLIT_DATE)
     
-    # Gerar predições para todo o histórico (para análise)
+    # Gerar predições para todo o histórico (para análise visual)
     full_df_with_predictions = get_predictions(model, scaler, full_df)
 
     # --- Salvar as predições no DB ---
     logger.info("Fase 2b: Salvando predições no banco de dados...")
     save_predictions_to_db(full_df_with_predictions, DB_FILE)
 
-    # 3. Configurar e Executar o Backtester
-    logger.info("Fase 3: Executando o backtest da estratégia...")
+    # 3. Preparar DataFrame para Backtest (Walk-Forward Test Set)
+    # CRÍTICO: Usar apenas dados a partir de TRAIN_TEST_SPLIT_DATE para o backtest
+    split_date = pd.to_datetime(TRAIN_TEST_SPLIT_DATE)
+    simulation_df = full_df_with_predictions[full_df_with_predictions['Open_time'] >= split_date].copy()
+    
+    logger.info(f"Fase 3: Configurando Backtest Walk-Forward...")
+    logger.info(f"  Período de simulação: {simulation_df['Open_time'].min().strftime('%Y-%m-%d')} até {simulation_df['Open_time'].max().strftime('%Y-%m-%d')}")
+    logger.info(f"  Total de candles para backtest: {len(simulation_df)}")
+    logger.info(f"  Modelo foi treinado em dados anteriores a {TRAIN_TEST_SPLIT_DATE}")
+    
+    # Configurar e Executar o Backtester apenas com dados pós-split
+    logger.info("Fase 4: Executando o backtest da estratégia...")
     initial_capital = 1000.0
     engine = Backtester(initial_capital_usd=initial_capital)
     
-    # O backtester roda no DataFrame que agora contém as predições
-    backtest_results = engine.run(full_df_with_predictions, strategy_function=run_strategy_regime_switcher) 
+    # O backtester roda APENAS no DataFrame de teste (post-split)
+    backtest_results = engine.run(simulation_df, strategy_function=run_strategy_regime_switcher) 
 
     # 4. Logar o relatório final
-    latest_indicators = full_df_with_predictions.tail(5) if not full_df_with_predictions.empty else None
+    latest_indicators = simulation_df.tail(5) if not simulation_df.empty else None
     log_summary_report(backtest_results, latest_indicators)
 
     logger.info("Processamento do sistema de trade concluído.")
@@ -107,5 +117,5 @@ def run_trading_system():
         
     return {
         "backtest_report": backtest_results,
-        "full_dataframe": full_df_with_predictions # Retornar o DF com as predições
+        "full_dataframe": full_df_with_predictions # Retornar o DF completo com as predições
     }
