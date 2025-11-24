@@ -2,13 +2,11 @@ import pandas as pd
 import logging
 from .backtester import Backtester, LOAN_TO_VALUE_RATIO 
 from .regime_analyzer import analyze_market_regime
-from .config import DB_FILE
+from .config import DB_FILE, GAS_RESERVE_USD
 
 logger = logging.getLogger(__name__)
 
-DAYS_OUT_OF_RANGE_THRESHOLD = 10
-# Gas Reserve: Always keep this amount in USD for operational costs (harvests, rebalancing)
-GAS_RESERVE_USD = 50.0 
+DAYS_OUT_OF_RANGE_THRESHOLD = 10 
 
 def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: pd.Timestamp):
     """
@@ -70,8 +68,9 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
             engine.usd_balance += amount_to_borrow 
             logger.info(f"[{timestamp.date()}] Loop: Pegando empréstimo de ${amount_to_borrow:.2f} (50% LTV)")
             
-            # 3. Executar Loop Recursivo
-            btc_bought = engine.usd_balance / current_price 
+            # 3. Executar Loop Recursivo (Respeitando GAS_RESERVE)
+            available_for_loop = engine.usd_balance - GAS_RESERVE_USD
+            btc_bought = available_for_loop / current_price 
             btc_to_collateral = btc_bought * 0.50 
             btc_to_lp = btc_bought * 0.50         
             
@@ -81,14 +80,17 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
             engine.usd_balance -= capital_for_collateral_usd 
             logger.info(f"[{timestamp.date()}] Loop: {btc_to_collateral:.6f} BTC adicionado ao colateral.")
             
-            # 5. Abrir LP
-            capital_for_lp_usd = engine.usd_balance 
-            range_lower = current_price * 0.70 
-            range_upper = current_price * 1.60
-            
-            logger.info(f"[{timestamp.date()}] Loop: Abrindo LP de Range Largo com ${capital_for_lp_usd:.2f} (Range: ${range_lower:.2f}-${range_upper:.2f})")
-            engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BEARISH_ML_LOOP")
-            engine.usd_balance -= capital_for_lp_usd 
+            # 5. Abrir LP (Respeitando GAS_RESERVE)
+            capital_for_lp_usd = engine.usd_balance - GAS_RESERVE_USD
+            if capital_for_lp_usd > 1:
+                range_lower = current_price * 0.70 
+                range_upper = current_price * 1.60
+                
+                logger.info(f"[{timestamp.date()}] Loop: Abrindo LP de Range Largo com ${capital_for_lp_usd:.2f} (Range: ${range_lower:.2f}-${range_upper:.2f})")
+                engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BEARISH_ML_LOOP")
+                engine.usd_balance -= capital_for_lp_usd 
+            else:
+                logger.debug(f"[{timestamp.date()}] Loop: Capital insuficiente para abrir LP após GAS_RESERVE.") 
             
         else: # (prediction == 0)
             # Modelo prevê estabilidade (SIDEWAYS), mas ainda não entramos...
