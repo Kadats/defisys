@@ -1,9 +1,9 @@
 import pandas as pd
 import logging
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -30,22 +30,44 @@ FEATURES = [
 # A coluna que queremos prever
 TARGET = 'target_price_fell'
 
-def train_prediction_model(df: pd.DataFrame):
+def train_prediction_model(df: pd.DataFrame, train_test_split_date: str = "2022-01-01"):
     """
     Treina um modelo de ML (Regressão Logística) para prever quedas de preço.
+    Usa validação Walk-Forward: treina apenas em dados históricos (antes de train_test_split_date).
+    
+    Args:
+        df: DataFrame com features e target
+        train_test_split_date: Data limite (formato "YYYY-MM-DD"). Treina antes, testa depois.
     """
-    logger.info("Iniciando treinamento do modelo de predição V1...")
+    logger.info("Iniciando treinamento do modelo de predição com Split Temporal (Walk-Forward)...")
     
     try:
-        X = df[FEATURES]
-        y = df[TARGET]
+        # Converter a data para datetime se for string
+        if isinstance(train_test_split_date, str):
+            split_date = pd.to_datetime(train_test_split_date)
+        else:
+            split_date = train_test_split_date
         
-        # 1. Divisão de Treino/Teste
-        # É CRUCIAL definir 'shuffle=False' para dados de série temporal.
-        # Vamos usar os primeiros 80% dos dados para treinar e os últimos 20% para testar.
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, shuffle=False
-        )
+        # 1. Divisão Temporal (Walk-Forward)
+        # Treina APENAS com dados antes da data de split (passado "distante")
+        train_mask = df['Open_time'] < split_date
+        test_mask = df['Open_time'] >= split_date
+        
+        X_train = df.loc[train_mask, FEATURES]
+        y_train = df.loc[train_mask, TARGET]
+        
+        X_test = df.loc[test_mask, FEATURES]
+        y_test = df.loc[test_mask, TARGET]
+        
+        train_count = len(X_train)
+        test_count = len(X_test)
+        
+        if train_count == 0:
+            logger.error(f"Nenhum dado de treino encontrado antes de {train_test_split_date}")
+            return None, None
+        
+        if test_count == 0:
+            logger.warning(f"Nenhum dado de teste encontrado a partir de {train_test_split_date}")
         
         # 2. Normalização (Scaling)
         # Modelos de ML funcionam melhor quando todos os números estão na mesma escala
@@ -62,11 +84,19 @@ def train_prediction_model(df: pd.DataFrame):
         y_pred = model.predict(X_test_scaled)
         accuracy = accuracy_score(y_test, y_pred)
         
-        logger.info(f"--- Relatório de Treinamento do Modelo ---")
+        logger.info(f"--- Relatório de Treinamento do Modelo (Walk-Forward) ---")
         logger.info(f"Modelo: Regressão Logística")
         logger.info(f"Features Usadas: {FEATURES}")
         logger.info(f"Alvo: {TARGET} (Queda > 3% em 7 dias)")
-        logger.info(f"Acurácia no Set de Teste (últimos 20% dos dados): {accuracy * 100:.2f}%")
+        logger.info(f"")
+        logger.info(f"TREINO (dados históricos):")
+        logger.info(f"  Período: {df.loc[train_mask, 'Open_time'].min().strftime('%Y-%m-%d')} até {df.loc[train_mask, 'Open_time'].max().strftime('%Y-%m-%d')}")
+        logger.info(f"  Amostras: {train_count} velas")
+        logger.info(f"")
+        logger.info(f"TESTE (backtest walk-forward):")
+        logger.info(f"  Período: {df.loc[test_mask, 'Open_time'].min().strftime('%Y-%m-%d') if test_count > 0 else 'N/A'} até {df.loc[test_mask, 'Open_time'].max().strftime('%Y-%m-%d') if test_count > 0 else 'N/A'}")
+        logger.info(f"  Amostras: {test_count} velas")
+        logger.info(f"  Acurácia no Set de Teste: {accuracy * 100:.2f}%")
         
         # 5. Retorna o modelo treinado e o scaler (para usar em dados novos)
         return model, scaler
