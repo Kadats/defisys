@@ -47,7 +47,7 @@ from .config import (
 
 # Constantes do Modelo de ML
 PREDICTION_HORIZON_DAYS = 7 # 7 dias
-PREDICTION_FALL_THRESHOLD = -0.03  # -3%
+PREDICTION_RISE_THRESHOLD = 0.03  # +3% rise for bullish signal
 
 
 logger = logging.getLogger(__name__)
@@ -297,9 +297,10 @@ def get_full_prepared_data():
         all_klines_df['dist_from_sma_200'] = (all_klines_df['Close'] - all_klines_df['SMA_200']) / all_klines_df['SMA_200']
 
         # 2. Criar a coluna "Alvo" (Target)
+        # REFACTOR: Predict RISE (bullish opportunities) instead of FALLS (bearish)
         future_price = all_klines_df['Close'].shift(-PREDICTION_HORIZON_DAYS)
         percent_change = (future_price - all_klines_df['Close']) / all_klines_df['Close']
-        all_klines_df['target_price_fell'] = (percent_change <= PREDICTION_FALL_THRESHOLD).astype(int)
+        all_klines_df['target_price_rise'] = (percent_change >= PREDICTION_RISE_THRESHOLD).astype(int)
         
         # 3. Garantir que FNG_Value existe (do merge da FASE 3)
         if 'FNG_Value' not in all_klines_df.columns:
@@ -308,7 +309,7 @@ def get_full_prepared_data():
 
         # 4. Limpar dados
         COLUNAS_NECESSARIAS = [
-            'SMA_50', 'RSI', 'FNG_Value', 'dist_from_sma_50', 'dist_from_sma_200', 'target_price_fell',
+            'SMA_50', 'RSI', 'FNG_Value', 'dist_from_sma_50', 'dist_from_sma_200', 'target_price_rise',
             'Implied_Volatility', 'FundingRate', 'OpenInterest', 'VolumeUSD',
             'MACD', 'MACD_Histogram', 'ATR', 'BB_Position', 'Stoch_K', 'OBV'
         ]

@@ -14,8 +14,10 @@ DEBT_INTEREST_RATE = 0.075
 LIQUIDATION_THRESHOLD = 0.80 
 LIQUIDATION_PENALTY = 0.10 
 # Health Factor risk management thresholds
-HF_WARNING_THRESHOLD = 1.5
+HF_WARNING_THRESHOLD = 1.3
 HF_CRITICAL_THRESHOLD = 1.1
+# Refinancing threshold: only refinance (borrow to fund) when HF is sufficiently high
+HF_REFINANCE_THRESHOLD = 2.0
 
 class Backtester:
     
@@ -32,6 +34,9 @@ class Backtester:
         self.active_lps = []
         self.portfolio_history = []
         self.decision_history = []
+        # Track reserve alert states to avoid repeated logs (only log on state change)
+        self._reserve_warning_active = False
+        self._reserve_critical_active = False
         
         logger.info(f"Backtester v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
 
@@ -65,6 +70,12 @@ class Backtester:
 
     def buy_and_hodl(self, amount_usd: float, current_btc_price: float):
         """Aloca capital de USD para a carteira HODL de BTC."""
+        # Charge gas for on-chain buy operation
+        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            logger.error("Insufficient USD to pay gas for buy_and_hodl. Aborting operation.")
+            return
+        self.usd_balance -= SIMULATED_GAS_FEE_USD
+
         if self.usd_balance < amount_usd:
             logger.warning("Capital insuficiente para comprar HODL.")
             return
@@ -76,11 +87,21 @@ class Backtester:
 
     def add_collateral(self, btc_amount: float):
         """Adiciona BTC ao balanço de colateral HODL."""
+        # Charge gas for on-chain add_collateral operation
+        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            logger.error("Insufficient USD to pay gas for add_collateral. Aborting operation.")
+            return
+        self.usd_balance -= SIMULATED_GAS_FEE_USD
         self.btc_hodl_balance += btc_amount
 
     def open_lp(self, capital_usd: float, range_lower: float, range_upper: float, current_btc_price: float, timestamp, strategy: str = "UNKNOWN"):
         """Abre uma nova posição de LP com matemática da Uniswap v3."""
-    
+        # Charge gas for opening an LP
+        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            logger.error(f"[{timestamp.date()}] Insufficient USD to pay gas for opening LP. Aborting.")
+            return
+        self.usd_balance -= SIMULATED_GAS_FEE_USD
+
         if range_lower >= range_upper:
             logger.warning(f"[{timestamp.date()}] Range inválido: Preço mínimo ${range_lower:.2f} é maior ou igual ao máximo ${range_upper:.2f}")
             return
@@ -141,6 +162,12 @@ class Backtester:
         if not lp_to_close:
             logger.warning(f"Tentativa de fechar LP ID {lp_id} inexistente.")
             return
+
+        # Charge gas for closing an LP
+        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            logger.error(f"[{timestamp.date()}] Insufficient USD to pay gas for closing LP {lp_id}. Aborting.")
+            return
+        self.usd_balance -= SIMULATED_GAS_FEE_USD
 
         asset_value, _, _ = self._get_lp_value(lp_to_close, current_btc_price)
         fees_value = lp_to_close['fees_accrued_usdt'] + (lp_to_close['fees_accrued_btc'] * current_btc_price)
@@ -235,14 +262,20 @@ class Backtester:
 
 
     def _check_and_harvest(self, current_price: float, timestamp):
-        """Smart Harvest: Collects accrued fees when it's profitable to do so.
+        """Smart Harvest: Collects accrued fees with reserve-aware routing.
         
         Rules:
         1. Early exit if USD balance is too low to pay gas
-        2. Only harvest if (fees_usdt + fees_btc*price) > SIMULATED_GAS_FEE_USD * 10
-        3. Deduct SIMULATED_GAS_FEE_USD from usd_balance
-        4. Auto-compound: BTC fees -> collateral, USD fees -> usd_balance
-        5. Log harvest decision to decision_history
+        2. Check if gas reserve needs refilling (usd_balance < GAS_RESERVE_USD)
+        3. If reserve is low (needs_refill=True):
+           - Convert ALL fees to USD (BTC fees -> simulate swap to USD)
+           - Use lower threshold (GAS * 2 instead of GAS * 10)
+           - Log "HARVEST (REFILL MODE)"
+        4. If reserve is healthy (needs_refill=False):
+           - Keep existing auto-compound logic (BTC -> Collateral, USD -> Balance)
+           - Use standard threshold (GAS * 10)
+           - Log "HARVEST (AUTO-COMPOUND MODE)"
+        5. Deduct SIMULATED_GAS_FEE_USD from usd_balance
         """
         if not self.active_lps:
             return
@@ -251,13 +284,22 @@ class Backtester:
         if self.usd_balance < SIMULATED_GAS_FEE_USD:
             return
 
+        # Check if gas reserve needs refilling
+        needs_refill = self.usd_balance < GAS_RESERVE_USD
+
         for lp in self.active_lps:
             # Calculate total fees in USD
             fees_btc_in_usd = lp['fees_accrued_btc'] * current_price
             total_fees_usd = lp['fees_accrued_usdt'] + fees_btc_in_usd
             
-            # Harvest threshold: only if fees justify the gas cost
-            harvest_threshold = SIMULATED_GAS_FEE_USD * 10
+            # Determine harvest threshold based on reserve health
+            if needs_refill:
+                # Emergency mode: Accept lower margins to refill reserve
+                harvest_threshold = SIMULATED_GAS_FEE_USD * 2
+            else:
+                # Normal mode: Only harvest if fees justify the cost
+                harvest_threshold = SIMULATED_GAS_FEE_USD * 10
+            
             if total_fees_usd <= harvest_threshold:
                 continue
             
@@ -267,21 +309,42 @@ class Backtester:
             
             self.usd_balance -= SIMULATED_GAS_FEE_USD
             
-            # Route BTC fees to collateral (auto-compound)
-            if lp['fees_accrued_btc'] > 0:
-                self.add_collateral(lp['fees_accrued_btc'])
-            
-            # Route USD fees to cash balance
-            if lp['fees_accrued_usdt'] > 0:
-                self.usd_balance += lp['fees_accrued_usdt']
-            
-            # Log the harvest
-            self.decision_history.append(
-                f"[{timestamp.date()}] HARVEST LP {lp['id']}: "
-                f"+{lp['fees_accrued_btc']:.6f} BTC to Collateral, "
-                f"+${lp['fees_accrued_usdt']:.2f} to USD, "
-                f"-${SIMULATED_GAS_FEE_USD:.2f} Gas"
-            )
+            # Route fees based on reserve health
+            if needs_refill:
+                # REFILL MODE: Convert ALL fees to USD to replenish the gas reserve
+                # Simulate BTC-to-USD swap by adding equivalent USD value
+                btc_fees_in_usd = lp['fees_accrued_btc'] * current_price
+                self.usd_balance += btc_fees_in_usd
+                
+                # Route USD fees directly to balance
+                if lp['fees_accrued_usdt'] > 0:
+                    self.usd_balance += lp['fees_accrued_usdt']
+                
+                # Log the refill harvest
+                self.decision_history.append(
+                    f"[{timestamp.date()}] HARVEST (REFILL MODE) LP {lp['id']}: "
+                    f"+{lp['fees_accrued_btc']:.6f} BTC (${btc_fees_in_usd:.2f}) converted to USD, "
+                    f"+${lp['fees_accrued_usdt']:.2f} to USD, "
+                    f"-${SIMULATED_GAS_FEE_USD:.2f} Gas. "
+                    f"Reserve refill in progress (Current: ${self.usd_balance:.2f})"
+                )
+            else:
+                # HEALTHY MODE: Auto-compound strategy (existing logic)
+                # Route BTC fees to collateral
+                if lp['fees_accrued_btc'] > 0:
+                    self.add_collateral(lp['fees_accrued_btc'])
+                
+                # Route USD fees to cash balance
+                if lp['fees_accrued_usdt'] > 0:
+                    self.usd_balance += lp['fees_accrued_usdt']
+                
+                # Log the auto-compound harvest
+                self.decision_history.append(
+                    f"[{timestamp.date()}] HARVEST (AUTO-COMPOUND) LP {lp['id']}: "
+                    f"+{lp['fees_accrued_btc']:.6f} BTC to Collateral, "
+                    f"+${lp['fees_accrued_usdt']:.2f} to USD, "
+                    f"-${SIMULATED_GAS_FEE_USD:.2f} Gas"
+                )
             
             # Reset accrued fees after harvest
             lp['fees_accrued_btc'] = 0.0
@@ -323,17 +386,30 @@ class Backtester:
                 
                 # Check if we have enough balance to pay interest while keeping gas reserve
                 if self.usd_balance > (interest_cost + GAS_RESERVE_USD):
+                    # Normal payment, reserve intact
                     self.usd_balance -= interest_cost
+                    # If we had previously warned, clear the warning state
+                    if self._reserve_warning_active:
+                        logger.info(f"[{timestamp.date()}] INFO: Reserva de gás restabelecida. Saldo: ${self.usd_balance:.2f}")
+                        self._reserve_warning_active = False
+                    if self._reserve_critical_active:
+                        self._reserve_critical_active = False
                 elif self.usd_balance > interest_cost:
                     # Pay what we can while trying to preserve the reserve
                     self.usd_balance -= interest_cost
-                    if self.usd_balance < GAS_RESERVE_USD:
-                        logger.warning(f"[{timestamp.date()}] CRÍTICO: Juros da dívida consumiram a reserva de gás! "
-                                       f"Saldo: ${self.usd_balance:.2f}, Reserva necessária: ${GAS_RESERVE_USD:.2f}")
+                    # Only log when we first cross below the gas reserve
+                    if self.usd_balance < GAS_RESERVE_USD and not self._reserve_warning_active:
+                        logger.warning(
+                            f"[{timestamp.date()}] CRÍTICO: Juros da dívida consumiram a reserva de gás! "
+                            f"Saldo: ${self.usd_balance:.2f}, Reserva necessária: ${GAS_RESERVE_USD:.2f}")
+                        self._reserve_warning_active = True
                 else:
-                    # Not enough to pay full interest - log critical warning
-                    logger.critical(f"[{timestamp.date()}] CRÍTICO: Saldo insuficiente para pagar juros! "
-                                    f"Saldo: ${self.usd_balance:.2f}, Juros: ${interest_cost:.2f}. Dívida cresce sem pagamento!")
+                    # Not enough to pay full interest - log critical warning once when it first happens
+                    if not self._reserve_critical_active:
+                        logger.critical(
+                            f"[{timestamp.date()}] CRÍTICO: Saldo insuficiente para pagar juros! "
+                            f"Saldo: ${self.usd_balance:.2f}, Juros: ${interest_cost:.2f}. Dívida cresce sem pagamento!")
+                        self._reserve_critical_active = True
             
             # 3. Atualizar estado das LPs
             for lp in self.active_lps:
