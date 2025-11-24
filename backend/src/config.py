@@ -55,6 +55,18 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Gas Reserve: Always keep this amount in USD for operational costs (harvests, rebalancing)
 	GAS_RESERVE_USD: float = 50.0
 
+	# Dynamic Allocation: Position sizing parameters
+	# Minimum liquid cash buffer (% of balance) to keep for interest + gas fees
+	MIN_LIQUID_BUFFER: float = 0.20  # Always keep at least 20% liquid
+	# Maximum allocation percentage when market conditions are good
+	MAX_ALLOCATION_PCT: float = 0.80  # Never allocate more than 80% of balance
+	# Base allocation when no special conditions
+	BASE_ALLOCATION_PCT: float = 0.20  # Start with 20% of balance
+	# Drawdown threshold to increase allocation aggressively
+	DRAWDOWN_THRESHOLD: float = 0.30  # If price is 30% below ATH, become more aggressive
+	# Fear & Greed threshold to increase allocation
+	FNG_THRESHOLD_AGGRESSIVE: float = 20.0  # If FNG < 20 (Extreme Fear), increase allocation
+
 	# Walk-Forward Validation: Train on past, test on recent
 	# Model trains only on data before this date, backtests from this date onward
 	# 2 years ago from Nov 2025 ≈ June 2023: tests on 2023-2025 recovery period
@@ -108,6 +120,13 @@ DEFAULT_HISTORICAL_DAYS = _settings.DEFAULT_HISTORICAL_DAYS
 LOG_LEVEL = _settings.LOG_LEVEL
 SIMULATED_GAS_FEE_USD = _settings.SIMULATED_GAS_FEE_USD
 GAS_RESERVE_USD = _settings.GAS_RESERVE_USD
+
+# Dynamic Allocation parameters
+MIN_LIQUID_BUFFER = _settings.MIN_LIQUID_BUFFER
+MAX_ALLOCATION_PCT = _settings.MAX_ALLOCATION_PCT
+BASE_ALLOCATION_PCT = _settings.BASE_ALLOCATION_PCT
+DRAWDOWN_THRESHOLD = _settings.DRAWDOWN_THRESHOLD
+FNG_THRESHOLD_AGGRESSIVE = _settings.FNG_THRESHOLD_AGGRESSIVE
 
 # Walk-Forward Validation split date
 TRAIN_TEST_SPLIT_DATE = _settings.TRAIN_TEST_SPLIT_DATE
