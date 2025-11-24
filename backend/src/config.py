@@ -52,9 +52,13 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Smart Harvest - Gas fees simulation (Polygon/Ethereum)
 	SIMULATED_GAS_FEE_USD: float = 0.50
 
+	# Gas Reserve: Always keep this amount in USD for operational costs (harvests, rebalancing)
+	GAS_RESERVE_USD: float = 50.0
+
 	# Walk-Forward Validation: Train on past, test on recent
 	# Model trains only on data before this date, backtests from this date onward
-	TRAIN_TEST_SPLIT_DATE: str = "2022-01-01"
+	# 2 years ago from Nov 2025 ≈ June 2023: tests on 2023-2025 recovery period
+	TRAIN_TEST_SPLIT_DATE: str = "2023-06-01"
 
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
@@ -103,6 +107,7 @@ DEFAULT_KLINES_LIMIT = _settings.DEFAULT_KLINES_LIMIT
 DEFAULT_HISTORICAL_DAYS = _settings.DEFAULT_HISTORICAL_DAYS
 LOG_LEVEL = _settings.LOG_LEVEL
 SIMULATED_GAS_FEE_USD = _settings.SIMULATED_GAS_FEE_USD
+GAS_RESERVE_USD = _settings.GAS_RESERVE_USD
 
 # Walk-Forward Validation split date
 TRAIN_TEST_SPLIT_DATE = _settings.TRAIN_TEST_SPLIT_DATE

@@ -4,7 +4,7 @@ import math
 import logging
 
 from defi_data_toolkit.database import log_open_position, log_close_position
-from .config import DB_FILE, SIMULATED_GAS_FEE_USD
+from .config import DB_FILE, SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
 
 logger = logging.getLogger(__name__)
 
@@ -182,9 +182,9 @@ class Backtester:
         """Checks health factor and attempts to defend the position by using
         available cash to buy collateral or closing LPs in emergency.
 
-        This method is conservative: it first tries to use USD cash to buy
-        BTC collateral; if that is insufficient and the HF is critical, it
-        will close the most recent LP to free liquidity and pay down debt.
+        This method is conservative: it first tries to use USD cash (while respecting
+        the GAS_RESERVE) to buy BTC collateral; if that is insufficient and the HF 
+        is critical, it will close the most recent LP to free liquidity and pay down debt.
         """
         # Nothing to do if no debt
         if self.total_debt_usd <= 0:
@@ -197,14 +197,15 @@ class Backtester:
         if hf > HF_WARNING_THRESHOLD:
             return
 
-        # Danger zone: try to rebalance using available cash
-        if self.usd_balance > 10:
-            amount_to_use = self.usd_balance
+        # Danger zone: try to rebalance using available cash (respecting gas reserve)
+        available_for_rescue = self.usd_balance - GAS_RESERVE_USD
+        if available_for_rescue > 10:
+            amount_to_use = available_for_rescue
             # Buy and add to collateral
             self.buy_and_hodl(amount_to_use, current_price)
             # usd_balance reduced by buy_and_hodl
             # buy_and_hodl already subtracts from usd_balance and increases btc_hodl_balance
-            logger.info("REBALANCE: Usando Caixa para comprar Colateral e defender HF")
+            logger.info("REBALANCE: Usando Caixa para comprar Colateral e defender HF (Respeitando reserva de gás)")
 
             # Recompute HF
             collateral_value = self.btc_hodl_balance * current_price
@@ -223,11 +224,13 @@ class Backtester:
             self.close_lp(lp_id=lp['id'], current_btc_price=current_price, timestamp=ts)
 
             # Immediately use available USD to pay down debt (as much as possible)
-            pay_amount = min(self.usd_balance, self.total_debt_usd)
+            # But ensure we keep the gas reserve intact
+            available_for_debt_payment = max(0, self.usd_balance - GAS_RESERVE_USD)
+            pay_amount = min(available_for_debt_payment, self.total_debt_usd)
             if pay_amount > 0:
                 self.total_debt_usd -= pay_amount
                 self.usd_balance -= pay_amount
-                logger.info("EMERGENCY: Fechando LP e pagando dívida para evitar liquidação!")
+                logger.info("EMERGENCY: Fechando LP e pagando dívida para evitar liquidação! (Reserva de gás protegida)")
             return
 
 
@@ -235,12 +238,17 @@ class Backtester:
         """Smart Harvest: Collects accrued fees when it's profitable to do so.
         
         Rules:
-        1. Only harvest if (fees_usdt + fees_btc*price) > SIMULATED_GAS_FEE_USD * 10
-        2. Deduct SIMULATED_GAS_FEE_USD from usd_balance
-        3. Auto-compound: BTC fees -> collateral, USD fees -> usd_balance
-        4. Log harvest decision to decision_history
+        1. Early exit if USD balance is too low to pay gas
+        2. Only harvest if (fees_usdt + fees_btc*price) > SIMULATED_GAS_FEE_USD * 10
+        3. Deduct SIMULATED_GAS_FEE_USD from usd_balance
+        4. Auto-compound: BTC fees -> collateral, USD fees -> usd_balance
+        5. Log harvest decision to decision_history
         """
         if not self.active_lps:
+            return
+
+        # Early exit if we don't have enough USD for gas
+        if self.usd_balance < SIMULATED_GAS_FEE_USD:
             return
 
         for lp in self.active_lps:
@@ -255,7 +263,6 @@ class Backtester:
             
             # Deduct gas fee from USD balance
             if self.usd_balance < SIMULATED_GAS_FEE_USD:
-                logger.warning(f"Insufficient USD balance to pay gas for harvesting LP {lp['id']}")
                 continue
             
             self.usd_balance -= SIMULATED_GAS_FEE_USD
@@ -309,11 +316,24 @@ class Backtester:
                 self.health_factor = 999.0
 
             # --- MUDANÇA: Bloco movido para ANTES da estratégia ---
-            # 2. Pagar Juros (se houver dívida)
+            # 2. Pagar Juros (se houver dívida) - Respeitando reserva de gás
             if self.total_debt_usd > 0:
                 daily_interest_rate = (self.loan_apy / 365)
                 interest_cost = self.total_debt_usd * daily_interest_rate
-                self.usd_balance -= interest_cost # Paga juros do caixa ANTES da estratégia rodar
+                
+                # Check if we have enough balance to pay interest while keeping gas reserve
+                if self.usd_balance > (interest_cost + GAS_RESERVE_USD):
+                    self.usd_balance -= interest_cost
+                elif self.usd_balance > interest_cost:
+                    # Pay what we can while trying to preserve the reserve
+                    self.usd_balance -= interest_cost
+                    if self.usd_balance < GAS_RESERVE_USD:
+                        logger.warning(f"[{timestamp.date()}] CRÍTICO: Juros da dívida consumiram a reserva de gás! "
+                                       f"Saldo: ${self.usd_balance:.2f}, Reserva necessária: ${GAS_RESERVE_USD:.2f}")
+                else:
+                    # Not enough to pay full interest - log critical warning
+                    logger.critical(f"[{timestamp.date()}] CRÍTICO: Saldo insuficiente para pagar juros! "
+                                    f"Saldo: ${self.usd_balance:.2f}, Juros: ${interest_cost:.2f}. Dívida cresce sem pagamento!")
             
             # 3. Atualizar estado das LPs
             for lp in self.active_lps:
