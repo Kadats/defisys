@@ -28,11 +28,11 @@ FEATURES = [
 ]
 
 # A coluna que queremos prever
-TARGET = 'target_price_fell'
+TARGET = 'target_price_rise'
 
 def train_prediction_model(df: pd.DataFrame, train_test_split_date: str = "2022-01-01"):
     """
-    Treina um modelo de ML (Regressão Logística) para prever quedas de preço.
+    Treina um modelo de ML (Regressão Logística) para prever altas de preço (oportunidades de compra).
     Usa validação Walk-Forward: treina apenas em dados históricos (antes de train_test_split_date).
     
     Args:
@@ -87,7 +87,7 @@ def train_prediction_model(df: pd.DataFrame, train_test_split_date: str = "2022-
         logger.info(f"--- Relatório de Treinamento do Modelo (Walk-Forward) ---")
         logger.info(f"Modelo: Regressão Logística")
         logger.info(f"Features Usadas: {FEATURES}")
-        logger.info(f"Alvo: {TARGET} (Queda > 3% em 7 dias)")
+        logger.info(f"Alvo: {TARGET} (Subida > 3% em 7 dias - Oportunidades de Compra)")
         logger.info(f"")
         logger.info(f"TREINO (dados históricos):")
         logger.info(f"  Período: {df.loc[train_mask, 'Open_time'].min().strftime('%Y-%m-%d')} até {df.loc[train_mask, 'Open_time'].max().strftime('%Y-%m-%d')}")

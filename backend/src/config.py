@@ -50,7 +50,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	LOG_LEVEL: str = "INFO"
 
 	# Smart Harvest - Gas fees simulation (Polygon/Ethereum)
-	SIMULATED_GAS_FEE_USD: float = 0.50
+	SIMULATED_GAS_FEE_USD: float = 0.10
 
 	# Gas Reserve: Always keep this amount in USD for operational costs (harvests, rebalancing)
 	GAS_RESERVE_USD: float = 50.0
@@ -66,6 +66,13 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	DRAWDOWN_THRESHOLD: float = 0.30  # If price is 30% below ATH, become more aggressive
 	# Fear & Greed threshold to increase allocation
 	FNG_THRESHOLD_AGGRESSIVE: float = 20.0  # If FNG < 20 (Extreme Fear), increase allocation
+
+	# Refinancing threshold for margin reuse decisions
+	HF_REFINANCE_THRESHOLD: float = 2.0
+
+	# Safe HF target immediately after borrowing (guardrail against churn)
+	# If HF would drop below this after a borrow, reduce or skip the borrow
+	SAFE_HF_AFTER_BORROW: float = 1.6
 
 	# Walk-Forward Validation: Train on past, test on recent
 	# Model trains only on data before this date, backtests from this date onward
@@ -127,6 +134,8 @@ MAX_ALLOCATION_PCT = _settings.MAX_ALLOCATION_PCT
 BASE_ALLOCATION_PCT = _settings.BASE_ALLOCATION_PCT
 DRAWDOWN_THRESHOLD = _settings.DRAWDOWN_THRESHOLD
 FNG_THRESHOLD_AGGRESSIVE = _settings.FNG_THRESHOLD_AGGRESSIVE
+HF_REFINANCE_THRESHOLD = _settings.HF_REFINANCE_THRESHOLD
+SAFE_HF_AFTER_BORROW = _settings.SAFE_HF_AFTER_BORROW
 
 # Walk-Forward Validation split date
 TRAIN_TEST_SPLIT_DATE = _settings.TRAIN_TEST_SPLIT_DATE
