@@ -103,10 +103,11 @@ def calculate_entry_size(usd_balance: float, current_price: float, ath_price: fl
 
 def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: pd.Timestamp):
     """
-    Estratégia V6 (AI Prediction Model - Bullish Focus)
+    Estratégia V7 (BTC Standard Lite)
     - Usa a coluna 'prediction' (do modelo de ML) para tomar decisões.
-    - 'prediction == 1' (Modelo prevê SUBIDA) -> Sinal BULLISH (Comprar/Ampliar)
-    - 'prediction == 0' (Modelo prevê estabilidade/queda) -> NEUTRO (Farm/Hold)
+    - Default: Hold BTC (not USD) to track Bitcoin price appreciation
+    - 'prediction == 1' (Modelo prevê SUBIDA) -> Sinal BULLISH (Leverage Existing Collateral + Amplify)
+    - 'prediction == 0' (Modelo prevê estabilidade) -> BTC HODL (Convert excess USD to BTC, no leverage)
     """
     
     current_price = row['Close']
@@ -134,8 +135,8 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
     if engine.total_debt_usd == 0:
         
         # O sinal de compra agora é a previsão de SUBIDA do modelo
-        if prediction == 1: # (Previu SUBIDA - oportunidade de compra)
-            # --- É O SINAL BULLISH! HORA DE COMPRAR COLATERAL E INICIAR O LOOP (V4 Dynamic) ---
+        if prediction == 1: # (Previu SUBIDA - oportunidade de compra/amplificar)
+            # --- BTC STANDARD: Leverage existing collateral or buy new BTC before amplifying ---
             
             # V4: Calculate position size based on market conditions
             ath_price = row.get('ATH_52w', current_price * 1.5)  # Fallback to 1.5x if ATH not available
@@ -160,18 +161,28 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
                 return
             
             logger.info(
-                f"[{timestamp.date()}] PRIMEIRA POSIÇÃO 'BULLISH' (V4 Dynamic). "
+                f"[{timestamp.date()}] PRIMEIRA POSIÇÃO 'BULLISH' (V7 BTC Standard). "
                 f"Alocação: {allocation_pct:.0%} | Capital: ${capital_to_allocate:.2f} @ ${current_price:.2f} "
                 f"| Mantendo líquido: ${engine.usd_balance - capital_to_allocate:.2f}"
             )
             
-            # 1. Comprar colateral com alocação dinâmica
-            engine.buy_and_hodl(capital_to_allocate, current_price) 
+            # 1. Check if we already hold BTC (from previous NEUTRAL periods)
+            #    If so, we can skip buying and go straight to borrowing against existing collateral
+            if engine.btc_hodl_balance > 0.0001:
+                logger.info(
+                    f"[{timestamp.date()}] BULLISH: Leverage existing BTC collateral ({engine.btc_hodl_balance:.6f} BTC). "
+                    f"Skipping buy, proceeding to amplify via borrowing."
+                )
+            else:
+                # No existing BTC: Buy new collateral with allocation
+                engine.buy_and_hodl(capital_to_allocate, current_price)
+                logger.info(f"[{timestamp.date()}] BULLISH: No existing BTC. Buying {capital_to_allocate/current_price:.6f} BTC as collateral.")
             
-            # 2. Pegar Empréstimo (Margin Reuse: Borrow based on new collateral)
+            # 2. Pegar Empréstimo (Margin Reuse: Borrow based on collateral - old or new)
             # PRE-BORROW HF SIMULATION: Ensure HF stays above SAFE_HF_AFTER_BORROW
             collateral_value = engine.btc_hodl_balance * current_price
             amount_to_borrow = collateral_value * LOAN_TO_VALUE_RATIO
+            logger.debug(f"[{timestamp.date()}] BULLISH: Collateral = {engine.btc_hodl_balance:.6f} BTC @ ${current_price:.2f} = ${collateral_value:.2f}")
             
             # Simulate HF after borrow
             projected_debt = engine.total_debt_usd + amount_to_borrow
@@ -249,9 +260,24 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
                 logger.debug(f"[{timestamp.date()}] Loop: Insuficiente para LP após buffer líquido.")
             
         else: # (prediction == 0)
-            # Modelo prevê estabilidade (NEUTRAL), mas ainda não entramos...
-            logger.debug(f"[{timestamp.date()}] Em caixa (USD), modelo prevê estabilidade. Esperando sinal 'BULLISH_ML'.")
-            pass # Continuar 100% em USD
+            # BTC STANDARD LITE: Convert excess USD to BTC HODL during neutral periods
+            # This ensures we participate in Bitcoin's price appreciation even without leverage
+            safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+            liquid_minimum = safe_balance * MIN_LIQUID_BUFFER
+            excess_usd = max(0.0, safe_balance - liquid_minimum)
+            
+            if excess_usd > 10:  # Only buy if we have meaningful capital
+                btc_to_buy = excess_usd / current_price if current_price > 0 else 0.0
+                if btc_to_buy > 0.0001:  # Minimum viable BTC amount
+                    engine.buy_and_hodl(excess_usd, current_price)
+                    logger.info(
+                        f"[{timestamp.date()}] NEUTRAL (BTC Standard Lite): Convertendo ${excess_usd:.2f} USD → {btc_to_buy:.6f} BTC HODL. "
+                        f"Mantendo líquido: ${liquid_minimum:.2f}"
+                    )
+                else:
+                    logger.debug(f"[{timestamp.date()}] NEUTRAL: Saldo insuficiente para compra de BTC (${excess_usd:.2f}).")
+            else:
+                logger.debug(f"[{timestamp.date()}] NEUTRAL: Já em BTC HODL ou reserva insuficiente (Excesso: ${excess_usd:.2f}).")
     
     # == ESTADO 2: Pós-Empréstimo (Já estamos alavancados e operando) ==
     else:
@@ -309,37 +335,33 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
 
             
             elif prediction == 0: # NEUTRAL
+                # BTC STANDARD: In neutral markets with existing debt, hold collateral and farm fees
+                # Don't aggressively borrow; instead conservatively farm LP fees to pay down debt
+                if capital_to_allocate <= 0:
+                    logger.info(
+                        f"[{timestamp.date()}] NEUTRAL (V7 BTC Standard): Leverage already deployed. "
+                        f"HF={hf:.2f} (Target: {HF_REFINANCE_THRESHOLD}). "
+                        f"Holding collateral & farming fees to service debt."
+                    )
+                    return
+                
+                # Conservative farming: Only use minimal capital for LP fees
                 range_lower = current_price * 0.70
                 range_upper = current_price * 1.60
-                strategy_name = "NEUTRAL_ML_DYNAMIC"
+                strategy_name = "NEUTRAL_ML_DYNAMIC_V7"
                 
-                if hf > HF_REFINANCE_THRESHOLD:
-                    # PRE-BORROW HF SIMULATION: Calculate safe borrow amount
-                    collateral_value = engine.btc_hodl_balance * current_price
-                    safe_borrow = calculate_safe_borrow_amount(
-                        collateral_value,
-                        engine.total_debt_usd,
-                        SAFE_HF_AFTER_BORROW,
-                        min_borrow=10.0
-                    )
-                    
-                    if safe_borrow > 0:
-                        # Cap the borrow at what we wanted to allocate
-                        amount_to_borrow = min(safe_borrow, capital_to_allocate)
-                        engine.total_debt_usd += amount_to_borrow
-                        engine.usd_balance += amount_to_borrow
-                        logger.info(f"[{timestamp.date()}] HF={hf:.2f} > {HF_REFINANCE_THRESHOLD}: Refinanciamento (${amount_to_borrow:.2f}, Safe HF={SAFE_HF_AFTER_BORROW})")
-                        capital_to_allocate = amount_to_borrow
-                    else:
-                        logger.debug(
-                            f"[{timestamp.date()}] HF Guardrail: Cannot borrow despite HF={hf:.2f} (would breach {SAFE_HF_AFTER_BORROW})"
-                        )
-                
-                logger.info(f"[{timestamp.date()}] NEUTRAL (V6): LP Farm Amplo ${capital_to_allocate:.2f} | HF={hf:.2f} | Líquido: ${engine.usd_balance - capital_to_allocate:.2f} (Range: ${range_lower:.2f}-${range_upper:.2f})")
+                # Don't refinance aggressively in neutral mode - keep debt stable
+                logger.info(
+                    f"[{timestamp.date()}] NEUTRAL (V7 BTC Standard): Conservative LP Farm ${capital_to_allocate:.2f} | "
+                    f"HF={hf:.2f} | Líquido: ${engine.usd_balance - capital_to_allocate:.2f} (Range: ${range_lower:.2f}-${range_upper:.2f})"
+                )
+
             
             else:
+                logger.warning(f"[{timestamp.date()}] Unknown prediction value: {prediction}")
                 return
             
             # Open LP with dynamically calculated capital
-            engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy=strategy_name)
-            engine.usd_balance -= capital_to_allocate
+            if capital_to_allocate > 0:
+                engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy=strategy_name)
+                engine.usd_balance -= capital_to_allocate
