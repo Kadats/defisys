@@ -79,6 +79,12 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# 2 years ago from Nov 2025 ≈ June 2023: tests on 2023-2025 recovery period
 	TRAIN_TEST_SPLIT_DATE: str = "2023-06-01"
 
+	# Multi-pool and entry sizing
+	# Maximum number of concurrently active LPs
+	MAX_ACTIVE_LPS: int = 4
+	# Fraction of available safe balance to allocate per entry (25% = 0.25)
+	ENTRY_SIZE_PCT: float = 0.25
+
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
 			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -145,4 +151,8 @@ THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS
 DEFAULT_NETWORK = _settings.DEFAULT_NETWORK
 DEFAULT_POLYGON_POOL_ID = _settings.DEFAULT_POLYGON_POOL_ID
 DERIBIT_API_BASE_URL = _settings.DERIBIT_API_BASE_URL
+
+# Multi-pool and entry sizing (exports)
+MAX_ACTIVE_LPS = _settings.MAX_ACTIVE_LPS
+ENTRY_SIZE_PCT = _settings.ENTRY_SIZE_PCT
 
