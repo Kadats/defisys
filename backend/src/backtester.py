@@ -443,37 +443,16 @@ class Backtester:
                 self.health_factor = 999.0
 
             # --- MUDANÇA: Bloco movido para ANTES da estratégia ---
-            # 2. Pagar Juros (se houver dívida) - Respeitando reserva de gás
+            # 2. Acumular Juros (se houver dívida) — agora os juros são capitalizados
+            #     em `self.total_debt_usd` (comportamento de DeFi: juros acruados na dívida),
+            #     e NÃO são deduzidos do saldo USD. Isso preserva liquidez para gas
+            #     e oportunidades de mercado.
             if self.total_debt_usd > 0:
                 daily_interest_rate = (self.loan_apy / 365)
                 interest_cost = self.total_debt_usd * daily_interest_rate
-                
-                # Check if we have enough balance to pay interest while keeping gas reserve
-                if self.usd_balance > (interest_cost + GAS_RESERVE_USD):
-                    # Normal payment, reserve intact
-                    self.usd_balance -= interest_cost
-                    # If we had previously warned, clear the warning state
-                    if self._reserve_warning_active:
-                        logger.info(f"[{timestamp.date()}] INFO: Reserva de gás restabelecida. Saldo: ${self.usd_balance:.2f}")
-                        self._reserve_warning_active = False
-                    if self._reserve_critical_active:
-                        self._reserve_critical_active = False
-                elif self.usd_balance > interest_cost:
-                    # Pay what we can while trying to preserve the reserve
-                    self.usd_balance -= interest_cost
-                    # Only log when we first cross below the gas reserve
-                    if self.usd_balance < GAS_RESERVE_USD and not self._reserve_warning_active:
-                        logger.warning(
-                            f"[{timestamp.date()}] CRÍTICO: Juros da dívida consumiram a reserva de gás! "
-                            f"Saldo: ${self.usd_balance:.2f}, Reserva necessária: ${GAS_RESERVE_USD:.2f}")
-                        self._reserve_warning_active = True
-                else:
-                    # Not enough to pay full interest - log critical warning once when it first happens
-                    if not self._reserve_critical_active:
-                        logger.critical(
-                            f"[{timestamp.date()}] CRÍTICO: Saldo insuficiente para pagar juros! "
-                            f"Saldo: ${self.usd_balance:.2f}, Juros: ${interest_cost:.2f}. Dívida cresce sem pagamento!")
-                        self._reserve_critical_active = True
+
+                # Capitalize interest into the outstanding debt (compound interest)
+                self.total_debt_usd += interest_cost
             
             # 3. Atualizar estado das LPs
             for lp in self.active_lps:

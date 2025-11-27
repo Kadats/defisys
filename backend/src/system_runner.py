@@ -100,7 +100,8 @@ def run_trading_system():
     
     # Configurar e Executar o Backtester apenas com dados pós-split
     logger.info("Fase 4: Executando o backtest da estratégia...")
-    initial_capital = 1000.0
+    # Raised initial capital slightly to provide a healthier buffer for gas + liquidity
+    initial_capital = 1050.0
     engine = Backtester(initial_capital_usd=initial_capital)
     
     # O backtester roda APENAS no DataFrame de teste (post-split)
