@@ -6,7 +6,7 @@ from .config import (
     DB_FILE, GAS_RESERVE_USD, MIN_LIQUID_BUFFER, MAX_ALLOCATION_PCT, 
     BASE_ALLOCATION_PCT, DRAWDOWN_THRESHOLD, FNG_THRESHOLD_AGGRESSIVE
 )
-from .config import SIMULATED_GAS_FEE_USD, TRAIN_TEST_SPLIT_DATE, HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW
+from .config import SIMULATED_GAS_FEE_USD, TRAIN_TEST_SPLIT_DATE, HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT
 
 logger = logging.getLogger(__name__)
 
@@ -281,32 +281,41 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
     
     # == ESTADO 2: Pós-Empréstimo (Já estamos alavancados e operando) ==
     else:
-        if not engine.active_lps:
-            # V4 Dynamic Allocation for ESTADO 2
+        # Allow opening additional LPs up to MAX_ACTIVE_LPS (multi-pool scaling)
+        if len(engine.active_lps) < MAX_ACTIVE_LPS:
+            # V4 Dynamic Allocation for ESTADO 2 (per-entry sizing uses ENTRY_SIZE_PCT of safe balance)
             ath_price = row.get('ATH_52w', current_price * 1.5)
             fng_value = row.get('FNG_Value', 50)
-            
-            allocation_pct = calculate_entry_size(engine.usd_balance, current_price, ath_price, fng_value)
-            capital_to_allocate = engine.usd_balance * allocation_pct
-            
-            # Ensure we keep minimum liquid buffer for interest + gas
+
+            # Respect absolute gas reserve before allocating
+            safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+
+            # Each new entry should use a fixed fraction of the safe balance
+            capital_to_allocate = safe_balance * ENTRY_SIZE_PCT
+
+            # Also ensure we keep minimum liquid buffer (interest + safety) and gas for txs
             liquid_minimum = engine.usd_balance * MIN_LIQUID_BUFFER
-            capital_to_allocate = min(capital_to_allocate, engine.usd_balance - liquid_minimum)
-            
+            estimated_gas_costs = SIMULATED_GAS_FEE_USD * 2
+            max_allowable = max(0.0, engine.usd_balance - liquid_minimum - estimated_gas_costs - GAS_RESERVE_USD)
+            capital_to_allocate = min(capital_to_allocate, max_allowable)
+
             if capital_to_allocate <= 10:
                 logger.debug(
-                    f"[{timestamp.date()}] Saldo insuficiente para LP (Alocável: ${capital_to_allocate:.2f}, "
+                    f"[{timestamp.date()}] Saldo insuficiente para novo LP (Alocável: ${capital_to_allocate:.2f}, "
                     f"Mínimo Líquido: ${liquid_minimum:.2f})"
                 )
-                return 
+                return
             
             # Check Health Factor for margin reuse decision
             collateral_value = engine.btc_hodl_balance * current_price
             hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
             
             if prediction == 1: # BULLISH
-                range_lower = current_price * 0.70
-                range_upper = current_price * 1.60
+                # Ladder ranges so each new LP has slightly offset bounds relative to existing LPs
+                index = len(engine.active_lps)
+                step = 0.06
+                range_lower = current_price * max(0.01, (0.70 + step * index))
+                range_upper = current_price * max(range_lower / current_price + 0.05, (1.60 - step * index))
                 strategy_name = "BULLISH_ML_DYNAMIC"
 
                 if hf > HF_REFINANCE_THRESHOLD:
@@ -361,7 +370,7 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
                 logger.warning(f"[{timestamp.date()}] Unknown prediction value: {prediction}")
                 return
             
-            # Open LP with dynamically calculated capital
-            if capital_to_allocate > 0:
+            # Open LP with dynamically calculated capital (respect MAX_ACTIVE_LPS)
+            if capital_to_allocate > 0 and len(engine.active_lps) < MAX_ACTIVE_LPS:
                 engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy=strategy_name)
                 engine.usd_balance -= capital_to_allocate

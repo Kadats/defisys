@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import math
 import logging
+from datetime import timedelta
 
 from defi_data_toolkit.database import log_open_position, log_close_position
 from .config import DB_FILE, SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
@@ -37,6 +38,8 @@ class Backtester:
         # Track reserve alert states to avoid repeated logs (only log on state change)
         self._reserve_warning_active = False
         self._reserve_critical_active = False
+        # Emergency cooldown: timestamp until which emergency-close attempts are suppressed
+        self._emergency_cooldown_until = None
         
         logger.info(f"Backtester v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
 
@@ -157,16 +160,31 @@ class Backtester:
             f"Range: ${range_lower:.2f}-${range_upper:.2f} | Strategy: {strategy}"
         )
 
-    def close_lp(self, lp_id: int, current_btc_price: float, timestamp):
+    def close_lp(self, lp_id: int, current_btc_price: float, timestamp, is_emergency: bool = False) -> bool:
         lp_to_close = next((lp for lp in self.active_lps if lp['id'] == lp_id), None)
         if not lp_to_close:
             logger.warning(f"Tentativa de fechar LP ID {lp_id} inexistente.")
-            return
+            return False
 
-        # Charge gas for closing an LP
+        # Respect emergency cooldown: if we've recently hit a hard no-gas condition,
+        # avoid spamming logs by returning silently during the cooldown window.
+        now = pd.Timestamp.now()
+        if self._emergency_cooldown_until and now < self._emergency_cooldown_until:
+            return False
+
+        # Physical gas requirement: must have at least the gas fee available
         if self.usd_balance < SIMULATED_GAS_FEE_USD:
-            logger.error(f"[{timestamp.date()}] Insufficient USD to pay gas for closing LP {lp_id}. Aborting.")
-            return
+            # First time we hit this state, escalate to CRITICAL and set a long cooldown
+            logger.critical(
+                f"[{timestamp.date()}] Insufficient USD to pay gas for closing LP {lp_id}. Aborting and entering long cooldown."
+            )
+            # Suppress repeated critical spam for a long window (e.g., 2 years)
+            self._emergency_cooldown_until = now + timedelta(days=365*2)
+            return False
+
+        # If emergency, allow spending below GAS_RESERVE_USD to execute the close
+        # (we still enforce the physical gas fee above). For non-emergency closes
+        # normal reserve semantics are enforced elsewhere in the engine.
         self.usd_balance -= SIMULATED_GAS_FEE_USD
 
         asset_value, _, _ = self._get_lp_value(lp_to_close, current_btc_price)
@@ -189,6 +207,7 @@ class Backtester:
             f"[{timestamp.date()}] CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price:.2f} "
             f"(Lucro/Prejuízo da LP: ${final_profit:.2f})"
         )
+        return True
 
     def _handle_liquidation(self, timestamp):
         """Zera o portfólio em caso de liquidação."""
@@ -223,6 +242,51 @@ class Backtester:
         # Safe zone
         if hf > HF_WARNING_THRESHOLD:
             return
+
+        # Gas Solvency Check: trigger earlier to avoid deadlock. If the USD balance
+        # has fallen below half the declared gas reserve, attempt an emergency close
+        # of the single most-profitable LP. This is designed to run before the
+        # balance reaches the physical gas-fee limit.
+        if self.usd_balance < (GAS_RESERVE_USD * 0.5) and self.active_lps:
+            now = pd.Timestamp.now()
+            # Respect an emergency cooldown if we've already failed recently
+            if self._emergency_cooldown_until and now < self._emergency_cooldown_until:
+                return
+
+            # Must have at least one gas payment available to execute a close
+            if self.usd_balance < SIMULATED_GAS_FEE_USD:
+                logger.critical(
+                    f"USD balance ${self.usd_balance:.2f} < required gas ${SIMULATED_GAS_FEE_USD:.2f}; cannot perform emergency close. Entering long cooldown."
+                )
+                # Suppress repeated critical spam for a long window (e.g., 2 years)
+                self._emergency_cooldown_until = now + timedelta(days=365*2)
+                return
+
+            # Evaluate liquidation / current value for each LP and pick the most valuable
+            best_lp = None
+            best_value = -1.0
+            for lp in self.active_lps:
+                asset_value, _, _ = self._get_lp_value(lp, current_price)
+                fees_value = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_price)
+                total_value = asset_value + fees_value
+                if total_value > best_value:
+                    best_value = total_value
+                    best_lp = lp
+
+            if best_lp is not None:
+                ts = pd.Timestamp.now()
+                logger.warning(
+                    f"EMERGENCY SOLVENCY: USD ${self.usd_balance:.2f} < {GAS_RESERVE_USD*0.5:.2f}. "
+                    f"Attempting emergency close of most-profitable LP ID {best_lp['id']} (value=${best_value:.2f})."
+                )
+                closed = self.close_lp(lp_id=best_lp['id'], current_btc_price=current_price, timestamp=ts, is_emergency=True)
+                if not closed:
+                    logger.critical(
+                        "Emergency close failed (insufficient funds to even pay gas). Entering long cooldown to avoid spam."
+                    )
+                    self._emergency_cooldown_until = now + timedelta(days=365*2)
+                # After attempting an emergency close return — let subsequent health checks run on next tick
+                return
 
         # Danger zone: try to rebalance using available cash (respecting gas reserve)
         available_for_rescue = self.usd_balance - GAS_RESERVE_USD
