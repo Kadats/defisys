@@ -359,6 +359,34 @@ def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: 
                 range_upper = current_price * 1.60
                 strategy_name = "NEUTRAL_ML_DYNAMIC_V7"
                 
+                # Smart Repay: If we have idle cash (fees sitting in USD) above our buffer,
+                # use it to pay down accrued debt while preserving gas reserve and a small
+                # liquid buffer. This reduces the compound interest burden over time.
+                safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+                buffer_needed = safe_balance * MIN_LIQUID_BUFFER
+                excess_cash = max(0.0, safe_balance - buffer_needed)
+
+                if excess_cash > 20.0 and engine.total_debt_usd > 0:
+                    # Ensure we can at least pay the gas fee for the repayment transaction
+                    if engine.usd_balance > SIMULATED_GAS_FEE_USD:
+                        # Pay down up to the excess_cash, but never more than the outstanding debt
+                        payment_amount = min(excess_cash, engine.total_debt_usd)
+                        # Deduct the repayment + on-chain gas
+                        engine.total_debt_usd = max(0.0, engine.total_debt_usd - payment_amount)
+                        engine.usd_balance -= (payment_amount + SIMULATED_GAS_FEE_USD)
+                        logger.info(
+                            f"[{timestamp.date()}] SMART REPAY: Using excess cash to pay down debt. "
+                            f"Paid: ${payment_amount:.2f}, New Debt: ${engine.total_debt_usd:.2f}."
+                        )
+                        # Recompute safe_balance and capital_to_allocate after repayment
+                        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+                        capital_to_allocate = safe_balance * ENTRY_SIZE_PCT
+                        # Re-apply the same allocation caps as earlier
+                        liquid_minimum = engine.usd_balance * MIN_LIQUID_BUFFER
+                        estimated_gas_costs = SIMULATED_GAS_FEE_USD * 2
+                        max_allowable = max(0.0, engine.usd_balance - liquid_minimum - estimated_gas_costs - GAS_RESERVE_USD)
+                        capital_to_allocate = min(capital_to_allocate, max_allowable)
+
                 # Don't refinance aggressively in neutral mode - keep debt stable
                 logger.info(
                     f"[{timestamp.date()}] NEUTRAL (V7 BTC Standard): Conservative LP Farm ${capital_to_allocate:.2f} | "
