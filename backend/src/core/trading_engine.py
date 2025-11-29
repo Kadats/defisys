@@ -5,22 +5,17 @@ import logging
 from datetime import timedelta
 
 from defi_data_toolkit.database import log_open_position, log_close_position
-from .config import DB_FILE, SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
+from ..config import DB_FILE, SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
+from ..utils.math import calculate_lp_value, calculate_liquidity_l
+from .risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
 
 POOL_FEE_RATE = 0.003 
 LOAN_TO_VALUE_RATIO = 0.50 
-DEBT_INTEREST_RATE = 0.075 
-LIQUIDATION_THRESHOLD = 0.80 
-LIQUIDATION_PENALTY = 0.10 
-# Health Factor risk management thresholds
-HF_WARNING_THRESHOLD = 1.3
-HF_CRITICAL_THRESHOLD = 1.1
-# Refinancing threshold: only refinance (borrow to fund) when HF is sufficiently high
-HF_REFINANCE_THRESHOLD = 2.0
+DEBT_INTEREST_RATE = 0.075
 
-class Backtester:
+class TradingEngine:
     
     def __init__(self, initial_capital_usd: float = 1000.0):
         self.initial_capital = initial_capital_usd
@@ -41,18 +36,22 @@ class Backtester:
         # Emergency cooldown: timestamp until which emergency-close attempts are suppressed
         self._emergency_cooldown_until = None
         
-        logger.info(f"Backtester v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
+        # Initialize Risk Manager
+        self.risk_manager = RiskManager(
+            gas_reserve_usd=GAS_RESERVE_USD,
+            simulated_gas_fee_usd=SIMULATED_GAS_FEE_USD
+        )
+        
+        logger.info(f"TradingEngine v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
 
     def _get_lp_value(self, lp: dict, current_btc_price: float) -> tuple:
-        L = lp['L']; pa = lp['range_lower']; pb = lp['range_upper']; pc = current_btc_price
-        sqrt_pa = math.sqrt(pa); sqrt_pb = math.sqrt(pb); sqrt_pc = math.sqrt(pc)
-        amount_btc = 0; amount_usdt = 0
-        if pc <= pa: amount_btc = L * ((1/sqrt_pa) - (1/sqrt_pb))
-        elif pc >= pb: amount_usdt = L * (sqrt_pb - sqrt_pa)
-        else:
-            amount_btc = L * ((1/sqrt_pc) - (1/sqrt_pb))
-            amount_usdt = L * (sqrt_pc - sqrt_pa)
-        return (amount_btc * pc) + amount_usdt, amount_btc, amount_usdt
+        """Calculate LP position value using Uniswap V3 math."""
+        return calculate_lp_value(
+            liquidity=lp['L'],
+            range_lower=lp['range_lower'],
+            range_upper=lp['range_upper'],
+            current_price=current_btc_price
+        )
 
     def _calculate_portfolio_value(self, current_btc_price: float) -> float:
         if self.is_liquidated:
@@ -109,24 +108,17 @@ class Backtester:
             logger.warning(f"[{timestamp.date()}] Range inválido: Preço mínimo ${range_lower:.2f} é maior ou igual ao máximo ${range_upper:.2f}")
             return
 
-        pa = range_lower; pb = range_upper; pc = current_btc_price
-        sqrt_pa = math.sqrt(pa); sqrt_pb = math.sqrt(pb); sqrt_pc = math.sqrt(pc)
-        amount_btc = 0; amount_usdt = 0; L = 0
-
-        if pc <= pa:
-            if (sqrt_pb - sqrt_pa) == 0: return
-            L = ( (capital_usd / pc) * sqrt_pa * sqrt_pb ) / (sqrt_pb - sqrt_pa)
-            amount_btc = capital_usd / pc
-        elif pc >= pb:
-            if (sqrt_pb - sqrt_pa) == 0: return
-            L = capital_usd / (sqrt_pb - sqrt_pa)
-            amount_usdt = capital_usd
-        else:
-            denominator = (2*sqrt_pc - sqrt_pa - (pc / sqrt_pb))
-            if denominator == 0: return
-            L = capital_usd / denominator
-            amount_usdt = L * (sqrt_pc - sqrt_pa)
-            amount_btc = L * ( (1/sqrt_pc) - (1/sqrt_pb) )
+        # Calculate liquidity L and initial amounts using Uniswap V3 math
+        L, amount_btc, amount_usdt = calculate_liquidity_l(
+            capital_usd=capital_usd,
+            range_lower=range_lower,
+            range_upper=range_upper,
+            current_price=current_btc_price
+        )
+        
+        # Check for invalid liquidity calculation
+        if L == 0:
+            return
 
         new_lp = {
             "L": L, "range_lower": range_lower,
@@ -225,36 +217,42 @@ class Backtester:
         self.decision_history.append(f"[{timestamp.date()}] !!! LIQUIDAÇÃO TOTAL !!!")
 
     def _check_and_rebalance_health(self, current_price: float):
-        """Checks health factor and attempts to defend the position by using
-        available cash to buy collateral or closing LPs in emergency.
+        """Checks health factor and attempts to defend the position using RiskManager.
 
-        This method is conservative: it first tries to use USD cash (while respecting
-        the GAS_RESERVE) to buy BTC collateral; if that is insufficient and the HF 
-        is critical, it will close the most recent LP to free liquidity and pay down debt.
+        Delegates risk assessment to RiskManager and acts on recommendations:
+        1. Emergency close if gas solvency is at risk
+        2. Use available cash to buy collateral
+        3. Close LPs if health is critical
         """
         # Nothing to do if no debt
         if self.total_debt_usd <= 0:
             return
 
         collateral_value = self.btc_hodl_balance * current_price
-        hf = (collateral_value * LIQUIDATION_THRESHOLD) / self.total_debt_usd if self.total_debt_usd > 0 else 999.0
+        health_status, hf = self.risk_manager.check_health_status(collateral_value, self.total_debt_usd)
 
-        # Safe zone
-        if hf > HF_WARNING_THRESHOLD:
+        # Safe zone - no action needed
+        if health_status == 'SAFE':
             return
 
-        # Gas Solvency Check: trigger earlier to avoid deadlock. If the USD balance
-        # has fallen below half the declared gas reserve, attempt an emergency close
-        # of the single most-profitable LP. This is designed to run before the
-        # balance reaches the physical gas-fee limit.
-        if self.usd_balance < (GAS_RESERVE_USD * 0.5) and self.active_lps:
+        # Get rebalancing recommendations from RiskManager
+        rebalance_options = self.risk_manager.assess_rebalance_options(
+            health_factor=hf,
+            balance=self.usd_balance,
+            has_active_lps=len(self.active_lps) > 0
+        )
+
+        action = rebalance_options['action']
+
+        # EMERGENCY CLOSE: Gas solvency issue
+        if action == 'emergency_close':
             now = pd.Timestamp.now()
             # Respect an emergency cooldown if we've already failed recently
             if self._emergency_cooldown_until and now < self._emergency_cooldown_until:
                 return
 
             # Must have at least one gas payment available to execute a close
-            if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            if not self.risk_manager.can_afford_gas(self.usd_balance):
                 logger.critical(
                     f"USD balance ${self.usd_balance:.2f} < required gas ${SIMULATED_GAS_FEE_USD:.2f}; cannot perform emergency close. Entering long cooldown."
                 )
@@ -262,7 +260,7 @@ class Backtester:
                 self._emergency_cooldown_until = now + timedelta(days=365*2)
                 return
 
-            # Evaluate liquidation / current value for each LP and pick the most valuable
+            # Find the most valuable LP to close
             best_lp = None
             best_value = -1.0
             for lp in self.active_lps:
@@ -276,7 +274,7 @@ class Backtester:
             if best_lp is not None:
                 ts = pd.Timestamp.now()
                 logger.warning(
-                    f"EMERGENCY SOLVENCY: USD ${self.usd_balance:.2f} < {GAS_RESERVE_USD*0.5:.2f}. "
+                    f"EMERGENCY SOLVENCY: {rebalance_options['reason']}. "
                     f"Attempting emergency close of most-profitable LP ID {best_lp['id']} (value=${best_value:.2f})."
                 )
                 closed = self.close_lp(lp_id=best_lp['id'], current_btc_price=current_price, timestamp=ts, is_emergency=True)
@@ -285,43 +283,43 @@ class Backtester:
                         "Emergency close failed (insufficient funds to even pay gas). Entering long cooldown to avoid spam."
                     )
                     self._emergency_cooldown_until = now + timedelta(days=365*2)
-                # After attempting an emergency close return — let subsequent health checks run on next tick
-                return
+            return
 
-        # Danger zone: try to rebalance using available cash (respecting gas reserve)
-        available_for_rescue = self.usd_balance - GAS_RESERVE_USD
-        if available_for_rescue > 10:
-            amount_to_use = available_for_rescue
-            # Buy and add to collateral
-            self.buy_and_hodl(amount_to_use, current_price)
-            # usd_balance reduced by buy_and_hodl
-            # buy_and_hodl already subtracts from usd_balance and increases btc_hodl_balance
-            logger.info("REBALANCE: Usando Caixa para comprar Colateral e defender HF (Respeitando reserva de gás)")
+        # USE CASH: Try to rebalance using available cash
+        elif action == 'use_cash':
+            available_cash = rebalance_options['available_cash']
+            if available_cash > 10:
+                # Buy and add to collateral
+                self.buy_and_hodl(available_cash, current_price)
+                logger.info(
+                    f"REBALANCE: {rebalance_options['reason']}. "
+                    f"Using ${available_cash:.2f} to buy collateral (Gas reserve protected)"
+                )
 
-            # Recompute HF
-            collateral_value = self.btc_hodl_balance * current_price
-            hf = (collateral_value * LIQUIDATION_THRESHOLD) / self.total_debt_usd if self.total_debt_usd > 0 else 999.0
+                # Recompute HF to check if rebalance succeeded
+                collateral_value = self.btc_hodl_balance * current_price
+                new_status, new_hf = self.risk_manager.check_health_status(collateral_value, self.total_debt_usd)
+                
+                if new_status == 'SAFE':
+                    return
 
-            # If rebalance succeeded, return
-            if hf > HF_WARNING_THRESHOLD:
-                return
-
-        # Critical zone: close most recent LP to free liquidity and pay debt
-        if hf < HF_CRITICAL_THRESHOLD and self.active_lps:
+        # CLOSE LP: Critical health factor, need to close LP and pay debt
+        if action == 'close_lp' and self.active_lps:
             # Close the most recently opened LP (last in list)
             lp = self.active_lps[-1]
-            # Close LP and receive funds into usd_balance
             ts = pd.Timestamp.now()
             self.close_lp(lp_id=lp['id'], current_btc_price=current_price, timestamp=ts)
 
-            # Immediately use available USD to pay down debt (as much as possible)
-            # But ensure we keep the gas reserve intact
-            available_for_debt_payment = max(0, self.usd_balance - GAS_RESERVE_USD)
-            pay_amount = min(available_for_debt_payment, self.total_debt_usd)
+            # Use available USD to pay down debt (respecting gas reserve)
+            safe_balance = self.risk_manager.calculate_safe_balance(self.usd_balance)
+            pay_amount = min(safe_balance, self.total_debt_usd)
             if pay_amount > 0:
                 self.total_debt_usd -= pay_amount
                 self.usd_balance -= pay_amount
-                logger.info("EMERGENCY: Fechando LP e pagando dívida para evitar liquidação! (Reserva de gás protegida)")
+                logger.info(
+                    f"EMERGENCY: {rebalance_options['reason']}. "
+                    f"Closed LP and paid ${pay_amount:.2f} debt (Gas reserve protected)"
+                )
             return
 
 
@@ -415,12 +413,19 @@ class Backtester:
             lp['fees_accrued_usdt'] = 0.0
 
 
-    def run(self, df: pd.DataFrame, strategy_function):
+    def run(self, df: pd.DataFrame, strategy):
+        """
+        Run the backtest with a given strategy.
+        
+        Args:
+            df: DataFrame with market data
+            strategy: Strategy instance implementing BaseStrategy
+        """
         if df.empty:
             logger.error("DataFrame vazio. Abortando backtest.")
             return {}
 
-        logger.info(f"Iniciando Backtester v2 (Market Timing Loop). Processando {len(df)} velas...")
+        logger.info(f"Iniciando TradingEngine v2 (Market Timing Loop) com {strategy.get_name()}. Processando {len(df)} velas...")
         
         for index, row in df.iterrows():
             if self.is_liquidated:
@@ -433,9 +438,9 @@ class Backtester:
             # 1. Calcular HF e checar Liquidação (se houver dívida)
             if self.total_debt_usd > 0:
                 collateral_value = self.btc_hodl_balance * current_price
-                self.health_factor = (collateral_value * LIQUIDATION_THRESHOLD) / self.total_debt_usd if self.total_debt_usd > 0 else 999.0
+                self.health_factor = self.risk_manager.calculate_health_factor(collateral_value, self.total_debt_usd)
                 
-                if self.health_factor <= 1.0:
+                if self.risk_manager.is_liquidated(self.health_factor):
                     self._handle_liquidation(timestamp)
                     self.portfolio_history.append(0.0)
                     continue 
@@ -485,7 +490,7 @@ class Backtester:
             except Exception as e:
                 logger.exception("Erro durante check/rebalance de HF: %s", e)
 
-            strategy_function(row, self, timestamp)
+            strategy.execute(row, self, timestamp)
             
             # 6. Registrar o Valor do Portfólio
             total_net_value = self._calculate_portfolio_value(current_price)
@@ -499,7 +504,7 @@ class Backtester:
         hodl_btc_amount = self.initial_capital / initial_btc_price
         hodl_final_value = hodl_btc_amount * df.iloc[-1]['Close']
         
-        logger.info("Backtest v2 Concluído. Valor Final: $%.2f", final_portfolio_value)
+        logger.info("TradingEngine v2 Concluído. Valor Final: $%.2f", final_portfolio_value)
 
         return {
             'initial_capital_usd': self.initial_capital,

@@ -9,6 +9,6 @@ def test_config_defaults():
 
 def test_setup_logging_returns_logger():
     logger = setup_logging()
-    assert logger.name == "projeto_zero"
+    assert logger.name == "defisys"
     # Level should be set according to LOG_LEVEL (case-insensitive)
     assert logger.level in (20, 10, 30, 40, 50)
