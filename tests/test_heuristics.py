@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from backend.src.regime_analyzer import (
+from backend.src.ai.heuristics import (
     analyze_market_regime,
     FNG_FEAR_THRESHOLD,
     FNG_GREED,

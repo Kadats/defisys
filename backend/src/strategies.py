@@ -7,99 +7,11 @@ from .config import (
     BASE_ALLOCATION_PCT, DRAWDOWN_THRESHOLD, FNG_THRESHOLD_AGGRESSIVE
 )
 from .config import SIMULATED_GAS_FEE_USD, TRAIN_TEST_SPLIT_DATE, HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT
+from .utils.math import calculate_safe_borrow_amount, calculate_entry_size
 
 logger = logging.getLogger(__name__)
 
-DAYS_OUT_OF_RANGE_THRESHOLD = 10
-
-
-def calculate_safe_borrow_amount(
-    collateral_value: float,
-    current_debt: float,
-    target_hf: float,
-    min_borrow: float = 10.0
-) -> float:
-    """
-    Calculate the maximum safe borrow amount to keep HF above target after borrowing.
-    
-    Args:
-        collateral_value: Current collateral value (BTC holdings * price)
-        current_debt: Current debt in USD
-        target_hf: Minimum acceptable HF immediately after borrow (e.g., 1.6)
-        min_borrow: Minimum borrow amount to return (default $10)
-    
-    Returns:
-        Safe borrow amount in USD, or 0.0 if borrow would breach safety threshold
-    
-    Logic:
-        - Target equation: (collateral_value * 0.8) / (current_debt + safe_borrow) = target_hf
-        - Solve for safe_borrow: safe_borrow = (collateral_value * 0.8) / target_hf - current_debt
-        - If safe_borrow < 0 or < min_borrow threshold, return 0.0 (no safe borrow possible)
-    """
-    if target_hf <= 0 or collateral_value <= 0:
-        return 0.0
-    
-    # Calculate maximum debt that keeps HF at target level
-    max_safe_debt = (collateral_value * 0.8) / target_hf
-    
-    # Calculate safe borrow as the difference from current debt
-    safe_borrow = max_safe_debt - current_debt
-    
-    # Only borrow if it's a meaningful amount
-    if safe_borrow >= min_borrow:
-        return safe_borrow
-    else:
-        return 0.0
-
-
-def calculate_entry_size(usd_balance: float, current_price: float, ath_price: float, fng_value: float) -> float:
-    """
-    V4 Dynamic Allocation: Calculate position size based on market conditions.
-    
-    Args:
-        usd_balance: Current USD balance in the portfolio
-        current_price: Current BTC price
-        ath_price: All-Time High price to calculate drawdown
-        fng_value: Fear & Greed Index value (0-100)
-    
-    Returns:
-        allocation_pct: Percentage of balance to allocate (0.0 to 0.8)
-    
-    Logic:
-        - Start with BASE_ALLOCATION_PCT (20%)
-        - If drawdown > 30%, increase allocation aggressively (70-80%)
-        - If FNG < 20 (Extreme Fear), increase allocation aggressively (70-80%)
-        - Never allocate more than MAX_ALLOCATION_PCT (80%)
-        - Always keep at least MIN_LIQUID_BUFFER (20%) as cash reserve
-    """
-    if ath_price <= 0:
-        return BASE_ALLOCATION_PCT
-    
-    # Calculate drawdown from ATH
-    drawdown = (ath_price - current_price) / ath_price
-    
-    # Start with base allocation
-    allocation_pct = BASE_ALLOCATION_PCT
-    
-    # Aggressive buying: Deep drawdown (price far below ATH)
-    if drawdown > DRAWDOWN_THRESHOLD:
-        allocation_pct = 0.70
-        logger.info(f"[DYNAMIC] Drawdown {drawdown:.1%} > Threshold. Aggressive allocation: {allocation_pct:.0%}")
-    
-    # Extreme fear index: Buy more when sentiment is very negative
-    if fng_value < FNG_THRESHOLD_AGGRESSIVE:
-        allocation_pct = max(allocation_pct, 0.70)
-        logger.info(f"[DYNAMIC] FNG {fng_value:.0f} < Threshold {FNG_THRESHOLD_AGGRESSIVE}. Aggressive allocation: {allocation_pct:.0%}")
-    
-    # Cap at maximum allocation
-    allocation_pct = min(allocation_pct, MAX_ALLOCATION_PCT)
-    
-    # Ensure we never breach the minimum liquid buffer
-    # If allocation would leave us < MIN_LIQUID_BUFFER, reduce it
-    max_allocable = 1.0 - MIN_LIQUID_BUFFER
-    allocation_pct = min(allocation_pct, max_allocable)
-    
-    return allocation_pct 
+DAYS_OUT_OF_RANGE_THRESHOLD = 10 
 
 def run_strategy_regime_switcher(row: pd.Series, engine: Backtester, timestamp: pd.Timestamp):
     """

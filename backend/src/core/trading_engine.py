@@ -5,9 +5,9 @@ import logging
 from datetime import timedelta
 
 from defi_data_toolkit.database import log_open_position, log_close_position
-from .config import DB_FILE, SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
-from .utils.math import calculate_lp_value, calculate_liquidity_l
-from .core import RiskManager
+from ..config import DB_FILE, SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
+from ..utils.math import calculate_lp_value, calculate_liquidity_l
+from .risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ POOL_FEE_RATE = 0.003
 LOAN_TO_VALUE_RATIO = 0.50 
 DEBT_INTEREST_RATE = 0.075
 
-class Backtester:
+class TradingEngine:
     
     def __init__(self, initial_capital_usd: float = 1000.0):
         self.initial_capital = initial_capital_usd
@@ -42,7 +42,7 @@ class Backtester:
             simulated_gas_fee_usd=SIMULATED_GAS_FEE_USD
         )
         
-        logger.info(f"Backtester v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
+        logger.info(f"TradingEngine v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
 
     def _get_lp_value(self, lp: dict, current_btc_price: float) -> tuple:
         """Calculate LP position value using Uniswap V3 math."""
@@ -425,7 +425,7 @@ class Backtester:
             logger.error("DataFrame vazio. Abortando backtest.")
             return {}
 
-        logger.info(f"Iniciando Backtester v2 (Market Timing Loop) com {strategy.get_name()}. Processando {len(df)} velas...")
+        logger.info(f"Iniciando TradingEngine v2 (Market Timing Loop) com {strategy.get_name()}. Processando {len(df)} velas...")
         
         for index, row in df.iterrows():
             if self.is_liquidated:
@@ -504,7 +504,7 @@ class Backtester:
         hodl_btc_amount = self.initial_capital / initial_btc_price
         hodl_final_value = hodl_btc_amount * df.iloc[-1]['Close']
         
-        logger.info("Backtest v2 Concluído. Valor Final: $%.2f", final_portfolio_value)
+        logger.info("TradingEngine v2 Concluído. Valor Final: $%.2f", final_portfolio_value)
 
         return {
             'initial_capital_usd': self.initial_capital,

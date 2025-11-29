@@ -1,14 +1,17 @@
 import pandas as pd
 import numpy as np
 
-from backend.src import prediction_engine as pe
+from backend.src.ai import prediction as pe
 from defi_data_toolkit.indicators import calculate_sma
 
 
-def make_dummy_df(n=300):
+def make_dummy_df(n=3000):
     # Create a DataFrame with required feature columns filled with synthetic data
+    # Use 3000 samples to ensure we have data both before and after 2022-01-01 split
+    # 3000 samples * 4h = 12000h = 500 days, spanning from 2021-01-01 to mid-2022
     rng = np.random.default_rng(42)
     df = pd.DataFrame()
+    df["Open_time"] = pd.date_range(start='2021-01-01', periods=n, freq='4h')
     df["Close"] = np.linspace(100, 200, n) + rng.normal(0, 1, n)
     # compute SMA_50 and SMA_200 using toolkit
     df["SMA_50"] = calculate_sma(df, column="Close", window=50)
@@ -24,7 +27,7 @@ def make_dummy_df(n=300):
         df[col] = rng.normal(0, 1, n)
 
     # target
-    df['target_price_fell'] = rng.integers(0, 2, size=n)
+    df['target_price_rise'] = rng.integers(0, 2, size=n)
 
     # drop rows missing SMA-based values
     df = df.dropna()

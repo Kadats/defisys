@@ -3,10 +3,10 @@ import pandas as pd
 import os
 
 from .data_provider import get_full_prepared_data
-from .backtester import Backtester
-from .strategies import run_strategy_regime_switcher
+from .core import TradingEngine
+from .strategies import BTCLiteStrategy
 from .config import PROJECT_ROOT, DB_FILE, TRAIN_TEST_SPLIT_DATE
-from .prediction_engine import train_prediction_model, get_predictions
+from .ai import train_prediction_model, get_predictions
 from defi_data_toolkit.database import save_predictions_to_db
 
 logger = logging.getLogger(__name__)
@@ -34,33 +34,8 @@ def log_summary_report(results, latest_indicators=None):
     # except Exception:
     #     logger.exception("Erro ao logar o sumario do relatorio no console")
 
-    # --- Parte 2: Salvar Relatório em Arquivo .txt (MANTIDA) ---
-    try:
-        report_path = os.path.join(PROJECT_ROOT, "backtest_report.txt")
-        decision_history = results.get('decision_history', [])
-        
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write("--- RELATORIO DE BACKTEST (v2 Engine) ---\n")
-            f.write(f"Data da Execução: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("="*40 + "\n")
-            f.write(f"Capital Inicial: ${results.get('initial_capital_usd'):.2f}\n")
-            f.write(f"Capital Final: ${results.get('final_usd_value'):.2f}\n")
-            f.write(f"Lucro/Prejuizo: ${results.get('profit_usd'):.2f} ({results.get('profit_percentage_usd'):.2f}%)\n")
-            f.write(f"Performance do Buy and Hold (BTC): {results.get('btc_benchmark_profit_percentage'):.2f}%\n")
-            f.write("\n" + "="*40 + "\n")
-            f.write("--- HISTORICO DE DECISOES ---\n\n")
-            
-            if decision_history:
-                for decision in decision_history:
-                    f.write(f"{decision}\n")
-            else:
-                f.write("Nenhuma decisão foi tomada.\n")
-        
-        # Manter este log para sabermos que o arquivo foi salvo
-        logger.info(f"Relatório de backtest salvo em: {report_path}")
-        
-    except Exception:
-        logger.exception("Erro ao salvar o relatorio .txt")
+    # Backtest summary completed - all results logged to console/logger
+    # No .txt file generation needed in V2 architecture
 
 
 def run_trading_system():
@@ -102,10 +77,13 @@ def run_trading_system():
     logger.info("Fase 4: Executando o backtest da estratégia...")
     # Raised initial capital slightly to provide a healthier buffer for gas + liquidity
     initial_capital = 1050.0
-    engine = Backtester(initial_capital_usd=initial_capital)
+    engine = TradingEngine(initial_capital_usd=initial_capital)
+    
+    # Instantiate the strategy
+    strategy = BTCLiteStrategy()
     
     # O backtester roda APENAS no DataFrame de teste (post-split)
-    backtest_results = engine.run(simulation_df, strategy_function=run_strategy_regime_switcher) 
+    backtest_results = engine.run(simulation_df, strategy=strategy) 
 
     # 4. Logar o relatório final
     latest_indicators = simulation_df.tail(5) if not simulation_df.empty else None
