@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 from backend.src.ai import prediction as pe
-from defi_data_toolkit.indicators import calculate_sma
+from backend.src.utils.indicators import calculate_sma
 
 
 def make_dummy_df(n=3000):

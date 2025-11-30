@@ -12,7 +12,13 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Paths
 	PROJECT_ROOT: str = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 	DATA_DIR: str = os.path.join(PROJECT_ROOT, 'backend', 'data')
-	DB_FILE: str = os.path.join(DATA_DIR, 'crypto_data.db')
+	
+	# Database Configuration (PostgreSQL)
+	# Default to docker compose service name 'postgres' or 'localhost' for local dev
+	DATABASE_URL: str = os.environ.get(
+		'DATABASE_URL', 
+		'postgresql://user:password@localhost:5432/defisys'
+	)
 
 	# API endpoints (change via env if needed)
 	BINANCE_API_BASE_URL: str = "https://api.binance.com/api/v3"
@@ -102,7 +108,12 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			# Paths
 			self.PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 			self.DATA_DIR = os.path.join(self.PROJECT_ROOT, 'backend', 'data')
-			self.DB_FILE = os.path.join(self.DATA_DIR, 'crypto_data.db')
+			
+			# Database Configuration (PostgreSQL)
+			self.DATABASE_URL = os.environ.get(
+				'DATABASE_URL',
+				'postgresql://user:password@localhost:5432/defisys'
+			)
 
 			# API endpoints (change via env if needed)
 			self.BINANCE_API_BASE_URL = os.environ.get('BINANCE_API_BASE_URL', "https://api.binance.com/api/v3")
@@ -125,7 +136,7 @@ _settings = Settings()
 # Export commonly used constants for backward compatibility
 PROJECT_ROOT = _settings.PROJECT_ROOT
 DATA_DIR = _settings.DATA_DIR
-DB_FILE = _settings.DB_FILE
+DATABASE_URL = _settings.DATABASE_URL
 BINANCE_API_BASE_URL = _settings.BINANCE_API_BASE_URL
 BINANCE_FUTURES_API_BASE_URL = _settings.BINANCE_FUTURES_API_BASE_URL
 FNG_API_URL = _settings.FNG_API_URL
