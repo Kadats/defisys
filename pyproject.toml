@@ -20,8 +20,9 @@ uvicorn = "^0.35.0"
 streamlit = "^1.49.1"
 httpx = "^0.28.1"
 plotly = "^6.3.0"
-defi-data-toolkit = {git = "https://github.com/Kadats/defi-data-toolkit.git"}
 scikit-learn = "^1.7.2"
+psycopg2-binary = "^2.9.9"
+sqlalchemy = "^2.0.23"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.2"

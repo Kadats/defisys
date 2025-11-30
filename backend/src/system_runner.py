@@ -2,12 +2,12 @@ import logging
 import pandas as pd
 import os
 
-from .data_provider import get_full_prepared_data
+from backend.src.data.pipeline import get_full_prepared_data
 from .core import TradingEngine
 from .strategies import BTCLiteStrategy
-from .config import PROJECT_ROOT, DB_FILE, TRAIN_TEST_SPLIT_DATE
+from .config import PROJECT_ROOT, TRAIN_TEST_SPLIT_DATE
 from .ai import train_prediction_model, get_predictions
-from defi_data_toolkit.database import save_predictions_to_db
+from backend.src.data.storage import save_predictions_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def run_trading_system():
 
     # --- Salvar as predições no DB ---
     logger.info("Fase 2b: Salvando predições no banco de dados...")
-    save_predictions_to_db(full_df_with_predictions, DB_FILE)
+    save_predictions_to_db(full_df_with_predictions)
 
     # 3. Preparar DataFrame para Backtest (Walk-Forward Test Set)
     # CRÍTICO: Usar apenas dados a partir de TRAIN_TEST_SPLIT_DATE para o backtest

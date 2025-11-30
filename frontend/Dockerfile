@@ -2,14 +2,17 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install git for git dependencies
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Install Poetry
+RUN pip install --no-cache-dir poetry
 
-# Copy requirements file
-COPY requirements.txt .
+# Configure Poetry to not create virtual environments (install system-wide in container)
+RUN poetry config virtualenvs.create false
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy Poetry configuration files
+COPY pyproject.toml poetry.lock ./
+
+# Install Python dependencies via Poetry
+RUN poetry install --no-interaction --no-ansi --no-root
 
 # Copy frontend code
 COPY frontend ./frontend

@@ -4,8 +4,8 @@ import math
 import logging
 from datetime import timedelta
 
-from defi_data_toolkit.database import log_open_position, log_close_position
-from ..config import DB_FILE, SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
+from backend.src.data.storage import log_open_position, log_close_position
+from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
 from ..utils.math import calculate_lp_value, calculate_liquidity_l
 from .risk_manager import RiskManager
 
@@ -130,7 +130,6 @@ class TradingEngine:
         }
 
         position_id = log_open_position(
-            db_file=DB_FILE,
             open_timestamp=int(timestamp.value / 10**6), # Converter para ms
             strategy=strategy,
             capital_usd=capital_usd,
@@ -186,7 +185,6 @@ class TradingEngine:
         final_profit = final_value - lp_to_close['initial_capital_usd']
         
         log_close_position(
-            db_file=DB_FILE,
             position_id=lp_id,
             close_timestamp=int(timestamp.value / 10**6), # Converter para ms
             close_price=current_btc_price,
