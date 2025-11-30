@@ -22,6 +22,7 @@ from .lending import (
 from .financial import (
     calculate_entry_size,
     calculate_drawdown,
+    calculate_dynamic_range,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     # Financial
     'calculate_entry_size',
     'calculate_drawdown',
+    'calculate_dynamic_range',
 ]
