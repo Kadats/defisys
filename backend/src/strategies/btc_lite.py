@@ -14,9 +14,10 @@ from ..core import LOAN_TO_VALUE_RATIO
 from ..ai import analyze_market_regime
 from ..config import (
     GAS_RESERVE_USD, MIN_LIQUID_BUFFER, SIMULATED_GAS_FEE_USD,
-    HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT
+    HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT,
+    ATR_MULTIPLIER_BULLISH_LOWER, ATR_MULTIPLIER_BULLISH_UPPER, ATR_MULTIPLIER_NEUTRAL
 )
-from ..utils.math import calculate_safe_borrow_amount, calculate_entry_size
+from ..utils.math import calculate_safe_borrow_amount, calculate_entry_size, calculate_dynamic_range
 
 if TYPE_CHECKING:
     from ..core import TradingEngine
@@ -163,7 +164,7 @@ class BTCLiteStrategy(BaseStrategy):
         self._execute_safe_borrow(engine, timestamp, current_price)
         
         # 3. Execute recursive loop: 50% to collateral, 50% to LP
-        self._execute_recursive_loop(engine, timestamp, current_price)
+        self._execute_recursive_loop(row, engine, timestamp, current_price)
     
     def _execute_safe_borrow(
         self,
@@ -211,12 +212,14 @@ class BTCLiteStrategy(BaseStrategy):
     
     def _execute_recursive_loop(
         self,
+        row: pd.Series,
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
         current_price: float
     ) -> None:
         """
         Execute recursive loop: use borrowed funds for 50% collateral, 50% LP.
+        V3: Uses ATR for dynamic range calculation.
         """
         collateral_value = engine.btc_hodl_balance * current_price
         hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
@@ -247,15 +250,32 @@ class BTCLiteStrategy(BaseStrategy):
             engine.usd_balance -= capital_for_collateral_usd
             logger.info(f"[{timestamp.date()}] Loop: {btc_to_collateral:.6f} BTC adicionado ao colateral.")
         
-        # 5. Open LP
+        # 5. Open LP with dynamic ATR-based ranges (V3)
         safe_balance_after = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         capital_for_lp_usd = max(0.0, safe_balance_after - (safe_balance_after * MIN_LIQUID_BUFFER))
         if capital_for_lp_usd > 1:
-            range_lower = current_price * 0.70
-            range_upper = current_price * 1.60
+            # V3: Use ATR for dynamic range calculation
+            atr = row.get('ATR', 0.0)
+            if atr > 0:
+                range_lower, range_upper = calculate_dynamic_range(
+                    current_price, atr, 
+                    ATR_MULTIPLIER_BULLISH_LOWER, 
+                    ATR_MULTIPLIER_BULLISH_UPPER
+                )
+                logger.info(
+                    f"[{timestamp.date()}] Loop: Abrindo LP ATR-Dynamic (ATR={atr:.2f}) com ${capital_for_lp_usd:.2f} "
+                    f"(Range: ${range_lower:.2f}-${range_upper:.2f})"
+                )
+            else:
+                # Fallback to percentage-based if ATR unavailable
+                range_lower = current_price * 0.70
+                range_upper = current_price * 1.60
+                logger.info(
+                    f"[{timestamp.date()}] Loop: Abrindo LP Range Fixo (ATR não disponível) com ${capital_for_lp_usd:.2f} "
+                    f"(Range: ${range_lower:.2f}-${range_upper:.2f})"
+                )
             
-            logger.info(f"[{timestamp.date()}] Loop: Abrindo LP Range Amplo com ${capital_for_lp_usd:.2f} (Range: ${range_lower:.2f}-${range_upper:.2f})")
-            engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BULLISH_ML_DYNAMIC")
+            engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BULLISH_ML_DYNAMIC_V3")
             engine.usd_balance -= capital_for_lp_usd
         else:
             logger.debug(f"[{timestamp.date()}] Loop: Insuficiente para LP após buffer líquido.")
@@ -330,14 +350,15 @@ class BTCLiteStrategy(BaseStrategy):
         hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
         
         if prediction == 1:  # BULLISH
-            self._execute_post_leverage_bullish(engine, timestamp, current_price, hf, capital_to_allocate)
+            self._execute_post_leverage_bullish(row, engine, timestamp, current_price, hf, capital_to_allocate)
         elif prediction == 0:  # NEUTRAL
-            self._execute_post_leverage_neutral(engine, timestamp, current_price, hf, capital_to_allocate)
+            self._execute_post_leverage_neutral(row, engine, timestamp, current_price, hf, capital_to_allocate)
         else:
             logger.warning(f"[{timestamp.date()}] Unknown prediction value: {prediction}")
     
     def _execute_post_leverage_bullish(
         self,
+        row: pd.Series,
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
         current_price: float,
@@ -346,13 +367,27 @@ class BTCLiteStrategy(BaseStrategy):
     ) -> None:
         """
         Execute BULLISH post-leverage: ladder LP ranges and potentially refinance.
+        V3: Uses ATR for dynamic range calculation with ladder adjustment.
         """
-        # Ladder ranges so each new LP has slightly offset bounds
+        # V3: Dynamic ATR-based ranges with ladder adjustment for multiple LPs
+        atr = row.get('ATR', 0.0)
         index = len(engine.active_lps)
-        step = 0.06
-        range_lower = current_price * max(0.01, (0.70 + step * index))
-        range_upper = current_price * max(range_lower / current_price + 0.05, (1.60 - step * index))
-        strategy_name = "BULLISH_ML_DYNAMIC"
+        
+        if atr > 0:
+            # Use ATR with ladder adjustment (slightly offset each LP)
+            step = 0.05  # Reduce multiplier step for tighter laddering
+            multiplier_lower = ATR_MULTIPLIER_BULLISH_LOWER + (step * index)
+            multiplier_upper = ATR_MULTIPLIER_BULLISH_UPPER - (step * index)
+            range_lower, range_upper = calculate_dynamic_range(
+                current_price, atr, multiplier_lower, multiplier_upper
+            )
+            strategy_name = "BULLISH_ML_ATR_V3"
+        else:
+            # Fallback to percentage-based with ladder
+            step = 0.06
+            range_lower = current_price * max(0.01, (0.70 + step * index))
+            range_upper = current_price * max(range_lower / current_price + 0.05, (1.60 - step * index))
+            strategy_name = "BULLISH_ML_DYNAMIC"
         
         if hf > HF_REFINANCE_THRESHOLD:
             # PRE-BORROW HF SIMULATION: Calculate safe borrow amount
@@ -389,6 +424,7 @@ class BTCLiteStrategy(BaseStrategy):
     
     def _execute_post_leverage_neutral(
         self,
+        row: pd.Series,
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
         current_price: float,
@@ -397,6 +433,7 @@ class BTCLiteStrategy(BaseStrategy):
     ) -> None:
         """
         Execute NEUTRAL post-leverage: farm fees conservatively and smart repay debt.
+        V3: Uses ATR for dynamic symmetric range calculation.
         """
         # Smart Repay: Use excess cash to pay down debt
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
@@ -429,10 +466,21 @@ class BTCLiteStrategy(BaseStrategy):
             )
             return
         
-        # Conservative farming: Only use minimal capital for LP fees
-        range_lower = current_price * 0.70
-        range_upper = current_price * 1.60
-        strategy_name = "NEUTRAL_ML_DYNAMIC_V7"
+        # V3: Conservative farming with ATR-based symmetric ranges
+        atr = row.get('ATR', 0.0)
+        if atr > 0:
+            # Use symmetric ATR multiplier for neutral positions
+            range_lower, range_upper = calculate_dynamic_range(
+                current_price, atr,
+                ATR_MULTIPLIER_NEUTRAL,
+                ATR_MULTIPLIER_NEUTRAL
+            )
+            strategy_name = "NEUTRAL_ML_ATR_V3"
+        else:
+            # Fallback to percentage-based
+            range_lower = current_price * 0.70
+            range_upper = current_price * 1.60
+            strategy_name = "NEUTRAL_ML_DYNAMIC_V7"
         
         logger.info(
             f"[{timestamp.date()}] NEUTRAL (V7 BTC Standard): Conservative LP Farm ${capital_to_allocate:.2f} | "

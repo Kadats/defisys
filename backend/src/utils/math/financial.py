@@ -94,6 +94,55 @@ def calculate_entry_size(
     return allocation_pct
 
 
+def calculate_dynamic_range(
+    current_price: float,
+    atr: float,
+    multiplier_lower: float,
+    multiplier_upper: float
+) -> tuple[float, float]:
+    """
+    Calculate dynamic LP range bounds based on ATR (Average True Range).
+    
+    V3 Dynamic Ranges: Use market volatility (ATR) to determine optimal LP width.
+    High volatility -> Wider ranges (safety), Low volatility -> Tighter ranges (efficiency).
+    
+    Args:
+        current_price: Current market price
+        atr: Average True Range indicator value
+        multiplier_lower: ATR multiplier for lower bound (e.g., 10.0)
+        multiplier_upper: ATR multiplier for upper bound (e.g., 25.0)
+    
+    Returns:
+        Tuple of (lower_bound, upper_bound)
+    
+    Sanity Checks:
+        - Lower bound: at least current_price * 0.5 (don't go too low)
+        - Upper bound: at least current_price * 1.05 (minimum 5% room)
+    """
+    if atr <= 0 or current_price <= 0:
+        # Invalid ATR or price, return fallback ranges
+        return (current_price * 0.70, current_price * 1.60)
+    
+    # Calculate ATR-based bounds
+    lower_bound = current_price - (atr * multiplier_lower)
+    upper_bound = current_price + (atr * multiplier_upper)
+    
+    # Sanity check: lower bound should not be too aggressive (minimum 50% of current price)
+    min_lower = current_price * 0.5
+    lower_bound = max(lower_bound, min_lower)
+    
+    # Sanity check: upper bound should be at least 5% above current price
+    min_upper = current_price * 1.05
+    upper_bound = max(upper_bound, min_upper)
+    
+    # Ensure lower < upper (should always be true with proper multipliers, but safety check)
+    if lower_bound >= upper_bound:
+        lower_bound = current_price * 0.70
+        upper_bound = current_price * 1.60
+    
+    return (lower_bound, upper_bound)
+
+
 def calculate_position_value(
     btc_amount: float,
     btc_price: float,

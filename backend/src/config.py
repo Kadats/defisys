@@ -85,6 +85,13 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Fraction of available safe balance to allocate per entry (25% = 0.25)
 	ENTRY_SIZE_PCT: float = 0.25
 
+	# V3 Dynamic ATR Ranges
+	# ATR multipliers for determining LP range width based on volatility
+	# Since 4h ATR is small, we use large multipliers to cover days/weeks of movement
+	ATR_MULTIPLIER_BULLISH_LOWER: float = 10.0  # Downside protection
+	ATR_MULTIPLIER_BULLISH_UPPER: float = 25.0  # Allow more room to run up
+	ATR_MULTIPLIER_NEUTRAL: float = 20.0  # Symmetric wide range for stability
+
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
 			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -155,4 +162,9 @@ DERIBIT_API_BASE_URL = _settings.DERIBIT_API_BASE_URL
 # Multi-pool and entry sizing (exports)
 MAX_ACTIVE_LPS = _settings.MAX_ACTIVE_LPS
 ENTRY_SIZE_PCT = _settings.ENTRY_SIZE_PCT
+
+# V3 Dynamic ATR Ranges (exports)
+ATR_MULTIPLIER_BULLISH_LOWER = _settings.ATR_MULTIPLIER_BULLISH_LOWER
+ATR_MULTIPLIER_BULLISH_UPPER = _settings.ATR_MULTIPLIER_BULLISH_UPPER
+ATR_MULTIPLIER_NEUTRAL = _settings.ATR_MULTIPLIER_NEUTRAL
 
