@@ -17,7 +17,7 @@ from ..config import (
     HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT,
     ATR_MULTIPLIER_BULLISH_LOWER, ATR_MULTIPLIER_BULLISH_UPPER, ATR_MULTIPLIER_NEUTRAL
 )
-from ..utils.math import calculate_safe_borrow_amount, calculate_entry_size, calculate_dynamic_range
+from ..utils.math import calculate_safe_borrow_amount, calculate_entry_size, calculate_dynamic_range, calculate_directional_range
 
 if TYPE_CHECKING:
     from ..core import TradingEngine
@@ -173,11 +173,15 @@ class BTCLiteStrategy(BaseStrategy):
         current_price: float
     ) -> None:
         """
-        Safely borrow against collateral with HF simulation.
+        Safely borrow against collateral with HF simulation and scaling.
         """
         collateral_value = engine.btc_hodl_balance * current_price
-        amount_to_borrow = collateral_value * LOAN_TO_VALUE_RATIO
+        max_borrowable = collateral_value * LOAN_TO_VALUE_RATIO
         logger.debug(f"[{timestamp.date()}] BULLISH: Collateral = {engine.btc_hodl_balance:.6f} BTC @ ${current_price:.2f} = ${collateral_value:.2f}")
+        
+        # Apply scaling: only borrow a fraction of available borrowing power
+        amount_to_borrow = max_borrowable * ENTRY_SIZE_PCT
+        logger.debug(f"[{timestamp.date()}] Scaling: Max borrowable ${max_borrowable:.2f} → Scaled to ${amount_to_borrow:.2f} ({ENTRY_SIZE_PCT:.0%})")
         
         # Simulate HF after borrow
         projected_debt = engine.total_debt_usd + amount_to_borrow
@@ -186,15 +190,17 @@ class BTCLiteStrategy(BaseStrategy):
         # If projected HF falls below safety threshold, adjust the borrow amount
         if projected_hf < SAFE_HF_AFTER_BORROW:
             # Recalculate safe borrow to maintain target HF
-            amount_to_borrow = calculate_safe_borrow_amount(
+            safe_amount = calculate_safe_borrow_amount(
                 collateral_value,
                 engine.total_debt_usd,
                 SAFE_HF_AFTER_BORROW,
                 min_borrow=10.0
             )
+            # Take the smaller of scaled amount or safe amount
+            amount_to_borrow = min(amount_to_borrow, safe_amount)
             if amount_to_borrow > 0:
                 logger.debug(
-                    f"[{timestamp.date()}] HF Guardrail: Reduced borrow from full LTV to ${amount_to_borrow:.2f} "
+                    f"[{timestamp.date()}] HF Guardrail: Adjusted borrow to ${amount_to_borrow:.2f} "
                     f"(projected HF would be {projected_hf:.2f}, target {SAFE_HF_AFTER_BORROW})"
                 )
             else:
@@ -250,32 +256,19 @@ class BTCLiteStrategy(BaseStrategy):
             engine.usd_balance -= capital_for_collateral_usd
             logger.info(f"[{timestamp.date()}] Loop: {btc_to_collateral:.6f} BTC adicionado ao colateral.")
         
-        # 5. Open LP with dynamic ATR-based ranges (V3)
+        # 5. Open LP with directional ranges (V7 - Target Selling)
         safe_balance_after = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         capital_for_lp_usd = max(0.0, safe_balance_after - (safe_balance_after * MIN_LIQUID_BUFFER))
         if capital_for_lp_usd > 1:
-            # V3: Use ATR for dynamic range calculation
+            # V7: Use directional range for profit-taking
             atr = row.get('ATR', 0.0)
-            if atr > 0:
-                range_lower, range_upper = calculate_dynamic_range(
-                    current_price, atr, 
-                    ATR_MULTIPLIER_BULLISH_LOWER, 
-                    ATR_MULTIPLIER_BULLISH_UPPER
-                )
-                logger.info(
-                    f"[{timestamp.date()}] Loop: Abrindo LP ATR-Dynamic (ATR={atr:.2f}) com ${capital_for_lp_usd:.2f} "
-                    f"(Range: ${range_lower:.2f}-${range_upper:.2f})"
-                )
-            else:
-                # Fallback to percentage-based if ATR unavailable
-                range_lower = current_price * 0.70
-                range_upper = current_price * 1.60
-                logger.info(
-                    f"[{timestamp.date()}] Loop: Abrindo LP Range Fixo (ATR não disponível) com ${capital_for_lp_usd:.2f} "
-                    f"(Range: ${range_lower:.2f}-${range_upper:.2f})"
-                )
+            range_lower, range_upper = calculate_directional_range(current_price, atr, target_multiplier=15.0)
+            logger.info(
+                f"[{timestamp.date()}] Loop: Abrindo LP Directional (ATR={atr:.2f}) com ${capital_for_lp_usd:.2f} "
+                f"(Range: ${range_lower:.2f}-${range_upper:.2f}) - Target Selling"
+            )
             
-            engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BULLISH_ML_DYNAMIC_V3")
+            engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BULLISH_ML_DIRECTIONAL_V7")
             engine.usd_balance -= capital_for_lp_usd
         else:
             logger.debug(f"[{timestamp.date()}] Loop: Insuficiente para LP após buffer líquido.")
@@ -292,6 +285,11 @@ class BTCLiteStrategy(BaseStrategy):
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         liquid_minimum = safe_balance * MIN_LIQUID_BUFFER
         excess_usd = max(0.0, safe_balance - liquid_minimum)
+        
+        # Minimum trade size to prevent spam
+        if excess_usd < 50.0:
+            logger.debug(f"[{timestamp.date()}] NEUTRAL: Trade size too small (${excess_usd:.2f} < $50.00). Skipping.")
+            return
         
         if excess_usd > 10:  # Only buy if we have meaningful capital
             btc_to_buy = excess_usd / current_price if current_price > 0 else 0.0
@@ -369,28 +367,18 @@ class BTCLiteStrategy(BaseStrategy):
         Execute BULLISH post-leverage: ladder LP ranges and potentially refinance.
         V3: Uses ATR for dynamic range calculation with ladder adjustment.
         """
-        # V3: Dynamic ATR-based ranges with ladder adjustment for multiple LPs
+        # V7: Directional ranges with ladder adjustment for multiple LPs
         atr = row.get('ATR', 0.0)
         index = len(engine.active_lps)
         
-        if atr > 0:
-            # Use ATR with ladder adjustment (slightly offset each LP)
-            step = 0.05  # Reduce multiplier step for tighter laddering
-            multiplier_lower = ATR_MULTIPLIER_BULLISH_LOWER + (step * index)
-            multiplier_upper = ATR_MULTIPLIER_BULLISH_UPPER - (step * index)
-            range_lower, range_upper = calculate_dynamic_range(
-                current_price, atr, multiplier_lower, multiplier_upper
-            )
-            strategy_name = "BULLISH_ML_ATR_V3"
-        else:
-            # Fallback to percentage-based with ladder
-            step = 0.06
-            range_lower = current_price * max(0.01, (0.70 + step * index))
-            range_upper = current_price * max(range_lower / current_price + 0.05, (1.60 - step * index))
-            strategy_name = "BULLISH_ML_DYNAMIC"
+        # Use directional range with ladder adjustment (reduce target multiplier for each additional LP)
+        base_target = 15.0
+        target_multiplier = max(8.0, base_target - (2.0 * index))  # Ladder down: 15, 13, 11, 9...
+        range_lower, range_upper = calculate_directional_range(current_price, atr, target_multiplier)
+        strategy_name = "BULLISH_ML_DIRECTIONAL_V7"
         
         if hf > HF_REFINANCE_THRESHOLD:
-            # PRE-BORROW HF SIMULATION: Calculate safe borrow amount
+            # PRE-BORROW HF SIMULATION: Calculate safe borrow amount with scaling
             collateral_value = engine.btc_hodl_balance * current_price
             safe_borrow = calculate_safe_borrow_amount(
                 collateral_value,
@@ -400,11 +388,16 @@ class BTCLiteStrategy(BaseStrategy):
             )
             
             if safe_borrow > 0:
-                # Cap the borrow at what we wanted to allocate
-                amount_to_borrow = min(safe_borrow, capital_to_allocate)
+                # Apply scaling: only borrow a fraction of safe borrowing power
+                scaled_borrow = safe_borrow * ENTRY_SIZE_PCT
+                # Cap at what we wanted to allocate
+                amount_to_borrow = min(scaled_borrow, capital_to_allocate)
                 engine.total_debt_usd += amount_to_borrow
                 engine.usd_balance += amount_to_borrow
-                logger.info(f"[{timestamp.date()}] HF={hf:.2f} > {HF_REFINANCE_THRESHOLD}: Refinanciamento (${amount_to_borrow:.2f}, Safe HF={SAFE_HF_AFTER_BORROW})")
+                logger.info(
+                    f"[{timestamp.date()}] HF={hf:.2f} > {HF_REFINANCE_THRESHOLD}: Scaled Refinancing "
+                    f"(${amount_to_borrow:.2f} of ${safe_borrow:.2f} available, {ENTRY_SIZE_PCT:.0%} scaling)"
+                )
                 capital_to_allocate = amount_to_borrow
             else:
                 logger.debug(

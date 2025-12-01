@@ -23,6 +23,7 @@ from .financial import (
     calculate_entry_size,
     calculate_drawdown,
     calculate_dynamic_range,
+    calculate_directional_range,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     'calculate_entry_size',
     'calculate_drawdown',
     'calculate_dynamic_range',
+    'calculate_directional_range',
 ]
