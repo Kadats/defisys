@@ -94,6 +94,56 @@ def calculate_entry_size(
     return allocation_pct
 
 
+def calculate_directional_range(
+    current_price: float,
+    atr: float,
+    target_multiplier: float = 15.0
+) -> tuple[float, float]:
+    """
+    Calculate directional LP range for target selling (profit-taking machine).
+    
+    V7 Directional Ranges: Tight floor, volatility-based ceiling.
+    Lower bound is just below current price to capture fees immediately.
+    Upper bound is target price based on ATR * multiplier.
+    
+    Args:
+        current_price: Current market price
+        atr: Average True Range indicator value
+        target_multiplier: ATR multiplier for upper bound (default 15.0)
+    
+    Returns:
+        Tuple of (lower_bound, upper_bound)
+    
+    Logic:
+        - Lower: current_price * 0.98 (2% below, tight floor)
+        - Upper: current_price + (atr * target_multiplier) (volatility-based target)
+        - Fallback if ATR is 0: upper = current_price * 1.30 (30% upside)
+    """
+    if current_price <= 0:
+        return (current_price * 0.70, current_price * 1.60)
+    
+    # Tight lower bound: 2% below current price
+    lower_bound = current_price * 0.98
+    
+    # Directional upper bound: target price based on volatility
+    if atr > 0:
+        upper_bound = current_price + (atr * target_multiplier)
+    else:
+        # Fallback: 30% upside if ATR unavailable
+        upper_bound = current_price * 1.30
+    
+    # Sanity check: upper bound should be at least 5% above current price
+    min_upper = current_price * 1.05
+    upper_bound = max(upper_bound, min_upper)
+    
+    # Ensure lower < upper
+    if lower_bound >= upper_bound:
+        lower_bound = current_price * 0.98
+        upper_bound = current_price * 1.30
+    
+    return (lower_bound, upper_bound)
+
+
 def calculate_dynamic_range(
     current_price: float,
     atr: float,
