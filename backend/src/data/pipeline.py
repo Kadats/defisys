@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ML Constants
 PREDICTION_HORIZON_DAYS = 7
-PREDICTION_RISE_THRESHOLD = 0.03  # +3% rise for bullish signal
+PREDICTION_RISE_THRESHOLD = 0.015  # +1.5% rise for bullish signal (V12: Lower threshold to catch slow bull markets)
 
 
 def get_full_prepared_data() -> pd.DataFrame:

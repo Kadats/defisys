@@ -1,9 +1,14 @@
 """
-BTC Lite Strategy (V7 - BTC Standard Lite).
+BTC Lite Strategy (V12 - Sniper Loop).
 
 Strategy that uses ML predictions to make leveraged trading decisions:
 - prediction == 1 (BULLISH): Leverage existing collateral + amplify
 - prediction == 0 (NEUTRAL): Hold BTC, convert excess USD to BTC
+
+V12 Improvements:
+- Lower prediction threshold (1.5%) to catch slow bull markets
+- Removed blind refinancing - only leverage on signal
+- Take-profit repayment: automatically close LPs above range and repay debt
 """
 import pandas as pd
 import logging
@@ -30,7 +35,7 @@ DAYS_OUT_OF_RANGE_THRESHOLD = 10
 
 class BTCLiteStrategy(BaseStrategy):
     """
-    BTC Standard Lite Strategy (V7).
+    BTC Standard Lite Strategy (V12 - Sniper Loop).
     
     ML-driven strategy that:
     - Uses model predictions to determine market regime (BULLISH vs NEUTRAL)
@@ -38,6 +43,7 @@ class BTCLiteStrategy(BaseStrategy):
     - NEUTRAL: Convert excess USD to BTC HODL (no leverage)
     - Multi-pool scaling with dynamic position sizing
     - Smart debt repayment in neutral periods
+    - Automatic take-profit when LPs hit upper target (V12)
     """
     
     def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
@@ -65,9 +71,35 @@ class BTCLiteStrategy(BaseStrategy):
             self._handle_post_leverage_state(row, engine, timestamp, current_price, prediction)
     
     def _handle_lp_closures(self, engine: 'TradingEngine', current_price: float, timestamp: pd.Timestamp) -> None:
-        """Close LPs that have been out of range for too long."""
+        """Close LPs that have been out of range for too long or hit take-profit target."""
         if engine.active_lps:
             for lp in engine.active_lps.copy():
+                # V12: Take-Profit & Repay - Close LPs that hit upper target
+                if current_price > lp['range_upper']:
+                    logger.info(
+                        f"[{timestamp.date()}] TAKE PROFIT: LP {lp['id']} out of range (High). "
+                        f"Price ${current_price:.2f} > Upper ${lp['range_upper']:.2f}. Closing and repaying debt."
+                    )
+                    returned_capital = engine.close_lp(lp_id=lp['id'], current_btc_price=current_price, timestamp=timestamp)
+                    
+                    # Use returned capital to pay down debt
+                    if engine.total_debt_usd > 0 and engine.usd_balance > SIMULATED_GAS_FEE_USD:
+                        # Calculate available cash for repayment (keep gas reserve)
+                        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+                        buffer_needed = safe_balance * MIN_LIQUID_BUFFER
+                        available_for_repay = max(0.0, safe_balance - buffer_needed)
+                        
+                        if available_for_repay > 20.0:
+                            payment_amount = min(available_for_repay, engine.total_debt_usd)
+                            engine.total_debt_usd = max(0.0, engine.total_debt_usd - payment_amount)
+                            engine.usd_balance -= (payment_amount + SIMULATED_GAS_FEE_USD)
+                            logger.info(
+                                f"[{timestamp.date()}] TAKE PROFIT REPAY: Paid ${payment_amount:.2f} debt. "
+                                f"Remaining Debt: ${engine.total_debt_usd:.2f}"
+                            )
+                    continue
+                
+                # Standard closure: Out of range for too long
                 if lp['days_out_of_range'] > DAYS_OUT_OF_RANGE_THRESHOLD:
                     engine.close_lp(lp_id=lp['id'], current_btc_price=current_price, timestamp=timestamp)
     
@@ -375,37 +407,14 @@ class BTCLiteStrategy(BaseStrategy):
         base_target = 15.0
         target_multiplier = max(8.0, base_target - (2.0 * index))  # Ladder down: 15, 13, 11, 9...
         range_lower, range_upper = calculate_directional_range(current_price, atr, target_multiplier)
-        strategy_name = "BULLISH_ML_DIRECTIONAL_V7"
+        strategy_name = "BULLISH_ML_DIRECTIONAL_V12"
         
-        if hf > HF_REFINANCE_THRESHOLD:
-            # PRE-BORROW HF SIMULATION: Calculate safe borrow amount with scaling
-            collateral_value = engine.btc_hodl_balance * current_price
-            safe_borrow = calculate_safe_borrow_amount(
-                collateral_value,
-                engine.total_debt_usd,
-                SAFE_HF_AFTER_BORROW,
-                min_borrow=10.0
-            )
-            
-            if safe_borrow > 0:
-                # Apply scaling: only borrow a fraction of safe borrowing power
-                scaled_borrow = safe_borrow * ENTRY_SIZE_PCT
-                # Cap at what we wanted to allocate
-                amount_to_borrow = min(scaled_borrow, capital_to_allocate)
-                engine.total_debt_usd += amount_to_borrow
-                engine.usd_balance += amount_to_borrow
-                logger.info(
-                    f"[{timestamp.date()}] HF={hf:.2f} > {HF_REFINANCE_THRESHOLD}: Scaled Refinancing "
-                    f"(${amount_to_borrow:.2f} of ${safe_borrow:.2f} available, {ENTRY_SIZE_PCT:.0%} scaling)"
-                )
-                capital_to_allocate = amount_to_borrow
-            else:
-                logger.debug(
-                    f"[{timestamp.date()}] HF Guardrail: Cannot borrow despite HF={hf:.2f} (would breach {SAFE_HF_AFTER_BORROW})"
-                )
+        # V12: REMOVED BLIND REFINANCING
+        # Only open LPs with existing capital based on ENTRY_SIZE_PCT
+        # No automatic borrowing just because HF is high - prevents over-leveraging at cycle tops
         
         logger.info(
-            f"[{timestamp.date()}] BULLISH (V6): LP Range Amplo ${capital_to_allocate:.2f} | "
+            f"[{timestamp.date()}] BULLISH (V12 Sniper): Opening LP ${capital_to_allocate:.2f} | "
             f"HF={hf:.2f} | Líquido: ${engine.usd_balance - capital_to_allocate:.2f} "
             f"(Range: ${range_lower:.2f}-${range_upper:.2f})"
         )
