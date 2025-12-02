@@ -1,168 +1,140 @@
 import streamlit as st
-import requests
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+import requests
+import os
+import time
 
-# --- Configurações da Página ---
+# --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
     page_title="DefiSys Dashboard",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# --- Título e Cabeçalho ---
-st.title("DefiSys - Dashboard de Posições 📈")
-st.caption(f"Dados atualizados em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+# --- CONFIGURAÇÃO DE CONEXÃO ---
+# Tenta pegar a URL do Docker, fallback para localhost se rodando fora
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
 
-# --- Constantes da API ---
-import os
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000/api/v1")
-
-# --- Funções de Carregamento de Dados ---
-@st.cache_data(ttl=300) # Cache de 5 minutos
-def load_chart_data():
-    """Busca dados de velas da API."""
+# --- FUNÇÕES AUXILIARES ---
+def get_data(endpoint):
+    """Função genérica para buscar dados da API com tratamento de erro."""
     try:
-        response = requests.get(f"{API_BASE_URL}/chart_data", timeout=10)
+        url = f"{API_BASE_URL}/{endpoint}"
+        response = requests.get(url, timeout=30) # Timeout maior para backtests
         response.raise_for_status()
-        data = response.json()
-        if isinstance(data, dict) and "error" in data:
-            st.error(f"Erro da API ao buscar dados do gráfico: {data['error']}")
-            return pd.DataFrame()
-        df = pd.DataFrame(data)
-        df['Open_time'] = pd.to_datetime(df['Open_time'])
-        return df
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao conectar à API para buscar dados do gráfico: {e}")
-        return pd.DataFrame()
+        return response.json()
+    except requests.exceptions.ConnectionError:
+        st.error(f"❌ Não foi possível conectar ao Backend em {API_BASE_URL}. O container está rodando?")
+        return None
+    except Exception as e:
+        st.error(f"❌ Erro ao buscar {endpoint}: {e}")
+        return None
 
-@st.cache_data(ttl=60) # Cache de 1 minuto
-def load_positions_data():
-    """Busca dados de posições (abertas e fechadas) da API."""
-    try:
-        response = requests.get(f"{API_BASE_URL}/positions", timeout=10)
-        response.raise_for_status()
-        data = response.json()
+# --- LAYOUT DO DASHBOARD ---
+
+st.title("🚀 DefiSys Admin: Painel de Validação")
+
+# 1. Busca os dados de Resumo (O Veredicto)
+summary = get_data("summary")
+
+if summary:
+    # --- SEÇÃO 1: CABEÇALHO E AÇÃO (KPIs) ---
+    st.markdown("### 📡 Status Atual")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    # Lógica de cor para a ação
+    action = summary.get('current_action', 'AGUARDAR')
+    action_color = "normal"
+    if action == "COMPRAR": action_color = "off" # Streamlit inverte as vezes, mas verde é o ideal
+    if action == "ALERTA_RISCO": action_color = "inverse"
+
+    with col1:
+        st.metric(label="Ação Sugerida", value=action)
+    
+    with col2:
+        profit = summary.get('net_profit', 0)
+        st.metric(label="Lucro Líquido ($)", value=f"${profit:,.2f}", delta=f"{summary.get('strategy_return_pct', 0):.2f}%")
         
-        open_df = pd.DataFrame(data.get('open_positions', []))
-        closed_df = pd.DataFrame(data.get('closed_positions', []))
+    with col3:
+        initial = summary.get('initial_capital', 0)
+        final = summary.get('final_capital', 0)
+        st.metric(label="Capital Final", value=f"${final:,.2f}", delta=f"${final-initial:,.2f}")
+
+    with col4:
+        # Comparativo rápido
+        strat_ret = summary.get('strategy_return_pct', 0)
+        btc_ret = summary.get('btc_hodl_return_pct', 0)
+        diff = strat_ret - btc_ret
+        st.metric(label="Alpha vs BTC", value=f"{diff:.2f}%", delta="Vencendo" if diff > 0 else "Perdendo")
+
+    st.divider()
+
+    # --- SEÇÃO 2: O VEREDICTO (GRÁFICO) ---
+    st.markdown("### ⚖️ O Veredicto: Estratégia vs Bitcoin Hold")
+    
+    # Nota: Se tivermos equity_curve no futuro, plotamos aqui. 
+    # Por enquanto, vamos usar um gráfico de barras comparativo simples.
+    fig_verdict = go.Figure()
+    fig_verdict.add_trace(go.Bar(
+        x=['Minha Estratégia', 'Bitcoin HODL'],
+        y=[summary.get('strategy_return_pct', 0), summary.get('btc_hodl_return_pct', 0)],
+        marker_color=['#00CC96', '#EF553B'],
+        text=[f"{summary.get('strategy_return_pct', 0):.2f}%", f"{summary.get('btc_hodl_return_pct', 0):.2f}%"],
+        textposition='auto',
+    ))
+    fig_verdict.update_layout(title_text="Retorno Total (%)", height=400)
+    st.plotly_chart(fig_verdict, use_container_width=True)
+
+    # --- SEÇÃO 3: DETALHES TÉCNICOS ---
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        st.subheader("📊 Gráfico de Preço & Sinais")
+        chart_data = get_data("chart_data")
+        if chart_data:
+            df_chart = pd.DataFrame(chart_data)
+            if not df_chart.empty:
+                # Converter timestamps se necessário
+                fig = go.Figure(data=[go.Candlestick(
+                    x=df_chart['Open_time'],
+                    open=df_chart['Open'],
+                    high=df_chart['High'],
+                    low=df_chart['Low'],
+                    close=df_chart['Close'],
+                    name="BTC"
+                )])
+                fig.update_layout(height=500, xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Aguardando dados de gráfico...")
+
+    with col_right:
+        st.subheader("📋 Métricas ML & Posições")
+        st.write(f"**Acurácia do Modelo:** {summary.get('ml_accuracy', 0)*100:.1f}%")
+        st.write(f"**Taxa de Vitória (Win Rate):** {summary.get('win_rate', 0)*100:.1f}%")
+        st.write(f"**Última Atualização:** {summary.get('last_updated', 'N/A')}")
         
-        # Converte datas para melhor exibição
-        if not open_df.empty:
-            open_df['open_timestamp'] = pd.to_datetime(open_df['open_timestamp'])
-        if not closed_df.empty:
-            closed_df['open_timestamp'] = pd.to_datetime(closed_df['open_timestamp'])
-            closed_df['close_timestamp'] = pd.to_datetime(closed_df['close_timestamp'])
-            
-        return open_df, closed_df
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao conectar à API para buscar posições: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        if st.button("🔄 Rodar Novo Backtest"):
+            with st.spinner("Processando... isso pode levar alguns segundos..."):
+                # Força refresh chamando endpoint (se implementarmos lógica de limpar cache)
+                # Por enquanto apenas recarrega a página
+                time.sleep(1)
+                st.rerun()
 
-# --- Função de Plotagem ---
-def plot_price_chart(df: pd.DataFrame, open_positions: pd.DataFrame):
-    """Cria o gráfico de velas e plota as posições abertas."""
-    fig = go.Figure(data=[go.Candlestick(
-        x=df['Open_time'],
-        open=df['Open'],
-        high=df['High'],
-        low=df['Low'],
-        close=df['Close'],
-        name='Preço BTC'
-    )])
-    
-    # --- MUDANÇA 1: Filtrar os dados para os marcadores ---
-    
-    # 1. Marcadores de "Predição de Queda" (O que o modelo DISSE)
-    df_pred_fall = df[df['prediction'] == 1]
-    
-    # 2. Marcadores de "Acerto" (Predição de queda + Queda real)
-    df_pred_correct = df[(df['prediction'] == 1) & (df['prediction_correct'] == 1)]
-    
-    # 3. Marcadores de "Erro" (Predição de queda + Queda NÃO aconteceu)
-    df_pred_wrong = df[(df['prediction'] == 1) & (df['prediction_correct'] == 0)]
+    # --- SEÇÃO 4: TABELA DE POSIÇÕES ---
+    st.subheader("📜 Histórico de Posições")
+    positions = get_data("positions")
+    if positions:
+        closed = positions.get("closed_positions", [])
+        if closed:
+            df_closed = pd.DataFrame(closed)
+            st.dataframe(df_closed, use_container_width=True)
+        else:
+            st.info("Nenhuma posição fechada ainda.")
 
-    # --- Plotar os marcadores ---
-    # (Plotamos erros e acertos separadamente para cores diferentes)
-    
-    fig.add_trace(go.Scatter(
-        x=df_pred_correct['Open_time'],
-        y=df_pred_correct['High'] * 1.05, # Plotar 5% acima da vela
-        mode='markers',
-        marker=dict(color='green', symbol='triangle-down', size=10),
-        name='Acerto (Previu Queda e Caiu)'
-    ))
-    
-    fig.add_trace(go.Scatter(
-        x=df_pred_wrong['Open_time'],
-        y=df_pred_wrong['High'] * 1.05, # Plotar 5% acima da vela
-        mode='markers',
-        marker=dict(color='red', symbol='x', size=10),
-        name='Erro (Previu Queda e Não Caiu)'
-    ))
-
-    # Adicionar LPs abertas ao gráfico
-    for _, lp in open_positions.iterrows():
-        fig.add_hline(
-            y=lp['range_lower'],
-            line_dash="dot",
-            line_color="green",
-            annotation_text=f"LP {lp['id']} (Low)",
-            annotation_position="bottom right"
-        )
-        fig.add_hline(
-            y=lp['range_upper'],
-            line_dash="dot",
-            line_color="red",
-            annotation_text=f"LP {lp['id']} (High)",
-            annotation_position="top right"
-        )
-
-    fig.update_layout(
-        title='Preço (Últimos 365 dias) e Posições Abertas',
-        yaxis_title='Preço (USDT)',
-        xaxis_title='Data',
-        xaxis_rangeslider_visible=False,
-        template='plotly_dark'
-    )
-    return fig, len(df_pred_fall), len(df_pred_correct)
-
-# --- Carregar os Dados ---
-with st.spinner("Carregando dados do gráfico..."):
-    df_chart = load_chart_data()
-with st.spinner("Carregando dados das posições..."):
-    df_open, df_closed = load_positions_data()
-
-# --- Exibir o Dashboard ---
-if not df_chart.empty:
-    fig, total_predictions, total_correct = plot_price_chart(df_chart, df_open)
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # --- MUDANÇA 4: Exibir as estatísticas (O que você pediu) ---
-    st.subheader("Análise do Modelo (Previsão de Queda)")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total de Predições de Queda", total_predictions)
-    col2.metric("Total de Acertos", total_correct)
-    accuracy = (total_correct / total_predictions * 100) if total_predictions > 0 else 0
-    col3.metric("Taxa de Acerto (Precisão)", f"{accuracy:.2f}%")
-    
 else:
-    st.warning("Não foi possível carregar os dados do gráfico.")
-
-# --- Abas para Posições ---
-st.header("Gerenciamento de Posições")
-tab1, tab2 = st.tabs(["Posições Abertas", "Histórico de Posições Fechadas"])
-
-with tab1:
-    if not df_open.empty:
-        st.dataframe(df_open)
-    else:
-        st.info("Nenhuma posição aberta no momento.")
-
-with tab2:
-    if not df_closed.empty:
-        st.dataframe(df_closed)
-    else:
-        st.info("Nenhum histórico de posições fechadas.")
-
+    st.warning("⚠️ Nenhum dado de resumo encontrado. O sistema pode estar rodando o primeiro backtest agora...")
+    if st.button("Tentar Conectar Novamente"):
+        st.rerun()

@@ -2,71 +2,126 @@ from fastapi import FastAPI, HTTPException
 import logging
 import pandas as pd
 import numpy as np
-import math
+from datetime import datetime
+from decimal import Decimal
+
+# Imports internos
 from backend.src.data.storage import get_data_from_db
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db
+from backend.src.system_runner import run_trading_system
 from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="DefiSys API")
 
-# Helper para limpar dados para JSON
+# Cache simples em memória para não rodar backtest a cada F5
+_SUMMARY_CACHE = {}
+
+def sanitize_for_json(obj):
+    """Converte Decimals e NaNs para formatos aceitos em JSON"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+    if isinstance(obj, (datetime, pd.Timestamp)):
+        return obj.isoformat()
+    if isinstance(obj, list):
+        return [sanitize_for_json(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    return obj
+
 def sanitize_df_for_json(df: pd.DataFrame) -> list:
+    """Helper para DataFrames"""
+    # Substitui NaNs/Infs
     df = df.replace([np.inf, -np.inf], None)
     df = df.where(pd.notnull(df), None)
-    for col in df.select_dtypes(include=['datetime64[ns]']).columns:
-        df[col] = df[col].astype(str)
-    return df.to_dict(orient='records')
-# Helper para limpar dados para JSON
-def sanitize_df_for_json(df: pd.DataFrame) -> list:
-    df = df.replace([np.inf, -np.inf], None)
-    df = df.where(pd.notnull(df), None)
-    for col in df.select_dtypes(include=['datetime64[ns]']).columns:
-        df[col] = df[col].astype(str)
-    return df.to_dict(orient='records')
+    
+    # Converte para dict
+    records = df.to_dict(orient='records')
+    # Sanitiza recursivamente (para pegar Decimals dentro das linhas)
+    return sanitize_for_json(records)
+
+@app.get("/api/v1/summary")
+def get_summary():
+    """
+    Retorna o Veredicto do Backtest. 
+    Se o cache estiver vazio, roda o sistema.
+    """
+    global _SUMMARY_CACHE
+    
+    # Se já temos um resultado recente (ex: lógica de expiração poderia vir aqui), retorna ele
+    if _SUMMARY_CACHE:
+        return _SUMMARY_CACHE
+
+    logger.info("Cache vazio. Rodando run_trading_system() para gerar resumo...")
+    try:
+        # Executa o sistema completo
+        result = run_trading_system()
+        report = result.get("backtest_report", {})
+        
+        # Se deu erro no backtest
+        if "error" in report:
+             raise HTTPException(status_code=500, detail=report["error"])
+
+        # Calcula métricas adicionais
+        positions_df = get_positions_from_db(include_open=False, include_closed=True)
+        win_rate = 0.0
+        if not positions_df.empty:
+            wins = positions_df[positions_df['final_profit_usd'] > 0]
+            win_rate = len(wins) / len(positions_df)
+
+        preds_df = get_predictions_from_db()
+        accuracy = 0.0
+        current_action = "AGUARDAR"
+        
+        if not preds_df.empty:
+            accuracy = preds_df['prediction_correct'].mean()
+            last_pred = preds_df.iloc[-1]['prediction']
+            # Lógica simples de ação baseada na predição
+            if last_pred == 1:
+                current_action = "COMPRAR"
+            elif last_pred == 0:
+                current_action = "AGUARDAR"
+        
+        # Monta o objeto de resposta
+        summary_data = {
+            "initial_capital": report.get("initial_capital_usd", 0),
+            "final_capital": report.get("final_usd_value", 0),
+            "net_profit": report.get("profit_usd", 0),
+            "strategy_return_pct": report.get("profit_percentage_usd", 0),
+            "btc_hodl_return_pct": report.get("btc_benchmark_profit_percentage", 0),
+            "win_rate": win_rate,
+            "ml_accuracy": accuracy,
+            "current_action": current_action,
+            "last_updated": datetime.now().isoformat()
+        }
+        
+        # Salva no cache e sanitiza
+        _SUMMARY_CACHE = sanitize_for_json(summary_data)
+        return _SUMMARY_CACHE
+
+    except Exception as e:
+        logger.exception("Erro crítico ao gerar resumo: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/chart_data")
 def get_chart_data():
-    """
-    Endpoint para buscar os dados de velas (OHLCV) E as predições de ML.
-    """
-    logger.info("Endpoint /api/v1/chart_data chamado.")
     try:
         klines_table_name = f"{DEFAULT_SYMBOL}_{DEFAULT_INTERVAL}_klines".lower()
+        df_klines = get_data_from_db(klines_table_name, limit=365)
         
-        # A variável deve ser 'df_klines' para bater com o resto da função
-        df_klines = get_data_from_db(klines_table_name, limit=365) 
         if df_klines.empty:
-            logger.warning("Nenhum dado de klines encontrado no DB para o gráfico.")
-            return {"error": "Nenhum dado de gráfico encontrado."}
-        
+            return []
             
-        # Buscar e mesclar as predições
-        df_predictions = get_predictions_from_db()
-        
-        if not df_predictions.empty:
-            # Mescla as predições com as velas
-            df_final = pd.merge(df_klines, df_predictions, on='Open_time', how='left')
-            # Preenche 'prediction' com 0 (neutro) e 'correct' com 0 (falso)
-            df_final['prediction'] = df_final['prediction'].fillna(0).astype(int)
-            df_final['prediction_correct'] = df_final['prediction_correct'].fillna(0).astype(int)
-        else:
-            logger.warning("Nenhuma predição de ML encontrada no DB. Retornando apenas klines.")
-            df_final = df_klines
-            df_final['prediction'] = 0
-            df_final['prediction_correct'] = 0
-            
-        return sanitize_df_for_json(df_final)
+        return sanitize_df_for_json(df_klines)
     except Exception as e:
-        logger.exception(f"Erro ao buscar chart_data: {e}")
+        logger.exception(f"Erro chart_data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/positions")
 def get_positions():
-    """
-    Endpoint para buscar o log de posições (abertas e fechadas).
-    """
-    logger.info("Endpoint /api/v1/positions chamado.")
     try:
         df = get_positions_from_db()
         if df.empty:
@@ -77,13 +132,8 @@ def get_positions():
         
         return {
             "open_positions": sanitize_df_for_json(open_df),
-            "closed_positions": sanitize_df_for_json(closed_df),
-            "open_positions": sanitize_df_for_json(open_df),
             "closed_positions": sanitize_df_for_json(closed_df)
         }
     except Exception as e:
-        logger.exception(f"Erro ao buscar positions: {e}")
+        logger.exception(f"Erro positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-        logger.exception(f"Erro ao buscar positions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
