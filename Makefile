@@ -37,11 +37,11 @@ run-frontend:
 
 # --- LIMPEZA ---
 
-# Limpa arquivos temporários do Python e bancos de dados
+# Limpa arquivos temporários do Python (cache e bytecode)
+# NOTA: NÃO remove postgres_data/ ou backend/data/ (dados persistentes)
 clean:
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.db" -delete
 
 # --- CONFIGURAÇÃO ---
 
