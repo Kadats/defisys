@@ -1,6 +1,7 @@
 import pytest
 import pandas as pd
 import math
+from unittest.mock import patch
 from backend.src.core import (
     TradingEngine, 
     LOAN_TO_VALUE_RATIO, 
@@ -20,7 +21,9 @@ class MockStrategy:
 
 
 @pytest.fixture
-def fresh_trading_engine():
+@patch('backend.src.core.trading_engine.log_open_position', return_value=1)
+@patch('backend.src.core.trading_engine.log_close_position', return_value=None)
+def fresh_trading_engine(mock_close, mock_open):
     """Retorna uma instância nova do TradingEngine com $1000 (antes do setup)."""
     return TradingEngine(initial_capital_usd=1000.0)
 
@@ -55,12 +58,14 @@ def setup_lp_magic_numbers(fresh_trading_engine):
 def test_lp_value_price_goes_up_above_range(setup_lp_magic_numbers):
     bt, lp = setup_lp_magic_numbers
     value_usd, _, _ = bt._get_lp_value(lp, 500.0)
-    assert value_usd == pytest.approx(1142.85714)
+    # Convert Decimal to float for comparison
+    assert float(value_usd) == pytest.approx(1142.85714)
 
 def test_lp_value_price_goes_down_below_range(setup_lp_magic_numbers):
     bt, lp = setup_lp_magic_numbers
     value_usd, _, _ = bt._get_lp_value(lp, 50.0)
-    assert value_usd == pytest.approx(285.714285714)
+    # Convert Decimal to float for comparison
+    assert float(value_usd) == pytest.approx(285.714285714)
 
 def test_fee_simulation_logic(setup_lp_magic_numbers):
     """Test fee simulation (V2 implementation may differ from V1)."""

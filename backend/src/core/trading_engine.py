@@ -3,6 +3,7 @@ import numpy as np
 import math
 import logging
 from datetime import timedelta
+from decimal import Decimal
 
 from backend.src.data.storage import log_open_position, log_close_position
 from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
@@ -45,12 +46,16 @@ class TradingEngine:
         logger.info(f"TradingEngine v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
 
     def _get_lp_value(self, lp: dict, current_btc_price: float) -> tuple:
-        """Calculate LP position value using Uniswap V3 math."""
+        """Calculate LP position value using Uniswap V3 math.
+        
+        Converts all inputs to Decimal for precision.
+        Returns tuple of (Decimal, Decimal, Decimal).
+        """
         return calculate_lp_value(
             liquidity=lp['L'],
             range_lower=lp['range_lower'],
             range_upper=lp['range_upper'],
-            current_price=current_btc_price
+            current_price=Decimal(str(current_btc_price))
         )
 
     def _calculate_portfolio_value(self, current_btc_price: float) -> float:
@@ -60,6 +65,8 @@ class TradingEngine:
         lp_total_value = 0.0
         for lp in self.active_lps:
             asset_value, _, _ = self._get_lp_value(lp, current_btc_price)
+            # Convert Decimal result to float for portfolio calculations
+            asset_value = float(asset_value)
             fees_value = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_btc_price)
             lp_total_value += asset_value + fees_value
             
@@ -109,23 +116,24 @@ class TradingEngine:
             return
 
         # Calculate liquidity L and initial amounts using Uniswap V3 math
+        # Convert all inputs to Decimal for precision
         L, amount_btc, amount_usdt = calculate_liquidity_l(
-            capital_usd=capital_usd,
-            range_lower=range_lower,
-            range_upper=range_upper,
-            current_price=current_btc_price
+            capital_usd=Decimal(str(capital_usd)),
+            range_lower=Decimal(str(range_lower)),
+            range_upper=Decimal(str(range_upper)),
+            current_price=Decimal(str(current_btc_price))
         )
         
         # Check for invalid liquidity calculation
-        if L == 0:
+        if L == Decimal('0'):
             return
 
         new_lp = {
-            "L": L, "range_lower": range_lower,
-            "range_upper": range_upper, "open_timestamp": timestamp,
+            "L": float(L), "range_lower": float(range_lower),
+            "range_upper": float(range_upper), "open_timestamp": timestamp,
             "entry_price": current_btc_price, "initial_capital_usd": capital_usd,
             "fees_accrued_usdt": 0.0, "fees_accrued_btc": 0.0,
-            "initial_amount_btc": amount_btc, "initial_amount_usdt": amount_usdt,
+            "initial_amount_btc": float(amount_btc), "initial_amount_usdt": float(amount_usdt),
             "days_out_of_range": 0 
         }
 
@@ -179,6 +187,8 @@ class TradingEngine:
         self.usd_balance -= SIMULATED_GAS_FEE_USD
 
         asset_value, _, _ = self._get_lp_value(lp_to_close, current_btc_price)
+        # Convert Decimal results to float for compatibility
+        asset_value = float(asset_value)
         fees_value = lp_to_close['fees_accrued_usdt'] + (lp_to_close['fees_accrued_btc'] * current_btc_price)
         final_value = asset_value + fees_value
 
@@ -263,6 +273,8 @@ class TradingEngine:
             best_value = -1.0
             for lp in self.active_lps:
                 asset_value, _, _ = self._get_lp_value(lp, current_price)
+                # Convert Decimal result to float for comparison
+                asset_value = float(asset_value)
                 fees_value = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_price)
                 total_value = asset_value + fees_value
                 if total_value > best_value:
@@ -466,6 +478,8 @@ class TradingEngine:
                     total_pool_tvl_usd = row.get('TVL_USD', 1) 
                     if total_pool_tvl_usd > 0 and total_pool_volume_24h > 0:
                         my_lp_value_usd, _, _ = self._get_lp_value(lp, current_price)
+                        # Convert Decimal result to float for fee calculations
+                        my_lp_value_usd = float(my_lp_value_usd)
                         my_share_of_pool = my_lp_value_usd / total_pool_tvl_usd
                         total_fees_generated_usd = total_pool_volume_24h * POOL_FEE_RATE
                         fees_earned_today_usd = total_fees_generated_usd * my_share_of_pool
