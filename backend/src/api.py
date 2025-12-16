@@ -138,6 +138,113 @@ def get_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(
+    "/api/v1/trade_history",
+    tags=["Dashboard"],
+    summary="Get Transaction Log",
+    description="Returns the detailed transaction log of all trades, harvests, and rebalancing actions from the backtest."
+)
+def get_trade_history():
+    """
+    V13: Retorna o Diário de Bordo (Transaction Log) do backtest.
+    Inclui todos os movimentos: BUY_HODL, OPEN_LP, CLOSE_LP, HARVEST, DEBT_REPAY, etc.
+    """
+    global _SUMMARY_CACHE
+    
+    logger.info("Fetching trade history from backtest results...")
+    try:
+        # Se não temos cache, rodamos o sistema
+        if not _SUMMARY_CACHE:
+            logger.info("Cache vazio. Rodando run_trading_system() para gerar histórico...")
+            result = run_trading_system()
+            report = result.get("backtest_report", {})
+            
+            if "error" in report:
+                raise HTTPException(status_code=500, detail=report["error"])
+            
+            # Store in cache
+            positions_df = get_positions_from_db(include_open=False, include_closed=True)
+            win_rate = 0.0
+            if not positions_df.empty:
+                wins = positions_df[positions_df['final_profit_usd'] > 0]
+                win_rate = len(wins) / len(positions_df)
+
+            preds_df = get_predictions_from_db()
+            accuracy = 0.0
+            
+            if not preds_df.empty and 'prediction_correct' in preds_df.columns:
+                try:
+                    preds_df['prediction_correct'] = pd.to_numeric(preds_df['prediction_correct'], errors='coerce')
+                except Exception as e:
+                    logger.warning(f"Error converting prediction_correct to numeric: {e}")
+                valid_predictions = preds_df['prediction_correct'].dropna()
+                if len(valid_predictions) > 0:
+                    accuracy = float(valid_predictions.astype(float).mean())
+            
+            backtest_start_date = report.get("start_date", None)
+            backtest_end_date = report.get("end_date", None)
+            
+            summary_data = {
+                "initial_capital": report.get("initial_capital_usd", 0),
+                "final_capital": report.get("final_usd_value", 0),
+                "net_profit": report.get("profit_usd", 0),
+                "strategy_return_pct": report.get("profit_percentage_usd", 0),
+                "btc_hodl_return_pct": report.get("btc_benchmark_profit_percentage", 0),
+                "win_rate": win_rate,
+                "ml_accuracy": accuracy,
+                "current_action": "AGUARDAR",
+                "backtest_start_date": backtest_start_date,
+                "backtest_end_date": backtest_end_date,
+                "last_updated": datetime.now().isoformat()
+            }
+            
+            _SUMMARY_CACHE = sanitize_for_json(summary_data)
+        else:
+            report = _SUMMARY_CACHE  # Use cached report
+        
+        # Extract transaction_log from the backtest result
+        # Run again to get fresh transaction log (since cache only stores summary)
+        result = run_trading_system()
+        backtest_result = result.get("backtest_report", {})
+        transaction_log = backtest_result.get("transaction_log", [])
+        
+        # V13: Convert transaction_log to JSON-serializable format
+        transaction_history = []
+        for trans in transaction_log:
+            # Convert timestamp to ISO string
+            timestamp = trans.get("timestamp")
+            if isinstance(timestamp, pd.Timestamp):
+                timestamp_str = timestamp.isoformat()
+            elif hasattr(timestamp, 'isoformat'):
+                timestamp_str = timestamp.isoformat()
+            else:
+                timestamp_str = str(timestamp)
+            
+            # Build transaction record
+            transaction_history.append({
+                "timestamp": timestamp_str,
+                "action": trans.get("action", ""),
+                "btc_price": float(trans.get("btc_price", 0)),
+                "usd_amount": float(trans.get("usd_amount", 0)),
+                "btc_amount": float(trans.get("btc_amount", 0)),
+                "fee_usd": float(trans.get("fee_usd", 0)),
+                "pnl_usd": float(trans.get("pnl_usd", 0)),
+                "details": trans.get("details", "")
+            })
+        
+        # Calculate total gas paid
+        total_gas_paid = sum(t.get("fee_usd", 0) for t in transaction_history)
+        
+        return {
+            "transactions": sanitize_for_json(transaction_history),
+            "total_gas_paid": total_gas_paid,
+            "total_transactions": len(transaction_history)
+        }
+        
+    except Exception as e:
+        logger.exception("Erro ao buscar transaction history: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(
     "/api/v1/chart_data",
     tags=["Market Data"],
     summary="Get Klines (OHLCV Data)",

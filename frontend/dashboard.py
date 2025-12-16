@@ -35,8 +35,8 @@ def get_data(endpoint, params=None):
 
 st.title("🚀 DefiSys Admin: Painel de Validação")
 
-# Create tabs: Strategy Validation and Market X-Ray
-tab1, tab2 = st.tabs(["📊 Strategy Validation", "🔍 Market X-Ray"])
+# Create tabs: Strategy Validation, Market X-Ray, and Transaction Log
+tab1, tab2, tab3 = st.tabs(["📊 Strategy Validation", "🔍 Market X-Ray", "📜 Diário de Bordo"])
 
 # 1. Busca os dados de Resumo (O Veredicto)
 summary = get_data("summary")
@@ -253,4 +253,109 @@ with tab2:
     else:
         st.info("📊 Carregando dados de análise de mercado...")
         if st.button("Atualizar"):
+            st.rerun()
+
+# Tab 3: Transaction Log (V13 Diário de Bordo)
+with tab3:
+    st.markdown("### 📜 Diário de Bordo: Histórico de Transações")
+    
+    # Fetch transaction history from API
+    trade_history = get_data("trade_history")
+    
+    if trade_history:
+        transactions = trade_history.get("transactions", [])
+        total_gas_paid = trade_history.get("total_gas_paid", 0)
+        total_transactions = trade_history.get("total_transactions", 0)
+        
+        # Display summary metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total de Transações", total_transactions)
+        with col2:
+            st.metric("Total de Gas Pago", f"${total_gas_paid:.2f}")
+        with col3:
+            avg_gas = total_gas_paid / total_transactions if total_transactions > 0 else 0
+            st.metric("Gas Médio por Transação", f"${avg_gas:.2f}")
+        
+        st.divider()
+        
+        if transactions:
+            # Convert to DataFrame for display
+            df_transactions = pd.DataFrame(transactions)
+            
+            # Format columns for display
+            df_display = df_transactions.copy()
+            
+            # Format timestamp as DD/MM/YYYY HH:mm
+            df_display['timestamp'] = pd.to_datetime(df_display['timestamp']).dt.strftime('%d/%m/%Y %H:%M')
+            
+            # Format currency columns with $ and 2 decimals
+            df_display['btc_price'] = df_display['btc_price'].apply(lambda x: f"${x:,.2f}")
+            df_display['usd_amount'] = df_display['usd_amount'].apply(lambda x: f"${x:,.2f}")
+            df_display['fee_usd'] = df_display['fee_usd'].apply(lambda x: f"${x:,.2f}")
+            df_display['pnl_usd'] = df_display['pnl_usd'].apply(lambda x: f"${x:,.2f}")
+            
+            # Format BTC amount with 8 decimal places
+            df_display['btc_amount'] = df_display['btc_amount'].apply(lambda x: f"{x:.8f}")
+            
+            # Rename columns for display
+            df_display = df_display.rename(columns={
+                'timestamp': 'Data/Hora',
+                'action': 'Ação',
+                'btc_price': 'Preço BTC',
+                'usd_amount': 'Valor USD',
+                'btc_amount': 'Quantidade BTC',
+                'fee_usd': 'Gas Fee',
+                'pnl_usd': 'Lucro/Prejuízo',
+                'details': 'Detalhes'
+            })
+            
+            # Display the dataframe
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            
+            # Add transaction details
+            st.markdown("#### 📋 Filtros e Análise")
+            
+            # Filter by action
+            actions = df_transactions['action'].unique()
+            selected_actions = st.multiselect(
+                "Filtrar por tipo de ação",
+                options=sorted(actions),
+                default=sorted(actions)
+            )
+            
+            # Apply filter
+            if selected_actions:
+                df_filtered = df_transactions[df_transactions['action'].isin(selected_actions)]
+                
+                # Show statistics by action
+                st.markdown("#### 📊 Estatísticas por Ação")
+                action_stats = df_filtered.groupby('action').agg({
+                    'usd_amount': 'sum',
+                    'btc_amount': 'sum',
+                    'fee_usd': 'sum',
+                    'pnl_usd': 'sum',
+                    'action': 'count'
+                }).rename(columns={'action': 'count'})
+                
+                action_stats['fee_usd'] = action_stats['fee_usd'].apply(lambda x: f"${x:,.2f}")
+                action_stats['pnl_usd'] = action_stats['pnl_usd'].apply(lambda x: f"${x:,.2f}")
+                action_stats['usd_amount'] = action_stats['usd_amount'].apply(lambda x: f"${x:,.2f}")
+                action_stats['btc_amount'] = action_stats['btc_amount'].apply(lambda x: f"{x:.8f}")
+                action_stats = action_stats.rename(columns={
+                    'usd_amount': 'Total USD',
+                    'btc_amount': 'Total BTC',
+                    'fee_usd': 'Total Gas',
+                    'pnl_usd': 'Total PnL',
+                    'count': 'Vezes'
+                })
+                
+                st.dataframe(action_stats, use_container_width=True)
+            
+        else:
+            st.info("Nenhuma transação registrada ainda.")
+    
+    else:
+        st.warning("⚠️ Não foi possível carregar o histórico de transações.")
+        if st.button("Tentar Novamente", key="retry_trade_history"):
             st.rerun()

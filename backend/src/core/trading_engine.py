@@ -31,6 +31,7 @@ class TradingEngine:
         self.active_lps = []
         self.portfolio_history = []
         self.decision_history = []
+        self.transaction_log = []  # V13: Structured transaction logging
         # Track reserve alert states to avoid repeated logs (only log on state change)
         self._reserve_warning_active = False
         self._reserve_critical_active = False
@@ -44,6 +45,34 @@ class TradingEngine:
         )
         
         logger.info(f"TradingEngine v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
+
+    def _log_transaction(self, timestamp: pd.Timestamp, action_type: str, btc_price: float, 
+                        usd_amount: float = 0.0, btc_amount: float = 0.0, fee_usd: float = 0.0, 
+                        pnl_usd: float = 0.0, details: str = ""):
+        """
+        V13: Log structured transactions for frontend visualization.
+        
+        Args:
+            timestamp: Transaction timestamp
+            action_type: Type of transaction (BUY_HODL, OPEN_LP, CLOSE_LP, HARVEST, DEBT_REPAY, EMERGENCY_CLOSE, etc.)
+            btc_price: Current BTC price in USD
+            usd_amount: Amount in USD involved
+            btc_amount: Amount in BTC involved
+            fee_usd: Gas fee or other fees
+            pnl_usd: Profit/Loss for this transaction (mainly for CLOSE_LP)
+            details: Additional context
+        """
+        transaction = {
+            "timestamp": timestamp,
+            "action": action_type,
+            "btc_price": btc_price,
+            "usd_amount": usd_amount,
+            "btc_amount": btc_amount,
+            "fee_usd": fee_usd,
+            "pnl_usd": pnl_usd,
+            "details": details
+        }
+        self.transaction_log.append(transaction)
 
     def _get_lp_value(self, lp: dict, current_btc_price: float) -> tuple:
         """Calculate LP position value using Uniswap V3 math.
@@ -77,8 +106,11 @@ class TradingEngine:
         net_value = (hodl_value + lp_total_value + cash_value) - debt_value
         return net_value
 
-    def buy_and_hodl(self, amount_usd: float, current_btc_price: float):
+    def buy_and_hodl(self, amount_usd: float, current_btc_price: float, timestamp: pd.Timestamp = None):
         """Aloca capital de USD para a carteira HODL de BTC."""
+        if timestamp is None:
+            timestamp = pd.Timestamp.now()
+            
         # Charge gas for on-chain buy operation
         if self.usd_balance < SIMULATED_GAS_FEE_USD:
             logger.error("Insufficient USD to pay gas for buy_and_hodl. Aborting operation.")
@@ -92,6 +124,18 @@ class TradingEngine:
         btc_bought = amount_usd / current_btc_price
         self.usd_balance -= amount_usd
         self.btc_hodl_balance += btc_bought
+        
+        # V13: Log transaction
+        self._log_transaction(
+            timestamp=timestamp,
+            action_type="BUY_HODL",
+            btc_price=current_btc_price,
+            usd_amount=amount_usd,
+            btc_amount=btc_bought,
+            fee_usd=SIMULATED_GAS_FEE_USD,
+            details=""
+        )
+        
         self.decision_history.append(f"HODL BUY: {btc_bought:.6f} BTC @ ${current_btc_price}")
 
     def add_collateral(self, btc_amount: float):
@@ -154,6 +198,18 @@ class TradingEngine:
         new_lp["id"] = position_id
         
         self.active_lps.append(new_lp)
+        
+        # V13: Log transaction
+        self._log_transaction(
+            timestamp=timestamp,
+            action_type="OPEN_LP",
+            btc_price=current_btc_price,
+            usd_amount=capital_usd,
+            btc_amount=float(amount_btc),
+            fee_usd=SIMULATED_GAS_FEE_USD,
+            details=f"Range: ${range_lower:.2f}-${range_upper:.2f} | Strategy: {strategy} | LP_ID: {position_id}"
+        )
+        
         self.decision_history.append(
             f"[{timestamp.date()}] OPEN LP (ID: {position_id}): ${capital_usd:.2f} @ ${current_btc_price:.2f} | "
             f"Range: ${range_lower:.2f}-${range_upper:.2f} | Strategy: {strategy}"
@@ -203,6 +259,19 @@ class TradingEngine:
 
         self.usd_balance += final_value
         self.active_lps.remove(lp_to_close)
+        
+        # V13: Log transaction with PnL
+        self._log_transaction(
+            timestamp=timestamp,
+            action_type="CLOSE_LP",
+            btc_price=current_btc_price,
+            usd_amount=final_value,
+            btc_amount=0.0,
+            fee_usd=SIMULATED_GAS_FEE_USD,
+            pnl_usd=final_profit,
+            details=f"LP_ID: {lp_id} | Initial: ${lp_to_close['initial_capital_usd']:.2f}"
+        )
+        
         self.decision_history.append(
             f"[{timestamp.date()}] CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price:.2f} "
             f"(Lucro/Prejuízo da LP: ${final_profit:.2f})"
@@ -300,7 +369,21 @@ class TradingEngine:
             available_cash = rebalance_options['available_cash']
             if available_cash > 10:
                 # Buy and add to collateral
-                self.buy_and_hodl(available_cash, current_price)
+                ts = pd.Timestamp.now()
+                btc_bought = available_cash / current_price
+                self.buy_and_hodl(available_cash, current_price, timestamp=ts)
+                
+                # V13: Log debt repayment action (rebalance with cash)
+                self._log_transaction(
+                    timestamp=ts,
+                    action_type="DEBT_REPAY",
+                    btc_price=current_price,
+                    usd_amount=available_cash,
+                    btc_amount=btc_bought,
+                    fee_usd=SIMULATED_GAS_FEE_USD,
+                    details="Emergency collateral boost to improve HF"
+                )
+                
                 logger.info(
                     f"REBALANCE: {rebalance_options['reason']}. "
                     f"Using ${available_cash:.2f} to buy collateral (Gas reserve protected)"
@@ -392,6 +475,18 @@ class TradingEngine:
                 if lp['fees_accrued_usdt'] > 0:
                     self.usd_balance += lp['fees_accrued_usdt']
                 
+                # V13: Log harvest
+                total_fees_usd_value = btc_fees_in_usd + lp['fees_accrued_usdt']
+                self._log_transaction(
+                    timestamp=timestamp,
+                    action_type="HARVEST",
+                    btc_price=current_price,
+                    usd_amount=total_fees_usd_value,
+                    btc_amount=lp['fees_accrued_btc'],
+                    fee_usd=SIMULATED_GAS_FEE_USD,
+                    details=f"LP_ID: {lp['id']} | Mode: REFILL | BTC->USD conversion"
+                )
+                
                 # Log the refill harvest
                 self.decision_history.append(
                     f"[{timestamp.date()}] HARVEST (REFILL MODE) LP {lp['id']}: "
@@ -409,6 +504,18 @@ class TradingEngine:
                 # Route USD fees to cash balance
                 if lp['fees_accrued_usdt'] > 0:
                     self.usd_balance += lp['fees_accrued_usdt']
+                
+                # V13: Log harvest
+                total_fees_usd_value = lp['fees_accrued_btc'] * current_price + lp['fees_accrued_usdt']
+                self._log_transaction(
+                    timestamp=timestamp,
+                    action_type="HARVEST",
+                    btc_price=current_price,
+                    usd_amount=total_fees_usd_value,
+                    btc_amount=lp['fees_accrued_btc'],
+                    fee_usd=SIMULATED_GAS_FEE_USD,
+                    details=f"LP_ID: {lp['id']} | Mode: AUTO_COMPOUND | BTC->Collateral"
+                )
                 
                 # Log the auto-compound harvest
                 self.decision_history.append(
@@ -537,5 +644,6 @@ class TradingEngine:
             'backtest_start_date': backtest_start_date.isoformat() if hasattr(backtest_start_date, 'isoformat') else str(backtest_start_date),
             'backtest_end_date': backtest_end_date.isoformat() if hasattr(backtest_end_date, 'isoformat') else str(backtest_end_date),
             'decision_history': self.decision_history,
+            'transaction_log': self.transaction_log,  # V13: Include transaction log
         }
 
