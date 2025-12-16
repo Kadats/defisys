@@ -17,11 +17,11 @@ st.set_page_config(
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
 
 # --- FUNÇÕES AUXILIARES ---
-def get_data(endpoint):
+def get_data(endpoint, params=None):
     """Função genérica para buscar dados da API com tratamento de erro."""
     try:
         url = f"{API_BASE_URL}/{endpoint}"
-        response = requests.get(url, timeout=30) # Timeout maior para backtests
+        response = requests.get(url, timeout=30, params=params) # Timeout maior para backtests
         response.raise_for_status()
         return response.json()
     except requests.exceptions.ConnectionError:
@@ -92,7 +92,11 @@ if summary:
 
     with col_left:
         st.subheader("📊 Gráfico de Preço & Sinais")
-        chart_data = get_data("chart_data")
+        # Sincroniza o gráfico com o período do backtest
+        bt_start = summary.get('backtest_start_date')
+        bt_end = summary.get('backtest_end_date')
+        params = {'start': bt_start, 'end': bt_end} if bt_start and bt_end else None
+        chart_data = get_data("chart_data", params=params)
         if chart_data:
             df_chart = pd.DataFrame(chart_data)
             if not df_chart.empty:
