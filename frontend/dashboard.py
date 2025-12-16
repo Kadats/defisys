@@ -286,8 +286,8 @@ with tab3:
             # Format columns for display
             df_display = df_transactions.copy()
             
-            # Format timestamp as DD/MM/YYYY HH:mm
-            df_display['timestamp'] = pd.to_datetime(df_display['timestamp']).dt.strftime('%d/%m/%Y %H:%M')
+            # Format timestamp as DD/MM/YYYY HH:mm (format='mixed' handles varying timestamp formats)
+            df_display['timestamp'] = pd.to_datetime(df_display['timestamp'], format='mixed').dt.strftime('%d/%m/%Y %H:%M')
             
             # Format currency columns with $ and 2 decimals
             df_display['btc_price'] = df_display['btc_price'].apply(lambda x: f"${x:,.2f}")

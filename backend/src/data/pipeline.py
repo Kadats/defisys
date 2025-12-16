@@ -6,7 +6,11 @@ API sources through storage to indicator calculation.
 """
 
 import logging
+import warnings
 import pandas as pd
+
+# Suppress pandas SQLAlchemy warnings about using psycopg2 directly
+warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 from datetime import datetime, timedelta
 from typing import Optional
 
