@@ -84,6 +84,20 @@ def run_trading_system():
     
     # O backtester roda APENAS no DataFrame de teste (post-split)
     backtest_results = engine.run(simulation_df, strategy=strategy) 
+    
+    # FIX: Recalcular o benchmark corretamente usando apenas preço do ativo
+    price_initial = float(simulation_df.iloc[0]['Close'])
+    price_final = float(simulation_df.iloc[-1]['Close'])
+    btc_benchmark_profit_percentage = ((price_final - price_initial) / price_initial) * 100
+    
+    # Atualizar o resultado com o benchmark correto
+    backtest_results['btc_benchmark_profit_percentage'] = btc_benchmark_profit_percentage
+    
+    # FIX: Adicionar metadados de data ao resultado
+    backtest_results['start_date'] = simulation_df.iloc[0]['Open_time'].isoformat()
+    backtest_results['end_date'] = simulation_df.iloc[-1]['Open_time'].isoformat()
+    
+    logger.info(f"✓ Benchmark BTC recalculado: {btc_benchmark_profit_percentage:.2f}% (Preço: ${price_initial:.2f} → ${price_final:.2f})")
 
     # 4. Logar o relatório final
     latest_indicators = simulation_df.tail(5) if not simulation_df.empty else None

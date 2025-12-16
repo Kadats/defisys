@@ -9,7 +9,7 @@ from decimal import Decimal
 from backend.src.data.storage import get_data_from_db
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db
 from backend.src.system_runner import run_trading_system
-from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL
+from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="DefiSys API")
@@ -73,17 +73,40 @@ def get_summary():
             win_rate = len(wins) / len(positions_df)
 
         preds_df = get_predictions_from_db()
-        accuracy = 0.0
+        accuracy = 0.0  # Default to 0.0
         current_action = "AGUARDAR"
         
-        if not preds_df.empty:
-            accuracy = preds_df['prediction_correct'].mean()
-            last_pred = preds_df.iloc[-1]['prediction']
-            # Lógica simples de ação baseada na predição
-            if last_pred == 1:
-                current_action = "COMPRAR"
-            elif last_pred == 0:
-                current_action = "AGUARDAR"
+        if not preds_df.empty and 'prediction_correct' in preds_df.columns:
+            # Convert to numeric, coerce errors to NaN, then drop for accuracy calc
+            try:
+                preds_df['prediction_correct'] = pd.to_numeric(preds_df['prediction_correct'], errors='coerce')
+            except Exception as e:
+                logger.warning(f"Error converting prediction_correct to numeric: {e}")
+            valid_predictions = preds_df['prediction_correct'].dropna()
+            logger.info(f"ML Accuracy: {len(valid_predictions)} valid rows of {len(preds_df)} total for calculation")
+            
+            if len(valid_predictions) > 0:
+                # Convert to float and calculate mean
+                accuracy = float(valid_predictions.astype(float).mean())
+                logger.info(f"ML Accuracy calculated: {accuracy*100:.2f}% from {len(valid_predictions)} valid predictions")
+            else:
+                # Explicitly return 0.0 if no valid predictions
+                accuracy = 0.0
+                logger.warning("No valid predictions found in database - returning 0.0 for accuracy")
+            
+            # Get latest prediction for current action
+            if 'prediction' in preds_df.columns and len(preds_df) > 0:
+                last_pred = preds_df.iloc[-1]['prediction']
+                if last_pred == 1:
+                    current_action = "COMPRAR"
+                elif last_pred == 0:
+                    current_action = "AGUARDAR"
+        else:
+            logger.warning("Predictions DataFrame is empty or missing 'prediction_correct' column")
+        
+        # Extract backtest period from report
+        backtest_start_date = report.get("start_date", None)
+        backtest_end_date = report.get("end_date", None)
         
         # Monta o objeto de resposta
         summary_data = {
@@ -95,6 +118,8 @@ def get_summary():
             "win_rate": win_rate,
             "ml_accuracy": accuracy,
             "current_action": current_action,
+            "backtest_start_date": backtest_start_date,
+            "backtest_end_date": backtest_end_date,
             "last_updated": datetime.now().isoformat()
         }
         
@@ -107,18 +132,75 @@ def get_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/chart_data")
-def get_chart_data():
+def get_chart_data(start: str = None, end: str = None):
+    """
+    Retorna dados de velas (klines) para o gráfico.
+    
+    Parâmetros opcionais:
+    - start: Data inicial em formato ISO (YYYY-MM-DD) ou timestamp
+    - end: Data final em formato ISO (YYYY-MM-DD) ou timestamp
+    
+    Se não informados, retorna todo o histórico disponível.
+    """
     try:
         klines_table_name = f"{DEFAULT_SYMBOL}_{DEFAULT_INTERVAL}_klines".lower()
-        df_klines = get_data_from_db(klines_table_name, limit=365)
+
+        # FIX: Use DEFAULT_KLINES_LIMIT instead of hardcoded 365 to show full backtest period
+        df_klines = get_data_from_db(klines_table_name, limit=DEFAULT_KLINES_LIMIT)
         
         if df_klines.empty:
             return []
-            
+        
+        # Apply optional date filtering
+        if start is not None or end is not None:
+            try:
+                if 'Open_time' in df_klines.columns:
+                    df_klines['Open_time'] = pd.to_datetime(df_klines['Open_time'])
+                    
+                    if start is not None:
+                        start_date = pd.to_datetime(start)
+                        df_klines = df_klines[df_klines['Open_time'] >= start_date]
+                        logger.info(f"Filtered chart data from {start_date}")
+                    
+                    if end is not None:
+                        end_date = pd.to_datetime(end)
+                        df_klines = df_klines[df_klines['Open_time'] <= end_date]
+                        logger.info(f"Filtered chart data to {end_date}")
+            except Exception as e:
+                logger.warning(f"Error filtering chart data by dates: {e}. Returning unfiltered data.")
+        
         return sanitize_df_for_json(df_klines)
     except Exception as e:
-        logger.exception(f"Erro chart_data: {e}")
+        logger.exception(f"Erro ao buscar chart_data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/backtest_period")
+def get_backtest_period():
+    """
+    Retorna o período de datas do último backtest executado.
+    Útil para sincronizar o gráfico com o período testado.
+    """
+    try:
+        # Se temos cache de summary, extrair as datas
+        if _SUMMARY_CACHE:
+            return {
+                "start_date": _SUMMARY_CACHE.get("backtest_start_date"),
+                "end_date": _SUMMARY_CACHE.get("backtest_end_date")
+            }
+        
+        # Caso contrário, executar um resumo rápido
+        result = run_trading_system()
+        report = result.get("backtest_report", {})
+        
+        return {
+            "start_date": report.get("start_date"),
+            "end_date": report.get("end_date")
+        }
+    except Exception as e:
+        logger.exception(f"Erro ao buscar backtest_period: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/v1/positions")
 def get_positions():

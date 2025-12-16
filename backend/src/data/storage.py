@@ -762,14 +762,36 @@ def save_predictions_to_db(df: pd.DataFrame):
         create_ml_predictions_table(conn)
         
         df_to_save = df.copy()
-        df_to_save['Open_time'] = (df_to_save['Open_time'].values.astype(int) // 10**6).astype(int)
-        df_to_save = df_to_save[['Open_time', 'prediction', 'prediction_correct']]
+        # Keep only needed columns early
+        df_to_save = df_to_save[['Open_time', 'prediction', 'prediction_correct']].copy()
+        
+        # Drop rows without a prediction (ensure we only save actual model outputs)
+        df_to_save = df_to_save[df_to_save['prediction'].notna()]
+        
+        # Fill NaNs with sentinel -1 for robustness in DB INTEGER columns
+        # Convert to numeric first to coerce any non-numeric values
+        df_to_save['prediction'] = pd.to_numeric(df_to_save['prediction'], errors='coerce')
+        df_to_save['prediction_correct'] = pd.to_numeric(df_to_save['prediction_correct'], errors='coerce')
+        df_to_save[['prediction', 'prediction_correct']] = df_to_save[['prediction', 'prediction_correct']].fillna(-1)
+        
+        # Enforce native Python int types for DB insertion
+        df_to_save['prediction'] = df_to_save['prediction'].astype(int)
+        df_to_save['prediction_correct'] = df_to_save['prediction_correct'].astype(int)
+        
+        # Convert Open_time (ns) to ms BIGINT expected by DB
+        df_to_save['Open_time'] = (df_to_save['Open_time'].values.astype('int64') // 10**6).astype('int64')
+        
+        # Prepare rows for insert as native Python types
+        rows = [
+            (int(row['Open_time']), int(row['prediction']), int(row['prediction_correct']))
+            for _, row in df_to_save.iterrows()
+        ]
+        logger.info(f"Preparing to insert {len(rows)} rows into 'ml_predictions'...")
         
         # Delete old predictions and insert new ones
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM ml_predictions")
             
-            rows = [tuple(row) for row in df_to_save.values]
             insert_query = """
                 INSERT INTO ml_predictions (open_time, prediction, prediction_correct)
                 VALUES %s
@@ -777,10 +799,13 @@ def save_predictions_to_db(df: pd.DataFrame):
                     prediction = EXCLUDED.prediction,
                     prediction_correct = EXCLUDED.prediction_correct
             """
-            extras.execute_values(cursor, insert_query, rows)
+            if rows:
+                extras.execute_values(cursor, insert_query, rows)
+            else:
+                logger.warning("No rows to insert for 'ml_predictions'. Skipping insert.")
             
         conn.commit()
-        logger.info(f"{len(df_to_save)} predictions saved to 'ml_predictions' table.")
+        logger.info(f"{len(rows)} predictions saved to 'ml_predictions' table.")
         
     except Exception as e:
         logger.error(f"Error saving predictions to DB: {e}")

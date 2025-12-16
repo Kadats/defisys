@@ -437,6 +437,14 @@ class TradingEngine:
 
         logger.info(f"Iniciando TradingEngine v2 (Market Timing Loop) com {strategy.get_name()}. Processando {len(df)} velas...")
         
+        # Store backtest period dates
+        backtest_start_date = df.iloc[0]['Open_time']
+        backtest_end_date = df.iloc[-1]['Open_time']
+        
+        # Store initial and final BTC prices for HODL benchmark calculation
+        initial_btc_price = df.iloc[0]['Close']
+        final_btc_price = df.iloc[-1]['Close']
+        
         for index, row in df.iterrows():
             if self.is_liquidated:
                 self.portfolio_history.append(0.0)
@@ -509,14 +517,15 @@ class TradingEngine:
             self.portfolio_history.append(total_net_value)
 
         # --- Fim do Backtest ---
-        # ... (resto da função permanece o mesmo) ...
         final_portfolio_value = self.portfolio_history[-1] if self.portfolio_history else self.initial_capital
         
-        initial_btc_price = df.iloc[0]['Close']
+        # Calculate HODL benchmark using ONLY price change, independent of strategy performance
         hodl_btc_amount = self.initial_capital / initial_btc_price
-        hodl_final_value = hodl_btc_amount * df.iloc[-1]['Close']
+        hodl_final_value = hodl_btc_amount * final_btc_price
         
         logger.info("TradingEngine v2 Concluído. Valor Final: $%.2f", final_portfolio_value)
+        logger.info("HODL Benchmark Final Value: $%.2f (Preço Inicial: $%.2f → Preço Final: $%.2f)", 
+                    hodl_final_value, initial_btc_price, final_btc_price)
 
         return {
             'initial_capital_usd': self.initial_capital,
@@ -524,7 +533,9 @@ class TradingEngine:
             'profit_usd': final_portfolio_value - self.initial_capital,
             'profit_percentage_usd': ((final_portfolio_value / self.initial_capital) - 1) * 100,
             'btc_benchmark_final_value': hodl_final_value,
-            'btc_benchmark_profit_percentage': ((final_portfolio_value / self.initial_capital) - 1) * 100,
+            'btc_benchmark_profit_percentage': ((hodl_final_value / self.initial_capital) - 1) * 100,
+            'backtest_start_date': backtest_start_date.isoformat() if hasattr(backtest_start_date, 'isoformat') else str(backtest_start_date),
+            'backtest_end_date': backtest_end_date.isoformat() if hasattr(backtest_end_date, 'isoformat') else str(backtest_end_date),
             'decision_history': self.decision_history,
         }
 
