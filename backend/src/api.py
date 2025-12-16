@@ -9,6 +9,7 @@ from decimal import Decimal
 from backend.src.data.storage import get_data_from_db
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db
 from backend.src.system_runner import run_trading_system
+from backend.src.utils.analytics import calculate_yearly_metrics
 from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,12 @@ def sanitize_df_for_json(df: pd.DataFrame) -> list:
     # Sanitiza recursivamente (para pegar Decimals dentro das linhas)
     return sanitize_for_json(records)
 
-@app.get("/api/v1/summary")
+@app.get(
+    "/api/v1/summary",
+    tags=["Dashboard"],
+    summary="Get Backtest Summary",
+    description="Returns the backtest verdict including strategy returns, BTC HODL benchmark, ML accuracy, and win rate. Runs the trading system if cache is empty."
+)
 def get_summary():
     """
     Retorna o Veredicto do Backtest. 
@@ -131,7 +137,12 @@ def get_summary():
         logger.exception("Erro crítico ao gerar resumo: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/v1/chart_data")
+@app.get(
+    "/api/v1/chart_data",
+    tags=["Market Data"],
+    summary="Get Klines (OHLCV Data)",
+    description="Returns historical candlestick data (Open, High, Low, Close, Volume) for charting. Supports optional date filtering via 'start' and 'end' parameters. Default limit is 1000 candles."
+)
 def get_chart_data(start: str = None, end: str = None):
     """
     Retorna dados de velas (klines) para o gráfico.
@@ -175,7 +186,12 @@ def get_chart_data(start: str = None, end: str = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/backtest_period")
+@app.get(
+    "/api/v1/backtest_period",
+    tags=["Dashboard"],
+    summary="Get Backtest Period",
+    description="Returns the start and end dates of the most recent backtest execution. Useful for syncing frontend chart zoom with backtest window."
+)
 def get_backtest_period():
     """
     Retorna o período de datas do último backtest executado.
@@ -202,7 +218,47 @@ def get_backtest_period():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/v1/positions")
+@app.get(
+    "/api/v1/market_analysis",
+    tags=["Market Data"],
+    summary="Get Market X-Ray",
+    description="Returns volatility metrics and analysis grouped by year. Includes total return, max drawdown, explosive days (>5%), severe dumps (<-5%), and daily return distribution. Essential for understanding market behavior patterns."
+)
+def get_market_analysis():
+    """
+    Returns yearly market metrics: returns, drawdowns, explosive days, etc.
+    Analyzes ALL historical klines to provide year-by-year insights.
+    """
+    try:
+        klines_table_name = f"{DEFAULT_SYMBOL}_{DEFAULT_INTERVAL}_klines".lower()
+        # Fetch ALL klines without limit for complete historical analysis
+        df_klines = get_data_from_db(klines_table_name, limit=None)
+        
+        if df_klines.empty:
+            logger.warning("No klines data available for market analysis.")
+            return {}
+        
+        logger.info(f"Analyzing {len(df_klines)} klines for yearly metrics...")
+        # Calculate yearly metrics
+        yearly_metrics = calculate_yearly_metrics(df_klines)
+        
+        # FIX: Convert integer keys to strings for valid JSON serialization
+        metrics_str_keys = {str(k): v for k, v in yearly_metrics.items()}
+        logger.info(f"Market analysis computed for {len(metrics_str_keys)} years.")
+        
+        # Sanitize for JSON
+        return sanitize_for_json(metrics_str_keys)
+    except Exception as e:
+        logger.exception(f"Erro ao analisar mercado: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/api/v1/positions",
+    tags=["Execution"],
+    summary="Get Trading Positions",
+    description="Returns open and closed trading positions with profit/loss details. Used to track position history and validate strategy execution."
+)
 def get_positions():
     try:
         df = get_positions_from_db()
