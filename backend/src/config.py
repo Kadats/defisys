@@ -98,6 +98,14 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	ATR_MULTIPLIER_BULLISH_UPPER: float = 25.0  # Allow more room to run up
 	ATR_MULTIPLIER_NEUTRAL: float = 20.0  # Symmetric wide range for stability
 
+	# V13 Smart Reserve - Emergency Fund and Leverage Constraints
+	# Minimum USD Cash Reserve as % of Total Equity (Emergency Fund)
+	MIN_RESERVE_PCT: float = 0.20  # Keep 20% of Total Equity as USD Cash
+	# Maximum Debt-to-Reserve Ratio: Never borrow more than N times the cash reserve
+	MAX_DEBT_TO_RESERVE_RATIO: float = 3.0  # Constraint: debt <= 3x cash reserve
+	# Deleveraging Threshold: Use cash reserve to pay debt if HF drops below this
+	DELEVERAGE_THRESHOLD_HF: float = 1.6  # Trigger deleveraging at HF < 1.6
+
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
 			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -178,4 +186,9 @@ ENTRY_SIZE_PCT = _settings.ENTRY_SIZE_PCT
 ATR_MULTIPLIER_BULLISH_LOWER = _settings.ATR_MULTIPLIER_BULLISH_LOWER
 ATR_MULTIPLIER_BULLISH_UPPER = _settings.ATR_MULTIPLIER_BULLISH_UPPER
 ATR_MULTIPLIER_NEUTRAL = _settings.ATR_MULTIPLIER_NEUTRAL
+
+# V13 Smart Reserve (exports)
+MIN_RESERVE_PCT = _settings.MIN_RESERVE_PCT
+MAX_DEBT_TO_RESERVE_RATIO = _settings.MAX_DEBT_TO_RESERVE_RATIO
+DELEVERAGE_THRESHOLD_HF = _settings.DELEVERAGE_THRESHOLD_HF
 

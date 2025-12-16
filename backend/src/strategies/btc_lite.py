@@ -1,14 +1,14 @@
 """
-BTC Lite Strategy (V12 - Sniper Loop).
+BTC Lite Strategy (V13 - Smart Reserve).
 
 Strategy that uses ML predictions to make leveraged trading decisions:
 - prediction == 1 (BULLISH): Leverage existing collateral + amplify
-- prediction == 0 (NEUTRAL): Hold BTC, convert excess USD to BTC
+- prediction == 0 (NEUTRAL): Hold BTC (60% HODL + 40% LP), keep 20% USD Reserve
 
-V12 Improvements:
-- Lower prediction threshold (1.5%) to catch slow bull markets
-- Removed blind refinancing - only leverage on signal
-- Take-profit repayment: automatically close LPs above range and repay debt
+V13 Improvements (Smart Reserve):
+- Heavy BTC Neutral State: 60% HODL + 40% LP (instead of 100% LP)
+- Covered Borrow: Limit debt to 3x cash reserve (prevents naked leverage)
+- Smart Deleveraging: Use USD reserve to pay debt if HF < 1.6 (prevents forced LP closures)
 """
 import pandas as pd
 import logging
@@ -20,7 +20,8 @@ from ..ai import analyze_market_regime
 from ..config import (
     GAS_RESERVE_USD, MIN_LIQUID_BUFFER, SIMULATED_GAS_FEE_USD,
     HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT,
-    ATR_MULTIPLIER_BULLISH_LOWER, ATR_MULTIPLIER_BULLISH_UPPER, ATR_MULTIPLIER_NEUTRAL
+    ATR_MULTIPLIER_BULLISH_LOWER, ATR_MULTIPLIER_BULLISH_UPPER, ATR_MULTIPLIER_NEUTRAL,
+    MIN_RESERVE_PCT, MAX_DEBT_TO_RESERVE_RATIO, DELEVERAGE_THRESHOLD_HF
 )
 from ..utils.math import calculate_safe_borrow_amount, calculate_entry_size, calculate_dynamic_range, calculate_directional_range
 
@@ -35,15 +36,16 @@ DAYS_OUT_OF_RANGE_THRESHOLD = 10
 
 class BTCLiteStrategy(BaseStrategy):
     """
-    BTC Standard Lite Strategy (V12 - Sniper Loop).
+    BTC Standard Lite Strategy (V13 - Smart Reserve).
     
     ML-driven strategy that:
     - Uses model predictions to determine market regime (BULLISH vs NEUTRAL)
     - BULLISH: Leverage collateral and amplify with borrowed capital
-    - NEUTRAL: Convert excess USD to BTC HODL (no leverage)
+    - NEUTRAL: Heavy BTC exposure (60% HODL + 40% LP), maintain 20% USD Reserve
+    - Smart Deleveraging: Use reserve cash to defend HF before closing LPs
+    - Covered Borrow: Limit debt to 3x cash reserve
     - Multi-pool scaling with dynamic position sizing
-    - Smart debt repayment in neutral periods
-    - Automatic take-profit when LPs hit upper target (V12)
+    - Automatic take-profit when LPs hit upper target
     """
     
     def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
@@ -57,6 +59,10 @@ class BTCLiteStrategy(BaseStrategy):
         """
         current_price = row['Close']
         
+        # --- 0. SMART DELEVERAGING: Check if we need to defend HF with cash reserve ---
+        if engine.total_debt_usd > 0:
+            self._handle_smart_deleveraging(engine, current_price, timestamp)
+        
         # --- 1. CLOSING LOGIC: Close out-of-range LPs ---
         self._handle_lp_closures(engine, current_price, timestamp)
         
@@ -69,6 +75,44 @@ class BTCLiteStrategy(BaseStrategy):
         else:
             # STATE 2: Post-Leverage (already leveraged and operating)
             self._handle_post_leverage_state(row, engine, timestamp, current_price, prediction)
+    
+    def _handle_smart_deleveraging(self, engine: 'TradingEngine', current_price: float, timestamp: pd.Timestamp) -> None:
+        """
+        V13 Smart Deleveraging: Use reserve cash to pay down debt if HF drops below threshold.
+        Prevents forced LP closures during dips.
+        """
+        if engine.total_debt_usd == 0:
+            return  # No debt to deleverage
+        
+        # Calculate Health Factor
+        collateral_value = engine.btc_hodl_balance * current_price
+        hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
+        
+        # Only deleverage if HF drops below threshold
+        if hf >= DELEVERAGE_THRESHOLD_HF:
+            return
+        
+        # Calculate available reserve cash (respect gas reserve)
+        available_cash = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+        
+        if available_cash > 20.0:  # Minimum meaningful amount
+            # Determine repayment amount: min of (available cash, total debt)
+            payment_amount = min(available_cash, engine.total_debt_usd)
+            
+            # Execute repayment
+            old_debt = engine.total_debt_usd
+            old_hf = hf
+            engine.total_debt_usd = max(0.0, engine.total_debt_usd - payment_amount)
+            engine.usd_balance -= (payment_amount + SIMULATED_GAS_FEE_USD)
+            
+            # Recalculate improved HF
+            new_hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
+            
+            logger.info(
+                f"[{timestamp.date()}] 🛡️ DEFENSE (V13 Smart Reserve): Used Emergency Reserve to repay debt. "
+                f"Paid: ${payment_amount:.2f} | Debt: ${old_debt:.2f} → ${engine.total_debt_usd:.2f} | "
+                f"HF: {old_hf:.2f} → {new_hf:.2f}"
+            )
     
     def _handle_lp_closures(self, engine: 'TradingEngine', current_price: float, timestamp: pd.Timestamp) -> None:
         """Close LPs that have been out of range for too long or hit take-profit target."""
@@ -130,12 +174,12 @@ class BTCLiteStrategy(BaseStrategy):
         Handle trading logic when no leverage is deployed (total_debt_usd == 0).
         
         BULLISH: Buy BTC collateral and leverage it with borrowing
-        NEUTRAL: Convert excess USD to BTC HODL
+        NEUTRAL: Heavy BTC Neutral State (60% HODL + 40% LP, maintain 20% reserve)
         """
         if prediction == 1:  # BULLISH
             self._execute_bullish_entry(row, engine, timestamp, current_price)
         else:  # NEUTRAL
-            self._execute_neutral_hodl(engine, timestamp, current_price)
+            self._execute_neutral_hodl(engine, timestamp, current_price, row)
     
     def _execute_bullish_entry(
         self,
@@ -206,6 +250,7 @@ class BTCLiteStrategy(BaseStrategy):
     ) -> None:
         """
         Safely borrow against collateral with HF simulation and scaling.
+        V13: Added "Covered Borrow" constraint - limit debt to MAX_DEBT_TO_RESERVE_RATIO * cash reserve.
         """
         collateral_value = engine.btc_hodl_balance * current_price
         max_borrowable = collateral_value * LOAN_TO_VALUE_RATIO
@@ -214,6 +259,19 @@ class BTCLiteStrategy(BaseStrategy):
         # Apply scaling: only borrow a fraction of available borrowing power
         amount_to_borrow = max_borrowable * ENTRY_SIZE_PCT
         logger.debug(f"[{timestamp.date()}] Scaling: Max borrowable ${max_borrowable:.2f} → Scaled to ${amount_to_borrow:.2f} ({ENTRY_SIZE_PCT:.0%})")
+        
+        # V13 COVERED BORROW: Limit debt to a multiple of our cash reserve
+        # This prevents "naked leverage" where we cannot cover margin calls
+        reserve_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+        max_covered_borrow = reserve_balance * MAX_DEBT_TO_RESERVE_RATIO
+        
+        if amount_to_borrow > max_covered_borrow:
+            logger.info(
+                f"[{timestamp.date()}] V13 COVERED BORROW: Limiting borrow to ${max_covered_borrow:.2f} "
+                f"(Reserve: ${reserve_balance:.2f} × {MAX_DEBT_TO_RESERVE_RATIO}x). "
+                f"Original amount: ${amount_to_borrow:.2f}"
+            )
+            amount_to_borrow = max_covered_borrow
         
         # Simulate HF after borrow
         projected_debt = engine.total_debt_usd + amount_to_borrow
@@ -309,32 +367,68 @@ class BTCLiteStrategy(BaseStrategy):
         self,
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
-        current_price: float
+        current_price: float,
+        row: pd.Series = None
     ) -> None:
         """
-        Execute NEUTRAL strategy: convert excess USD to BTC HODL.
+        V13 Heavy BTC Neutral State: 60% HODL + 40% LP.
+        Instead of 100% LP, maintain higher BTC exposure during neutral periods.
+        Target Split: ~60% Portfolio Value in HODL + ~40% in LP + ~20% USD Reserve.
         """
-        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
-        liquid_minimum = safe_balance * MIN_LIQUID_BUFFER
-        excess_usd = max(0.0, safe_balance - liquid_minimum)
+        # Calculate total equity and target reserve
+        total_equity = engine.usd_balance + (engine.btc_hodl_balance * current_price)
+        target_reserve = total_equity * MIN_RESERVE_PCT
         
-        # Minimum trade size to prevent spam
-        if excess_usd < 50.0:
-            logger.debug(f"[{timestamp.date()}] NEUTRAL: Trade size too small (${excess_usd:.2f} < $50.00). Skipping.")
-            return
-        
-        if excess_usd > 10:  # Only buy if we have meaningful capital
-            btc_to_buy = excess_usd / current_price if current_price > 0 else 0.0
-            if btc_to_buy > 0.0001:  # Minimum viable BTC amount
-                engine.buy_and_hodl(excess_usd, current_price)
+        # Check if we already have sufficient reserve
+        if engine.usd_balance >= target_reserve:
+            # Reserve is adequate, now work on HODL vs LP split
+            safe_balance = max(0.0, engine.usd_balance - target_reserve)
+            
+            # Calculate current HODL value and target HODL value
+            current_hodl_value = engine.btc_hodl_balance * current_price
+            target_hodl_value = total_equity * 0.60  # 60% of total equity
+            
+            # If HODL is below target, buy more BTC
+            if current_hodl_value < target_hodl_value and safe_balance > 50.0:
+                amount_to_buy = min(safe_balance, target_hodl_value - current_hodl_value)
+                btc_to_buy = amount_to_buy / current_price if current_price > 0 else 0.0
+                
+                if btc_to_buy > 0.0001:
+                    engine.buy_and_hodl(amount_to_buy, current_price)
+                    logger.info(
+                        f"[{timestamp.date()}] V13 NEUTRAL (Heavy BTC): Buying ${amount_to_buy:.2f} → {btc_to_buy:.6f} BTC HODL. "
+                        f"Target: 60% HODL ({target_hodl_value:.2f}) | Current: {current_hodl_value:.2f}"
+                    )
+                    return
+            
+            # If HODL is at target, allocate remaining to LP (40% target)
+            safe_balance_after = max(0.0, engine.usd_balance - target_reserve)
+            if safe_balance_after > 50.0 and len(engine.active_lps) < MAX_ACTIVE_LPS:
+                # Open wide symmetric LP for fee farming
+                atr = row.get('ATR', 0.0) if row is not None else 0.0
+                if atr > 0:
+                    from ..utils.math import calculate_dynamic_range
+                    range_lower, range_upper = calculate_dynamic_range(
+                        current_price, atr,
+                        ATR_MULTIPLIER_NEUTRAL,
+                        ATR_MULTIPLIER_NEUTRAL
+                    )
+                else:
+                    range_lower = current_price * 0.70
+                    range_upper = current_price * 1.60
+                
                 logger.info(
-                    f"[{timestamp.date()}] NEUTRAL (BTC Standard Lite): Convertendo ${excess_usd:.2f} USD → {btc_to_buy:.6f} BTC HODL. "
-                    f"Mantendo líquido: ${liquid_minimum:.2f}"
+                    f"[{timestamp.date()}] V13 NEUTRAL (Heavy BTC): Opening Wide LP ${safe_balance_after:.2f} "
+                    f"(Range: ${range_lower:.2f}-${range_upper:.2f}). Reserve: ${engine.usd_balance:.2f}"
                 )
-            else:
-                logger.debug(f"[{timestamp.date()}] NEUTRAL: Saldo insuficiente para compra de BTC (${excess_usd:.2f}).")
+                engine.open_lp(safe_balance_after, range_lower, range_upper, current_price, timestamp, strategy="NEUTRAL_V13_HEAVY_BTC")
+                engine.usd_balance -= safe_balance_after
         else:
-            logger.debug(f"[{timestamp.date()}] NEUTRAL: Já em BTC HODL ou reserva insuficiente (Excesso: ${excess_usd:.2f}).")
+            # Reserve is below target - don't make any trades
+            logger.debug(
+                f"[{timestamp.date()}] V13 NEUTRAL: Reserve below target (${engine.usd_balance:.2f} < ${target_reserve:.2f}). "
+                f"Holding position."
+            )
     
     def _handle_post_leverage_state(
         self,

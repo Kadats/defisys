@@ -183,19 +183,25 @@ class RiskManager:
         self,
         health_factor: float,
         balance: float,
-        has_active_lps: bool
+        has_active_lps: bool,
+        deleverage_threshold: float = 1.6
     ) -> dict:
         """
         Assess available rebalancing options based on current state.
+        
+        V13 Smart Reserve Logic:
+        - Priority 1: Use reserve cash to pay debt if HF < deleverage_threshold
+        - Priority 2: Only close LP if cash is exhausted AND HF < critical threshold
         
         Args:
             health_factor: Current health factor
             balance: Current USD balance
             has_active_lps: Whether there are active LP positions
+            deleverage_threshold: HF threshold to trigger cash-based deleveraging (default 1.6)
         
         Returns:
             Dict with rebalancing recommendations:
-            - 'action': 'none', 'use_cash', 'close_lp', 'emergency_close'
+            - 'action': 'none', 'pay_debt_with_cash', 'close_lp', 'emergency_close'
             - 'reason': Explanation for the recommended action
             - 'available_cash': Amount of cash available for rebalancing
         """
@@ -217,22 +223,25 @@ class RiskManager:
                 'available_cash': 0.0
             }
         
-        # Try using available cash first (respecting gas reserve)
+        # V13 PRIORITY 1: Use reserve cash to pay debt if HF drops below deleverage threshold
+        # This prevents forced LP closures (which realize losses)
         available_cash = self.calculate_safe_balance(balance)
-        if available_cash > 10 and health_factor < self.hf_warning:
+        if available_cash > 10 and health_factor < deleverage_threshold:
             return {
-                'action': 'use_cash',
-                'reason': f'HF={health_factor:.2f} in warning zone, using available cash',
+                'action': 'pay_debt_with_cash',
+                'reason': f'HF={health_factor:.2f} below deleverage threshold {deleverage_threshold}, using reserve cash to pay debt',
                 'available_cash': available_cash
             }
         
-        # Last resort: close an LP if critical
+        # V13 PRIORITY 2: Last resort - close an LP only if cash exhausted AND critical HF
         if health_factor < self.hf_critical and has_active_lps:
-            return {
-                'action': 'close_lp',
-                'reason': f'HF={health_factor:.2f} in critical zone, closing LP to pay debt',
-                'available_cash': 0.0
-            }
+            # Double-check we really don't have cash available
+            if available_cash < 10:
+                return {
+                    'action': 'close_lp',
+                    'reason': f'HF={health_factor:.2f} in critical zone and cash exhausted, closing LP to pay debt',
+                    'available_cash': 0.0
+                }
         
         return {
             'action': 'none',
