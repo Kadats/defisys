@@ -7,6 +7,8 @@ Handles health factor monitoring, gas solvency, and emergency conditions.
 import logging
 from typing import Literal, Tuple
 
+from ..config import TARGET_RESERVE_RATIO
+
 logger = logging.getLogger(__name__)
 
 # Health Factor risk management thresholds
@@ -178,6 +180,10 @@ class RiskManager:
             Safe balance (total - gas reserve), minimum 0.0
         """
         return max(0.0, total_balance - self.gas_reserve_usd)
+
+    def calculate_target_reserve(self, total_equity_usd: float) -> float:
+        """Compute dynamic reserve target as a fraction of total equity."""
+        return total_equity_usd * TARGET_RESERVE_RATIO
     
     def assess_rebalance_options(
         self,
@@ -205,46 +211,41 @@ class RiskManager:
             - 'reason': Explanation for the recommended action
             - 'available_cash': Amount of cash available for rebalancing
         """
-        status, hf = self.check_health_status(0, 0)  # Dummy call to get status classification
-        
-        # Check if position is actually at risk
         if health_factor >= self.hf_warning:
             return {
                 'action': 'none',
                 'reason': 'Health factor is safe',
                 'available_cash': 0.0
             }
-        
-        # Check for emergency gas solvency issue
+
+        # Check for emergency gas solvency issue first
         if self.should_emergency_close(balance) and has_active_lps:
             return {
                 'action': 'emergency_close',
                 'reason': f'USD balance ${balance:.2f} below emergency threshold (${self.gas_reserve_usd * EMERGENCY_GAS_MULTIPLIER:.2f})',
                 'available_cash': 0.0
             }
-        
-        # V13 PRIORITY 1: Use reserve cash to pay debt if HF drops below deleverage threshold
-        # This prevents forced LP closures (which realize losses)
+
         available_cash = self.calculate_safe_balance(balance)
-        if available_cash > 10 and health_factor < deleverage_threshold:
+
+        # Defense 1: If HF deteriorates, use any available USD to pay debt
+        if health_factor < deleverage_threshold and available_cash > 0:
             return {
                 'action': 'pay_debt_with_cash',
-                'reason': f'HF={health_factor:.2f} below deleverage threshold {deleverage_threshold}, using reserve cash to pay debt',
+                'reason': f'HF={health_factor:.2f} below {deleverage_threshold}, using cash to defend position',
                 'available_cash': available_cash
             }
-        
-        # V13 PRIORITY 2: Last resort - close an LP only if cash exhausted AND critical HF
-        if health_factor < self.hf_critical and has_active_lps:
-            # Double-check we really don't have cash available
-            if available_cash < 10:
-                return {
-                    'action': 'close_lp',
-                    'reason': f'HF={health_factor:.2f} in critical zone and cash exhausted, closing LP to pay debt',
-                    'available_cash': 0.0
-                }
-        
+
+        # Defense 2: If HF is critical and wallet is empty, close LP to raise cash
+        if health_factor < self.hf_warning and has_active_lps and available_cash <= 0:
+            return {
+                'action': 'close_lp',
+                'reason': f'HF={health_factor:.2f} critical and no USD available, closing LP to raise cash',
+                'available_cash': 0.0
+            }
+
         return {
             'action': 'none',
-            'reason': 'No safe rebalancing options available',
+            'reason': 'No defensive action required',
             'available_cash': 0.0
         }
