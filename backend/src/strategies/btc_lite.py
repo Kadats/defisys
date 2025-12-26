@@ -21,7 +21,8 @@ from ..config import (
     GAS_RESERVE_USD, MIN_LIQUID_BUFFER, SIMULATED_GAS_FEE_USD,
     HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT,
     ATR_MULTIPLIER_BULLISH_LOWER, ATR_MULTIPLIER_BULLISH_UPPER, ATR_MULTIPLIER_NEUTRAL,
-    MIN_RESERVE_PCT, MAX_DEBT_TO_RESERVE_RATIO, DELEVERAGE_THRESHOLD_HF
+    TARGET_RESERVE_RATIO, MIN_HARVEST_USD, MAX_DEBT_RATIO,
+    MAX_DEBT_TO_RESERVE_RATIO, DELEVERAGE_THRESHOLD_HF
 )
 from ..utils.math import calculate_safe_borrow_amount, calculate_entry_size, calculate_dynamic_range, calculate_directional_range
 
@@ -47,6 +48,42 @@ class BTCLiteStrategy(BaseStrategy):
     - Multi-pool scaling with dynamic position sizing
     - Automatic take-profit when LPs hit upper target
     """
+
+    def _calculate_equity_snapshot(self, engine: 'TradingEngine', current_price: float) -> tuple:
+        lp_total_value = 0.0
+        for lp in engine.active_lps:
+            asset_value, _, _ = engine._get_lp_value(lp, current_price)
+            lp_total_value += float(asset_value)
+            lp_total_value += lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_price)
+
+        equity = (engine.btc_hodl_balance * current_price) + lp_total_value + engine.usd_balance - engine.total_debt_usd
+        target_reserve = equity * TARGET_RESERVE_RATIO
+        usd_surplus = engine.usd_balance - target_reserve
+        return equity, target_reserve, usd_surplus
+
+    def _calculate_total_fees_usd(self, engine: 'TradingEngine', current_price: float) -> float:
+        fees_total = 0.0
+        for lp in engine.active_lps:
+            fees_total += lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_price)
+        return fees_total
+
+    def _process_profit_routing(self, engine: 'TradingEngine', equity: float, current_price: float) -> float:
+        target_reserve = equity * TARGET_RESERVE_RATIO
+        usd_surplus = engine.usd_balance - target_reserve
+
+        if usd_surplus > 10:
+            is_bearish = getattr(self, "_latest_prediction", 0) == -1
+            if not is_bearish:
+                engine.buy_and_hodl(usd_surplus, current_price)
+                logger.info(
+                    f"FLYWHEEL: Reserve Full. Converted ${usd_surplus:.2f} profit to BTC."
+                )
+        elif usd_surplus < 0:
+            logger.info(
+                f"FLYWHEEL: Refilling Reserve. Target=${target_reserve:.2f}, Current=${engine.usd_balance:.2f}."
+            )
+
+        return usd_surplus
     
     def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
         """
@@ -59,22 +96,44 @@ class BTCLiteStrategy(BaseStrategy):
         """
         current_price = row['Close']
         
+        # Flywheel equity snapshot
+        equity, target_reserve, usd_surplus = self._calculate_equity_snapshot(engine, current_price)
+
         # --- 0. SMART DELEVERAGING: Check if we need to defend HF with cash reserve ---
         if engine.total_debt_usd > 0:
             self._handle_smart_deleveraging(engine, current_price, timestamp)
         
         # --- 1. CLOSING LOGIC: Close out-of-range LPs ---
         self._handle_lp_closures(engine, current_price, timestamp)
+
+        # Refresh equity snapshot after defensive actions
+        equity, target_reserve, usd_surplus = self._calculate_equity_snapshot(engine, current_price)
         
-        # --- 2. OPENING LOGIC: Determine regime and execute ---
+        # --- 2. Determine regime and harvest lazily ---
         prediction = self._get_prediction(row)
+        self._latest_prediction = prediction
+
+        accrued_fees = self._calculate_total_fees_usd(engine, current_price)
+        if accrued_fees > MIN_HARVEST_USD or usd_surplus < -100:
+            try:
+                engine._check_and_harvest(current_price, timestamp)
+            except Exception as e:
+                logger.exception("Erro durante smart harvest condicional: %s", e)
+            equity, target_reserve, usd_surplus = self._calculate_equity_snapshot(engine, current_price)
+
+        # --- 3. Profit routing (Flywheel) ---
+        usd_surplus = self._process_profit_routing(engine, equity, current_price)
+
+        # Refresh snapshot after routing conversions
+        equity, target_reserve, usd_surplus = self._calculate_equity_snapshot(engine, current_price)
         
+        # --- 4. OPENING LOGIC: Determine regime and execute ---
         if engine.total_debt_usd == 0:
             # STATE 1: Pre-Leverage (waiting for BULLISH signal)
-            self._handle_pre_leverage_state(row, engine, timestamp, current_price, prediction)
+            self._handle_pre_leverage_state(row, engine, timestamp, current_price, prediction, target_reserve)
         else:
             # STATE 2: Post-Leverage (already leveraged and operating)
-            self._handle_post_leverage_state(row, engine, timestamp, current_price, prediction)
+            self._handle_post_leverage_state(row, engine, timestamp, current_price, prediction, target_reserve)
     
     def _handle_smart_deleveraging(self, engine: 'TradingEngine', current_price: float, timestamp: pd.Timestamp) -> None:
         """
@@ -168,7 +227,8 @@ class BTCLiteStrategy(BaseStrategy):
         engine: 'TradingEngine', 
         timestamp: pd.Timestamp,
         current_price: float,
-        prediction: int
+        prediction: int,
+        target_reserve: float
     ) -> None:
         """
         Handle trading logic when no leverage is deployed (total_debt_usd == 0).
@@ -177,16 +237,17 @@ class BTCLiteStrategy(BaseStrategy):
         NEUTRAL: Heavy BTC Neutral State (60% HODL + 40% LP, maintain 20% reserve)
         """
         if prediction == 1:  # BULLISH
-            self._execute_bullish_entry(row, engine, timestamp, current_price)
+            self._execute_bullish_entry(row, engine, timestamp, current_price, target_reserve)
         else:  # NEUTRAL
-            self._execute_neutral_hodl(engine, timestamp, current_price, row)
+            self._execute_neutral_hodl(engine, timestamp, current_price, target_reserve, row)
     
     def _execute_bullish_entry(
         self,
         row: pd.Series,
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
-        current_price: float
+        current_price: float,
+        target_reserve: float
     ) -> None:
         """
         Execute BULLISH entry: leverage existing or new collateral.
@@ -207,6 +268,9 @@ class BTCLiteStrategy(BaseStrategy):
         # Ensure we keep minimum liquid buffer
         liquid_minimum = engine.usd_balance * MIN_LIQUID_BUFFER
         capital_to_allocate = min(capital_to_allocate, engine.usd_balance - liquid_minimum)
+
+        # Respect dynamic reserve when sizing entries
+        capital_to_allocate = min(capital_to_allocate, max(0.0, engine.usd_balance - target_reserve))
         
         # Subtract estimated gas costs for this entry (buy + open LP)
         estimated_gas_costs = SIMULATED_GAS_FEE_USD * 2
@@ -240,7 +304,7 @@ class BTCLiteStrategy(BaseStrategy):
         self._execute_safe_borrow(engine, timestamp, current_price)
         
         # 3. Execute recursive loop: 50% to collateral, 50% to LP
-        self._execute_recursive_loop(row, engine, timestamp, current_price)
+        self._execute_recursive_loop(row, engine, timestamp, current_price, target_reserve)
     
     def _execute_safe_borrow(
         self,
@@ -254,6 +318,10 @@ class BTCLiteStrategy(BaseStrategy):
         """
         collateral_value = engine.btc_hodl_balance * current_price
         max_borrowable = collateral_value * LOAN_TO_VALUE_RATIO
+
+        # V14: Cap total leverage at conservative LTV
+        debt_cap = collateral_value * MAX_DEBT_RATIO
+        max_borrowable = max(0.0, min(max_borrowable, debt_cap - engine.total_debt_usd))
         logger.debug(f"[{timestamp.date()}] BULLISH: Collateral = {engine.btc_hodl_balance:.6f} BTC @ ${current_price:.2f} = ${collateral_value:.2f}")
         
         # Apply scaling: only borrow a fraction of available borrowing power
@@ -311,7 +379,8 @@ class BTCLiteStrategy(BaseStrategy):
         row: pd.Series,
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
-        current_price: float
+        current_price: float,
+        target_reserve: float
     ) -> None:
         """
         Execute recursive loop: use borrowed funds for 50% collateral, 50% LP.
@@ -320,17 +389,15 @@ class BTCLiteStrategy(BaseStrategy):
         collateral_value = engine.btc_hodl_balance * current_price
         hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
         
-        # Base safe balance excludes the absolute gas reserve
-        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+        # Only deploy surplus cash beyond the dynamic reserve and gas buffer
+        surplus_cash = max(0.0, engine.usd_balance - max(target_reserve, GAS_RESERVE_USD))
         
         if hf > HF_REFINANCE_THRESHOLD:
-            # SAFE: Use the entire safe balance (reserve preserved)
-            available_for_loop = safe_balance
-            logger.debug(f"[{timestamp.date()}] HF={hf:.2f} > {HF_REFINANCE_THRESHOLD}: Usando alavancagem (refinanciamento) sobre safe_balance=${safe_balance:.2f}")
+            available_for_loop = surplus_cash
+            logger.debug(f"[{timestamp.date()}] HF={hf:.2f} > {HF_REFINANCE_THRESHOLD}: Usando alavancagem sobre surplus=${surplus_cash:.2f}")
         else:
-            # CAREFUL: Use a conservative portion of the safe balance
-            available_for_loop = safe_balance - (safe_balance * MIN_LIQUID_BUFFER)
-            logger.debug(f"[{timestamp.date()}] HF={hf:.2f} <= {HF_REFINANCE_THRESHOLD}: Usando cash conservadoramente sobre safe_balance=${safe_balance:.2f}")
+            available_for_loop = surplus_cash - (surplus_cash * MIN_LIQUID_BUFFER)
+            logger.debug(f"[{timestamp.date()}] HF={hf:.2f} <= {HF_REFINANCE_THRESHOLD}: Usando cash conservadoramente sobre surplus=${surplus_cash:.2f}")
         
         # Guard against negative available
         available_for_loop = max(0.0, available_for_loop)
@@ -347,8 +414,8 @@ class BTCLiteStrategy(BaseStrategy):
             logger.info(f"[{timestamp.date()}] Loop: {btc_to_collateral:.6f} BTC adicionado ao colateral.")
         
         # 5. Open LP with directional ranges (V7 - Target Selling)
-        safe_balance_after = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
-        capital_for_lp_usd = max(0.0, safe_balance_after - (safe_balance_after * MIN_LIQUID_BUFFER))
+        surplus_after = max(0.0, engine.usd_balance - max(target_reserve, GAS_RESERVE_USD))
+        capital_for_lp_usd = max(0.0, surplus_after - (surplus_after * MIN_LIQUID_BUFFER))
         if capital_for_lp_usd > 1:
             # V7: Use directional range for profit-taking
             atr = row.get('ATR', 0.0)
@@ -368,6 +435,7 @@ class BTCLiteStrategy(BaseStrategy):
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
         current_price: float,
+        target_reserve: float,
         row: pd.Series = None
     ) -> None:
         """
@@ -375,9 +443,8 @@ class BTCLiteStrategy(BaseStrategy):
         Instead of 100% LP, maintain higher BTC exposure during neutral periods.
         Target Split: ~60% Portfolio Value in HODL + ~40% in LP + ~20% USD Reserve.
         """
-        # Calculate total equity and target reserve
-        total_equity = engine.usd_balance + (engine.btc_hodl_balance * current_price)
-        target_reserve = total_equity * MIN_RESERVE_PCT
+        # Calculate total equity snapshot with LP value for accurate reserve targeting
+        total_equity, target_reserve, _ = self._calculate_equity_snapshot(engine, current_price)
         
         # Check if we already have sufficient reserve
         if engine.usd_balance >= target_reserve:
@@ -436,7 +503,8 @@ class BTCLiteStrategy(BaseStrategy):
         engine: 'TradingEngine',
         timestamp: pd.Timestamp,
         current_price: float,
-        prediction: int
+        prediction: int,
+        target_reserve: float
     ) -> None:
         """
         Handle trading logic when leverage is already deployed (total_debt_usd > 0).
@@ -474,9 +542,9 @@ class BTCLiteStrategy(BaseStrategy):
         hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
         
         if prediction == 1:  # BULLISH
-            self._execute_post_leverage_bullish(row, engine, timestamp, current_price, hf, capital_to_allocate)
+            self._execute_post_leverage_bullish(row, engine, timestamp, current_price, hf, capital_to_allocate, target_reserve)
         elif prediction == 0:  # NEUTRAL
-            self._execute_post_leverage_neutral(row, engine, timestamp, current_price, hf, capital_to_allocate)
+            self._execute_post_leverage_neutral(row, engine, timestamp, current_price, hf, capital_to_allocate, target_reserve)
         else:
             logger.warning(f"[{timestamp.date()}] Unknown prediction value: {prediction}")
     
@@ -487,7 +555,8 @@ class BTCLiteStrategy(BaseStrategy):
         timestamp: pd.Timestamp,
         current_price: float,
         hf: float,
-        capital_to_allocate: float
+        capital_to_allocate: float,
+        target_reserve: float
     ) -> None:
         """
         Execute BULLISH post-leverage: ladder LP ranges and potentially refinance.
@@ -496,6 +565,14 @@ class BTCLiteStrategy(BaseStrategy):
         # V7: Directional ranges with ladder adjustment for multiple LPs
         atr = row.get('ATR', 0.0)
         index = len(engine.active_lps)
+
+        surplus_cash = max(0.0, engine.usd_balance - max(target_reserve, GAS_RESERVE_USD))
+        capital_to_allocate = min(capital_to_allocate, surplus_cash)
+        if capital_to_allocate <= 0:
+            logger.debug(
+                f"[{timestamp.date()}] BULLISH (V12 Sniper): Sem excedente após reserva dinâmica. Pulando novo LP."
+            )
+            return
         
         # Use directional range with ladder adjustment (reduce target multiplier for each additional LP)
         base_target = 15.0
@@ -525,7 +602,8 @@ class BTCLiteStrategy(BaseStrategy):
         timestamp: pd.Timestamp,
         current_price: float,
         hf: float,
-        capital_to_allocate: float
+        capital_to_allocate: float,
+        target_reserve: float
     ) -> None:
         """
         Execute NEUTRAL post-leverage: farm fees conservatively and smart repay debt.
@@ -553,6 +631,9 @@ class BTCLiteStrategy(BaseStrategy):
                 estimated_gas_costs = SIMULATED_GAS_FEE_USD * 2
                 max_allowable = max(0.0, engine.usd_balance - liquid_minimum - estimated_gas_costs - GAS_RESERVE_USD)
                 capital_to_allocate = min(capital_to_allocate, max_allowable)
+
+            surplus_cash = max(0.0, engine.usd_balance - max(target_reserve, GAS_RESERVE_USD))
+            capital_to_allocate = min(capital_to_allocate, surplus_cash)
         
         if capital_to_allocate <= 0:
             logger.info(
