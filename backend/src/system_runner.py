@@ -5,7 +5,7 @@ import os
 from backend.src.data.pipeline import get_full_prepared_data
 from .core import TradingEngine
 from .strategies import BTCLiteStrategy
-from .config import PROJECT_ROOT, TRAIN_TEST_SPLIT_DATE
+from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE
 from .ai import train_prediction_model, get_predictions
 from backend.src.data.storage import save_predictions_to_db
 
@@ -53,8 +53,8 @@ def run_trading_system():
         return {"backtest_report": {"error": "Failed to get data"}, "full_dataframe": pd.DataFrame()} 
 
     # --- MUDANÇA 2: Treinar o Modelo de ML com Split Temporal ---
-    logger.info(f"Fase 2: Treinando o modelo de predição com Split Temporal ({TRAIN_TEST_SPLIT_DATE})...")
-    model, scaler = train_prediction_model(full_df, train_test_split_date=TRAIN_TEST_SPLIT_DATE)
+    logger.info(f"Fase 2: Treinando o modelo de predição com Split Temporal ({ML_TRAIN_SPLIT_DATE})...")
+    model, scaler = train_prediction_model(full_df, train_test_split_date=ML_TRAIN_SPLIT_DATE)
     
     # Gerar predições para todo o histórico (para análise visual)
     full_df_with_predictions = get_predictions(model, scaler, full_df)
@@ -64,14 +64,16 @@ def run_trading_system():
     save_predictions_to_db(full_df_with_predictions)
 
     # 3. Preparar DataFrame para Backtest (Walk-Forward Test Set)
-    # CRÍTICO: Usar apenas dados a partir de TRAIN_TEST_SPLIT_DATE para o backtest
-    split_date = pd.to_datetime(TRAIN_TEST_SPLIT_DATE)
+    # CRÍTICO: Usar apenas dados a partir de ML_TRAIN_SPLIT_DATE para o backtest
+    split_date = pd.Timestamp(ML_TRAIN_SPLIT_DATE)
     simulation_df = full_df_with_predictions[full_df_with_predictions['Open_time'] >= split_date].copy()
+    simulation_df = simulation_df.reset_index(drop=True)
     
+    logger.info(f"Filtered simulation data. Starting from {split_date}. Rows: {len(simulation_df)}")
     logger.info(f"Fase 3: Configurando Backtest Walk-Forward...")
     logger.info(f"  Período de simulação: {simulation_df['Open_time'].min().strftime('%Y-%m-%d')} até {simulation_df['Open_time'].max().strftime('%Y-%m-%d')}")
     logger.info(f"  Total de candles para backtest: {len(simulation_df)}")
-    logger.info(f"  Modelo foi treinado em dados anteriores a {TRAIN_TEST_SPLIT_DATE}")
+    logger.info(f"  Modelo foi treinado em dados anteriores a {ML_TRAIN_SPLIT_DATE}")
     
     # Configurar e Executar o Backtester apenas com dados pós-split
     logger.info("Fase 4: Executando o backtest da estratégia...")
