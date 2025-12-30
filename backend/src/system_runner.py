@@ -4,7 +4,7 @@ import os
 
 from backend.src.data.pipeline import get_full_prepared_data
 from .core import TradingEngine
-from .strategies import BTCLiteStrategy
+from .strategies import BTCLiteStrategy, AccumulatorStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE
 from .ai import train_prediction_model, get_predictions
 from backend.src.data.storage import save_predictions_to_db
@@ -81,8 +81,8 @@ def run_trading_system():
     initial_capital = 1050.0
     engine = TradingEngine(initial_capital_usd=initial_capital)
     
-    # Instantiate the strategy
-    strategy = BTCLiteStrategy()
+    # Instantiate the strategy - Using AccumulatorStrategy (V15 - BTC Maximizer)
+    strategy = AccumulatorStrategy()
     
     # O backtester roda APENAS no DataFrame de teste (post-split)
     backtest_results = engine.run(simulation_df, strategy=strategy) 
