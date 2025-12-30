@@ -78,9 +78,10 @@ class BTCLiteStrategy(BaseStrategy):
                 logger.info(
                     f"FLYWHEEL: Reserve Full. Converted ${usd_surplus:.2f} profit to BTC."
                 )
-        elif usd_surplus < 0:
+        elif usd_surplus < -0.20 * target_reserve:
+            # Only log if deficit is critical (> 20% of target reserve)
             logger.info(
-                f"FLYWHEEL: Refilling Reserve. Target=${target_reserve:.2f}, Current=${engine.usd_balance:.2f}."
+                f"FLYWHEEL: Critical Reserve Deficit. Target=${target_reserve:.2f}, Current=${engine.usd_balance:.2f}."
             )
 
         return usd_surplus

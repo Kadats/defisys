@@ -85,6 +85,16 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# 2 years ago from Nov 2025 ≈ June 2023: tests on 2023-2025 recovery period
 	TRAIN_TEST_SPLIT_DATE: str = "2023-06-01"
 
+	# Machine Learning Configuration
+	# Hard cut for Walk-Forward validation - train before, test after
+	ML_TRAIN_SPLIT_DATE: str = "2025-01-01"
+	# Minimum probability threshold to trigger a buy signal (65%)
+	ML_CONFIDENCE_THRESHOLD: float = 0.65
+	# Price must rise by at least 4% to be considered a positive target (swing trade)
+	ML_TARGET_MIN_CHANGE: float = 0.04
+	# Number of candles ahead to look for the target move (30 candles = 5 days for 4h candles)
+	ML_PREDICTION_HORIZON: int = 30
+
 	# Multi-pool and entry sizing
 	# Maximum number of concurrently active LPs
 	MAX_ACTIVE_LPS: int = 4
@@ -145,6 +155,12 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.TARGET_RESERVE_RATIO = float(os.environ.get('TARGET_RESERVE_RATIO', 0.20))
 			self.MIN_HARVEST_USD = float(os.environ.get('MIN_HARVEST_USD', 15.0))
 			self.MAX_DEBT_RATIO = float(os.environ.get('MAX_DEBT_RATIO', 0.45))
+			
+			# Machine Learning Configuration
+			self.ML_TRAIN_SPLIT_DATE = os.environ.get('ML_TRAIN_SPLIT_DATE', '2025-01-01')
+			self.ML_CONFIDENCE_THRESHOLD = float(os.environ.get('ML_CONFIDENCE_THRESHOLD', 0.65))
+			self.ML_TARGET_MIN_CHANGE = float(os.environ.get('ML_TARGET_MIN_CHANGE', 0.04))
+			self.ML_PREDICTION_HORIZON = int(os.environ.get('ML_PREDICTION_HORIZON', 30))
 
 
 # Instantiate settings for module-level import
@@ -180,6 +196,12 @@ SAFE_HF_AFTER_BORROW = _settings.SAFE_HF_AFTER_BORROW
 
 # Walk-Forward Validation split date
 TRAIN_TEST_SPLIT_DATE = _settings.TRAIN_TEST_SPLIT_DATE
+
+# Machine Learning Configuration
+ML_TRAIN_SPLIT_DATE = _settings.ML_TRAIN_SPLIT_DATE
+ML_CONFIDENCE_THRESHOLD = _settings.ML_CONFIDENCE_THRESHOLD
+ML_TARGET_MIN_CHANGE = _settings.ML_TARGET_MIN_CHANGE
+ML_PREDICTION_HORIZON = _settings.ML_PREDICTION_HORIZON
 
 # New exports for The Graph multi-subgraph support
 THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS
