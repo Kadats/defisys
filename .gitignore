@@ -22,7 +22,6 @@ Thumbs.db
 
 # Arquivos de ambiente e segredos
 .env
-.env.*
 
 # Artefatos de teste
 .pytest_cache/

@@ -1,15 +1,12 @@
 import pandas as pd
 import logging
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
-from datetime import datetime
+from xgboost import XGBClassifier
 
 from backend.src.config import (
     ML_TRAIN_SPLIT_DATE,
-    ML_CONFIDENCE_THRESHOLD,
-    ML_TARGET_MIN_CHANGE,
-    ML_PREDICTION_HORIZON
+    ML_CONFIDENCE_THRESHOLD
 )
 
 logger = logging.getLogger(__name__)
@@ -19,23 +16,15 @@ logger = logging.getLogger(__name__)
 # Nós usamos as features que criamos e coletamos.
 FEATURES = [
     'RSI',
-    'FNG_Value',
-    'dist_from_sma_50',
-    'dist_from_sma_200',
-    'Implied_Volatility',
+    'dist_from_ema_50',
+    'BB_Width',
     'FundingRate',
     'OpenInterest',
-    'VolumeUSD',
-    'MACD', 
-    'MACD_Histogram', # Ajuda a ver a virada de tendência
-    'ATR',            # Volatilidade absoluta
-    'BB_Position',    # Preço relativo às bandas (sobrecompra/venda)
-    'Stoch_K',        # Momentum rápido
-    'OBV'             # Fluxo de volume acumulado
+    'VolumeUSD'
 ]
 
 # A coluna que queremos prever
-TARGET = 'target_price_rise'
+TARGET = 'Target_Trend'
 
 def train_prediction_model(df: pd.DataFrame, train_test_split_date: str = None):
     """
@@ -53,26 +42,22 @@ def train_prediction_model(df: pd.DataFrame, train_test_split_date: str = None):
     if train_test_split_date is None:
         train_test_split_date = ML_TRAIN_SPLIT_DATE
     
-    logger.info(f"Iniciando treinamento do modelo de predição com Split Temporal...")
-    logger.info(f"Configuração ML: Horizon={ML_PREDICTION_HORIZON} candles, Min Change={ML_TARGET_MIN_CHANGE*100}%, Confidence Threshold={ML_CONFIDENCE_THRESHOLD*100}%")
+    logger.info("Iniciando treinamento do modelo de predição com Split Temporal...")
+    logger.info(f"Configuração ML: Target={TARGET}, Confidence Threshold={ML_CONFIDENCE_THRESHOLD*100}%")
     
     try:
-        # NOVO: Recalcular o target com base em mudanças significativas de preço
-        # Calcular o preço futuro ML_PREDICTION_HORIZON candles à frente
-        df['Future_Close'] = df['Close'].shift(-ML_PREDICTION_HORIZON)
-        
-        # Calcular a variação percentual
-        df['Pct_Change_Forward'] = (df['Future_Close'] - df['Close']) / df['Close']
-        
-        # Target: 1 se a mudança for maior que ML_TARGET_MIN_CHANGE, senão 0
-        df[TARGET] = (df['Pct_Change_Forward'] > ML_TARGET_MIN_CHANGE).astype(int)
-        
-        # Remover linhas onde não temos o target (últimos ML_PREDICTION_HORIZON candles)
-        df_with_target = df.dropna(subset=[TARGET]).copy()
-        
+        if TARGET not in df.columns:
+            logger.error(f"Target column '{TARGET}' not found in DataFrame. Ensure pipeline creates it.")
+            return None, None
+
+        df_with_target = df.dropna(subset=FEATURES + [TARGET]).copy()
+
         positive_samples = df_with_target[TARGET].sum()
         total_samples = len(df_with_target)
-        logger.info(f"Target recalculado: {positive_samples}/{total_samples} ({positive_samples/total_samples*100:.1f}%) amostras positivas (mudança > {ML_TARGET_MIN_CHANGE*100}% em {ML_PREDICTION_HORIZON} candles)")
+        if total_samples > 0:
+            logger.info(
+                f"Target disponível: {positive_samples}/{total_samples} ({positive_samples/total_samples*100:.1f}%) amostras positivas"
+            )
         
         # Converter a data para datetime se for string
         if isinstance(train_test_split_date, str):
@@ -102,24 +87,35 @@ def train_prediction_model(df: pd.DataFrame, train_test_split_date: str = None):
             logger.warning(f"Nenhum dado de teste encontrado a partir de {train_test_split_date}")
         
         # 2. Normalização (Scaling)
-        # Modelos de ML funcionam melhor quando todos os números estão na mesma escala
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
         
-        # 3. Treinamento do Modelo
-        # Regressão Logística é um modelo simples, rápido e ótimo para começar.
-        model = LogisticRegression(random_state=42)
+        # 3. Treinamento do Modelo (XGBoost)
+        # Ajuste de desbalanceamento
+        pos_count = int(y_train.sum())
+        neg_count = int(len(y_train) - pos_count)
+        scale_pos_weight = (neg_count / pos_count) if pos_count > 0 else 1.0
+
+        model = XGBClassifier(
+            n_estimators=100,
+            max_depth=5,
+            learning_rate=0.05,
+            scale_pos_weight=scale_pos_weight,
+            random_state=42,
+            eval_metric="logloss",
+            use_label_encoder=False
+        )
         model.fit(X_train_scaled, y_train)
         
         # 4. Avaliação (Nosso "Boletim")
         y_pred = model.predict(X_test_scaled)
         accuracy = accuracy_score(y_test, y_pred)
         
-        logger.info(f"--- Relatório de Treinamento do Modelo (Walk-Forward) ---")
-        logger.info(f"Modelo: Regressão Logística")
+        logger.info("--- Relatório de Treinamento do Modelo (Walk-Forward) ---")
+        logger.info("Modelo: XGBClassifier")
         logger.info(f"Features Usadas: {FEATURES}")
-        logger.info(f"Alvo: {TARGET} (Subida > {ML_TARGET_MIN_CHANGE*100}% em {ML_PREDICTION_HORIZON} candles - Tendências Significativas)")
+        logger.info(f"Alvo: {TARGET} (tendência log-retorno > 2% em 12 candles)")
         logger.info(f"")
         logger.info(f"TREINO (dados históricos):")
         logger.info(f"  Período: {df_with_target.loc[train_mask, 'Open_time'].min().strftime('%Y-%m-%d')} até {df_with_target.loc[train_mask, 'Open_time'].max().strftime('%Y-%m-%d')}")
@@ -130,7 +126,17 @@ def train_prediction_model(df: pd.DataFrame, train_test_split_date: str = None):
         logger.info(f"  Amostras: {test_count} velas")
         logger.info(f"  Acurácia no Set de Teste: {accuracy * 100:.2f}%")
         
-        # 5. Retorna o modelo treinado e o scaler (para usar em dados novos)
+        # 5. Feature importance
+        try:
+            importances = model.feature_importances_
+            ranked = sorted(zip(FEATURES, importances), key=lambda x: x[1], reverse=True)
+            logger.info("Feature Importance (desc):")
+            for feature, importance in ranked:
+                logger.info(f"  {feature}: {importance:.4f}")
+        except Exception as e:
+            logger.warning(f"Falha ao logar feature importance: {e}")
+
+        # 6. Retorna o modelo treinado e o scaler (para usar em dados novos)
         return model, scaler
 
     except Exception as e:

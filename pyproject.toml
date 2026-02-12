@@ -23,6 +23,7 @@ plotly = "^6.3.0"
 scikit-learn = "^1.7.2"
 psycopg2-binary = "^2.9.9"
 sqlalchemy = "^2.0.23"
+xgboost = "^2.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.2"

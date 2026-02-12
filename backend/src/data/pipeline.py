@@ -8,6 +8,7 @@ API sources through storage to indicator calculation.
 import logging
 import warnings
 import pandas as pd
+import numpy as np
 
 # Suppress pandas SQLAlchemy warnings about using psycopg2 directly
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
@@ -146,39 +147,20 @@ def get_full_prepared_data() -> pd.DataFrame:
     
     logger.info(f"Klines DataFrame loaded with {len(all_klines_df)} klines for calculation.")
     
-    # Calculate all technical indicators
-    # 1. Trend indicators
-    all_klines_df['SMA_20'] = indicators.calculate_sma(all_klines_df, column='Close', window=20)
-    all_klines_df['SMA_50'] = indicators.calculate_sma(all_klines_df, column='Close', window=50)
-    all_klines_df['SMA_200'] = indicators.calculate_sma(all_klines_df, column='Close', window=200)
-    all_klines_df['EMA_20'] = indicators.calculate_ema(all_klines_df, column='Close', window=20)
-    
-    macd_df = indicators.calculate_macd(all_klines_df, column='Close')
-    all_klines_df['MACD'] = macd_df['MACD']
-    all_klines_df['MACD_Signal'] = macd_df['MACD_Signal']
-    all_klines_df['MACD_Histogram'] = macd_df['MACD_Histogram']
-    
-    # 2. Volatility indicators
-    all_klines_df['ATR'] = indicators.calculate_atr(all_klines_df, window=14)
-    
+    # Calculate minimal indicator set (feature selection)
+    # 1. Momentum
+    all_klines_df['RSI'] = indicators.calculate_rsi(all_klines_df, column='Close', window=14)
+
+    # 2. Trend (EMA50 distance)
+    all_klines_df['EMA_50'] = indicators.calculate_ema(all_klines_df, column='Close', window=50)
+
+    # 3. Volatility (Bollinger Band Width)
     bb_df = indicators.calculate_bollinger_bands(all_klines_df, column='Close', window=20)
+    all_klines_df['BB_Middle'] = bb_df['BB_Middle']
     all_klines_df['BB_Upper'] = bb_df['BB_Upper']
     all_klines_df['BB_Lower'] = bb_df['BB_Lower']
-    bb_range = (all_klines_df['BB_Upper'] - all_klines_df['BB_Lower']).replace(0, 1)
-    all_klines_df['BB_Position'] = (all_klines_df['Close'] - all_klines_df['BB_Lower']) / bb_range
-    
-    # 3. Momentum indicators
-    all_klines_df['RSI'] = indicators.calculate_rsi(all_klines_df, column='Close', window=14)
-    
-    stoch_df = indicators.calculate_stochastic_oscillator(all_klines_df)
-    all_klines_df['Stoch_K'] = stoch_df['Stoch_K']
-    all_klines_df['Stoch_D'] = stoch_df['Stoch_D']
-    
-    # 4. Volume indicators
-    all_klines_df['OBV'] = indicators.calculate_obv(all_klines_df)
-    
-    # Clean initial NaNs from indicators (first 200 days for SMA_200)
-    all_klines_df.dropna(inplace=True)
+    bb_middle_safe = all_klines_df['BB_Middle'].replace(0, np.nan)
+    all_klines_df['BB_Width'] = (all_klines_df['BB_Upper'] - all_klines_df['BB_Lower']) / bb_middle_safe
     
     # ===== PHASE 3: MERGE AUXILIARY DATA SOURCES =====
     # Load auxiliary data
@@ -197,8 +179,6 @@ def get_full_prepared_data() -> pd.DataFrame:
     finally:
         conn.close()
     
-    fng_df = storage.get_fng_data_from_db(fng_table_name)
-    iv_df = storage.get_implied_volatility_data_from_db(implied_vol_table_name)
     uniswap_df = storage.get_uniswap_pool_data_from_db(uniswap_table_name)
     
     # Merge Sentiment (Funding + OI)
@@ -236,94 +216,53 @@ def get_full_prepared_data() -> pd.DataFrame:
             
             if 'Date' in all_klines_df.columns:
                 all_klines_df.drop(columns=['Date'], inplace=True)
-    
-    # Merge Fear & Greed
-    if not fng_df.empty:
-        fng_df['Date'] = fng_df['Timestamp'].dt.date
-        daily_fng = fng_df.groupby('Date').last().reset_index()[['Date', 'Value']]
-        daily_fng.rename(columns={'Value': 'FNG_Value'}, inplace=True)
-        
-        all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
-        all_klines_df = pd.merge(all_klines_df, daily_fng, on='Date', how='left')
-        
-        all_klines_df['FNG_Value'] = all_klines_df['FNG_Value'].ffill().bfill()
-        
-        if 'Date' in all_klines_df.columns:
-            all_klines_df.drop(columns=['Date'], inplace=True)
     else:
-        logger.warning("No F&G data available; 'FNG_Value' will be neutral (50).")
-        all_klines_df['FNG_Value'] = 50.0
+        logger.warning("No funding/open interest data available; filling FundingRate/OpenInterest with 0.")
+        all_klines_df['FundingRate'] = 0.0
+        all_klines_df['OpenInterest'] = 0.0
+
+    # Ensure FundingRate/OpenInterest exist even if merge produced partial columns
+    if 'FundingRate' not in all_klines_df.columns:
+        all_klines_df['FundingRate'] = 0.0
+    if 'OpenInterest' not in all_klines_df.columns:
+        all_klines_df['OpenInterest'] = 0.0
     
-    # Merge Implied Volatility
-    if not iv_df.empty:
-        iv_df['Date'] = iv_df['Timestamp'].dt.date
-        daily_iv = iv_df.groupby('Date').last().reset_index()[['Date', 'Volatility']]
-        daily_iv.rename(columns={'Volatility': 'Implied_Volatility'}, inplace=True)
-        all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
-        all_klines_df = pd.merge(all_klines_df, daily_iv, on='Date', how='left')
-        all_klines_df['Implied_Volatility'] = all_klines_df['Implied_Volatility'].ffill().bfill()
-        if 'Date' in all_klines_df.columns:
-            all_klines_df.drop(columns=['Date'], inplace=True)
-    else:
-        logger.warning("No Implied Volatility data available; will use ATR fallback.")
-    
-    # Merge Uniswap Pool Data
+    # Merge Uniswap Pool Data (VolumeUSD only) with safe fallback
     if not uniswap_df.empty:
-        uniswap_df['Date'] = uniswap_df['Timestamp'].dt.date
-        daily_uniswap = uniswap_df.groupby('Date').last().reset_index()[['Date', 'VolumeUSD', 'TVL_USD']]
-        all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
-        all_klines_df = pd.merge(all_klines_df, daily_uniswap, on='Date', how='left')
-        all_klines_df['VolumeUSD'] = all_klines_df['VolumeUSD'].ffill().bfill()
-        all_klines_df['TVL_USD'] = all_klines_df['TVL_USD'].ffill().bfill()
-        if 'Date' in all_klines_df.columns:
-            all_klines_df.drop(columns=['Date'], inplace=True)
+        try:
+            if 'VolumeUSD' not in uniswap_df.columns:
+                logger.warning("Uniswap data missing 'VolumeUSD'. Filling with 0.")
+                uniswap_df['VolumeUSD'] = 0.0
+
+            uniswap_df['Date'] = uniswap_df['Timestamp'].dt.date
+            daily_uniswap = uniswap_df.groupby('Date').last().reset_index()[['Date', 'VolumeUSD']]
+            all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
+            all_klines_df = pd.merge(all_klines_df, daily_uniswap, on='Date', how='left')
+            all_klines_df['VolumeUSD'] = all_klines_df['VolumeUSD'].ffill().bfill()
+            if 'Date' in all_klines_df.columns:
+                all_klines_df.drop(columns=['Date'], inplace=True)
+        except Exception as e:
+            logger.warning(f"Failed to merge Uniswap data: {e}. Filling VolumeUSD with 0.")
+            all_klines_df['VolumeUSD'] = 0.0
     else:
-        logger.warning("No Uniswap data available; Opportunity will use volume fallback.")
-    
-    # Calculate composite scores
-    try:
-        all_klines_df['Volatilidade_Score'] = indicators.calculate_composite_volatility(
-            all_klines_df, iv_col='Implied_Volatility', atr_col='ATR'
-        )
-        all_klines_df['Oportunidade_Score'] = indicators.calculate_composite_opportunity(
-            all_klines_df, volume_onchain_col='VolumeUSD', tvl_col='TVL_USD'
-        )
-    except Exception as e:
-        logger.warning(f"Could not calculate composite scores: {e}. Using fallback.")
-        all_klines_df['Volatilidade_Score'] = 0.5
-        all_klines_df['Oportunidade_Score'] = 0.5
-    
-    if 'Sentimento_Score' not in all_klines_df.columns:
-        logger.warning("Sentiment Score could not be calculated...")
-        all_klines_df['Sentimento_Score'] = 0.5
-    
-    all_klines_df.fillna({
-        'Sentimento_Score': 0.5,
-        'Volatilidade_Score': 0.5,
-        'Oportunidade_Score': 0.5
-    }, inplace=True)
+        logger.warning("No Uniswap data available; setting VolumeUSD to 0.")
+        all_klines_df['VolumeUSD'] = 0.0
     
     # ===== PHASE 4: ML DATA PREPARATION =====
     try:
         # 1. Feature Engineering
-        all_klines_df['dist_from_sma_50'] = (all_klines_df['Close'] - all_klines_df['SMA_50']) / all_klines_df['SMA_50']
-        all_klines_df['dist_from_sma_200'] = (all_klines_df['Close'] - all_klines_df['SMA_200']) / all_klines_df['SMA_200']
-        
-        # 2. Create Target (predict RISE for bullish opportunities)
-        future_price = all_klines_df['Close'].shift(-PREDICTION_HORIZON_DAYS)
-        percent_change = (future_price - all_klines_df['Close']) / all_klines_df['Close']
-        all_klines_df['target_price_rise'] = (percent_change >= PREDICTION_RISE_THRESHOLD).astype(int)
-        
-        # 3. Ensure FNG_Value exists
-        if 'FNG_Value' not in all_klines_df.columns:
-            logger.warning("Column 'FNG_Value' not found after merge. Filling with 50.")
-            all_klines_df['FNG_Value'] = 50.0
-        
-        # 4. Clean data
+        all_klines_df['dist_from_ema_50'] = (all_klines_df['Close'] - all_klines_df['EMA_50']) / all_klines_df['EMA_50']
+
+        # 2. Create Target (trend over next 12 candles / 48h)
+        future_close = all_klines_df['Close'].shift(-12)
+        log_return = np.log(future_close / all_klines_df['Close'])
+        all_klines_df['Target_Trend'] = (log_return > 0.02).astype(int)
+
+        # 3. Clean data
         REQUIRED_COLUMNS = [
-            'SMA_50', 'RSI', 'FNG_Value', 'dist_from_sma_50', 'dist_from_sma_200', 'target_price_rise',
-            'Implied_Volatility', 'FundingRate', 'OpenInterest', 'VolumeUSD',
-            'MACD', 'MACD_Histogram', 'ATR', 'BB_Position', 'Stoch_K', 'OBV'
+            'RSI', 'dist_from_ema_50', 'BB_Width',
+            'FundingRate', 'OpenInterest', 'VolumeUSD',
+            'Target_Trend'
         ]
         
         # Only keep columns that exist
