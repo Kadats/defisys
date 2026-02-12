@@ -46,3 +46,6 @@ backend/logs/
 # Local Files
 database/
 assets/
+
+# Frontend
+frontend/node_modules/
