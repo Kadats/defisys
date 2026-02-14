@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 import logging
 import pandas as pd
 import numpy as np
@@ -11,6 +13,7 @@ from backend.src.data import storage
 from backend.src.data.storage import get_data_from_db
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db
 from backend.src.system_runner import run_trading_system
+from backend.src.services.analytics import get_simulation_results
 from backend.src.utils.analytics import calculate_yearly_metrics
 from backend.src.utils.log_handler import WebSocketHandler
 from backend.src.utils.ws_manager import manager
@@ -118,6 +121,32 @@ async def websocket_logs(websocket: WebSocket):
     except Exception as e:
         manager.disconnect(websocket)
         logger.exception("WebSocket error on /ws/logs: %s", e)
+
+
+@app.get(
+    "/api/simulation",
+    tags=["Simulation"],
+    summary="Get Simulation Results",
+    description="Returns simulation KPIs and trade history based on positions_log."
+)
+def get_simulation():
+    try:
+        results = get_simulation_results()
+        return sanitize_for_json(results)
+    except Exception as e:
+        logger.exception("Erro ao buscar simulation results: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/simulation/run",
+    tags=["Simulation"],
+    summary="Run Simulation",
+    description="Triggers the trading system to run without blocking the API."
+)
+async def run_simulation():
+    asyncio.create_task(run_in_threadpool(run_trading_system))
+    return {"status": "started"}
 
 @app.get(
     "/api/v1/summary",

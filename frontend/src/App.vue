@@ -9,6 +9,9 @@
         <RouterLink class="block rounded px-2 py-1 hover:bg-slate-800" to="/logs">
           Logs
         </RouterLink>
+        <RouterLink class="block rounded px-2 py-1 hover:bg-slate-800" to="/simulation">
+          Simulação
+      </RouterLink>
       </nav>
     </aside>
 
