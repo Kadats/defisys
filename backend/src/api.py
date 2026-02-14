@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 import pandas as pd
 import numpy as np
@@ -6,17 +7,42 @@ from datetime import datetime
 from decimal import Decimal
 
 # Imports internos
+from backend.src.data import storage
 from backend.src.data.storage import get_data_from_db
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db
 from backend.src.system_runner import run_trading_system
 from backend.src.utils.analytics import calculate_yearly_metrics
+from backend.src.utils.log_handler import WebSocketHandler
+from backend.src.utils.ws_manager import manager
 from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="DefiSys API")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:8501"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
 # Cache simples em memória para não rodar backtest a cada F5
 _SUMMARY_CACHE = {}
+
+
+@app.on_event("startup")
+def setup_websocket_logging() -> None:
+    root_logger = logging.getLogger()
+    if any(isinstance(handler, WebSocketHandler) for handler in root_logger.handlers):
+        return
+
+    handler = WebSocketHandler()
+    handler.setLevel(root_logger.level or logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    )
+    root_logger.addHandler(handler)
 
 def sanitize_for_json(obj):
     """Converte Decimals e NaNs para formatos aceitos em JSON"""
@@ -43,6 +69,55 @@ def sanitize_df_for_json(df: pd.DataFrame) -> list:
     records = df.to_dict(orient='records')
     # Sanitiza recursivamente (para pegar Decimals dentro das linhas)
     return sanitize_for_json(records)
+
+
+@app.get(
+    "/api/history",
+    tags=["Market Data"],
+    summary="Get Klines History",
+    description="Returns OHLCV candles for charting from btcusdt_4h_klines."
+)
+def get_history():
+    conn = None
+    try:
+        conn = storage.create_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+
+        query = (
+            "SELECT open_time AS time, open, high, low, close, volume "
+            "FROM btcusdt_4h_klines ORDER BY open_time ASC"
+        )
+        df = pd.read_sql(query, conn)
+        if df.empty:
+            return []
+
+        df["time"] = pd.to_datetime(df["time"], unit="ms")
+        return sanitize_for_json(df.to_dict(orient="records"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Erro ao buscar history: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.websocket("/ws/logs")
+async def websocket_logs(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        manager.disconnect(websocket)
+        logger.exception("WebSocket error on /ws/logs: %s", e)
 
 @app.get(
     "/api/v1/summary",

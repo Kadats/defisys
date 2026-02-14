@@ -35,12 +35,16 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile
+      context: ./frontend
+      dockerfile: Dockerfile
     ports:
-      - "8501:8501"
+      - "5173:5173"
     environment:
       - API_BASE_URL=http://backend:8000/api/v1
+    volumes:
+      - ./frontend:/app
     depends_on:
       - backend
+    stdin_open: true
+    tty: true
     restart: always
