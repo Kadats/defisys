@@ -211,21 +211,22 @@ class AccumulatorStrategy(BaseStrategy):
             projected_hf = (collateral_value * 0.80) / projected_debt if projected_debt > 0 else 999.0
             
             if projected_hf >= SAFE_HF_AFTER_BORROW:
-                engine.total_debt_usd += max_borrow
-                engine.usd_balance += max_borrow
+                borrowed_amount = engine.borrow_funds(max_borrow, current_price)
+                if borrowed_amount <= 0:
+                    return
                 logger.info(
-                    f"[{timestamp.date()}] LEVERAGE: Borrowed ${max_borrow:.2f} "
+                    f"[{timestamp.date()}] LEVERAGE: Borrowed ${borrowed_amount:.2f} "
                     f"(Projected HF: {projected_hf:.2f})"
                 )
                 
                 # Step 3: Use half of borrowed funds to buy more BTC
-                btc_buy_amount = max_borrow * 0.50
+                btc_buy_amount = borrowed_amount * 0.50
                 if btc_buy_amount > 10:
                     engine.buy_and_hodl(btc_buy_amount, current_price, timestamp)
                     logger.info(f"[{timestamp.date()}] Bought more BTC with ${btc_buy_amount:.2f} borrowed USDT")
                 
                 # Step 4: Open single-sided BTC LP with the other half
-                lp_capital = max_borrow * 0.50
+                lp_capital = borrowed_amount * 0.50
                 if lp_capital > 10:
                     # Single-sided LP range: current price to 5% above
                     range_lower = current_price
