@@ -6,7 +6,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from backend.src.data.storage import log_open_position, log_close_position
-from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD
+from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT
 from ..utils.math import calculate_lp_value, calculate_liquidity_l
 from .risk_manager import RiskManager
 
@@ -121,7 +121,8 @@ class TradingEngine:
             logger.warning("Capital insuficiente para comprar HODL.")
             return
             
-        btc_bought = amount_usd / current_btc_price
+        effective_price = current_btc_price * (1 + SLIPPAGE_PCT)
+        btc_bought = amount_usd / effective_price
         self.usd_balance -= amount_usd
         self.btc_hodl_balance += btc_bought
         
@@ -129,14 +130,14 @@ class TradingEngine:
         self._log_transaction(
             timestamp=timestamp,
             action_type="BUY_HODL",
-            btc_price=current_btc_price,
+            btc_price=effective_price,
             usd_amount=amount_usd,
             btc_amount=btc_bought,
             fee_usd=SIMULATED_GAS_FEE_USD,
             details=""
         )
         
-        self.decision_history.append(f"HODL BUY: {btc_bought:.6f} BTC @ ${current_btc_price}")
+        self.decision_history.append(f"HODL BUY: {btc_bought:.6f} BTC @ ${effective_price}")
 
     def add_collateral(self, btc_amount: float):
         """Adiciona BTC ao balanço de colateral HODL."""
@@ -161,11 +162,12 @@ class TradingEngine:
 
         # Calculate liquidity L and initial amounts using Uniswap V3 math
         # Convert all inputs to Decimal for precision
+        effective_price = current_btc_price * (1 + SLIPPAGE_PCT)
         L, amount_btc, amount_usdt = calculate_liquidity_l(
             capital_usd=Decimal(str(capital_usd)),
             range_lower=Decimal(str(range_lower)),
             range_upper=Decimal(str(range_upper)),
-            current_price=Decimal(str(current_btc_price))
+            current_price=Decimal(str(effective_price))
         )
         
         # Check for invalid liquidity calculation
@@ -175,7 +177,7 @@ class TradingEngine:
         new_lp = {
             "L": float(L), "range_lower": float(range_lower),
             "range_upper": float(range_upper), "open_timestamp": timestamp,
-            "entry_price": current_btc_price, "initial_capital_usd": capital_usd,
+            "entry_price": effective_price, "initial_capital_usd": capital_usd,
             "fees_accrued_usdt": 0.0, "fees_accrued_btc": 0.0,
             "initial_amount_btc": float(amount_btc), "initial_amount_usdt": float(amount_usdt),
             "days_out_of_range": 0 
@@ -185,7 +187,7 @@ class TradingEngine:
             open_timestamp=int(timestamp.value / 10**6), # Converter para ms
             strategy=strategy,
             capital_usd=capital_usd,
-            open_price=current_btc_price,
+            open_price=effective_price,
             range_lower=range_lower,
             range_upper=range_upper
         )
@@ -203,7 +205,7 @@ class TradingEngine:
         self._log_transaction(
             timestamp=timestamp,
             action_type="OPEN_LP",
-            btc_price=current_btc_price,
+            btc_price=effective_price,
             usd_amount=capital_usd,
             btc_amount=float(amount_btc),
             fee_usd=SIMULATED_GAS_FEE_USD,
@@ -211,7 +213,7 @@ class TradingEngine:
         )
         
         self.decision_history.append(
-            f"[{timestamp.date()}] OPEN LP (ID: {position_id}): ${capital_usd:.2f} @ ${current_btc_price:.2f} | "
+            f"[{timestamp.date()}] OPEN LP (ID: {position_id}): ${capital_usd:.2f} @ ${effective_price:.2f} | "
             f"Range: ${range_lower:.2f}-${range_upper:.2f} | Strategy: {strategy}"
         )
 
@@ -242,10 +244,11 @@ class TradingEngine:
         # normal reserve semantics are enforced elsewhere in the engine.
         self.usd_balance -= SIMULATED_GAS_FEE_USD
 
-        asset_value, _, _ = self._get_lp_value(lp_to_close, current_btc_price)
+        effective_price = current_btc_price * (1 - SLIPPAGE_PCT)
+        asset_value, _, _ = self._get_lp_value(lp_to_close, effective_price)
         # Convert Decimal results to float for compatibility
         asset_value = float(asset_value)
-        fees_value = lp_to_close['fees_accrued_usdt'] + (lp_to_close['fees_accrued_btc'] * current_btc_price)
+        fees_value = lp_to_close['fees_accrued_usdt'] + (lp_to_close['fees_accrued_btc'] * effective_price)
         final_value = asset_value + fees_value
 
         final_profit = final_value - lp_to_close['initial_capital_usd']
@@ -253,7 +256,7 @@ class TradingEngine:
         log_close_position(
             position_id=lp_id,
             close_timestamp=int(timestamp.value / 10**6), # Converter para ms
-            close_price=current_btc_price,
+            close_price=effective_price,
             final_profit=final_profit
         )
 
@@ -264,7 +267,7 @@ class TradingEngine:
         self._log_transaction(
             timestamp=timestamp,
             action_type="CLOSE_LP",
-            btc_price=current_btc_price,
+            btc_price=effective_price,
             usd_amount=final_value,
             btc_amount=0.0,
             fee_usd=SIMULATED_GAS_FEE_USD,
@@ -273,7 +276,7 @@ class TradingEngine:
         )
         
         self.decision_history.append(
-            f"[{timestamp.date()}] CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${current_btc_price:.2f} "
+            f"[{timestamp.date()}] CLOSE LP {lp_id}: Valor retornado ${final_value:.2f} @ ${effective_price:.2f} "
             f"(Lucro/Prejuízo da LP: ${final_profit:.2f})"
         )
         return True
@@ -553,6 +556,9 @@ class TradingEngine:
         final_btc_price = df.iloc[-1]['Close']
         
         for index, row in df.iterrows():
+            if self.usd_balance <= 0:
+                logger.warning("Bankruptcy Triggered")
+                break
             if self.is_liquidated:
                 self.portfolio_history.append(0.0)
                 continue

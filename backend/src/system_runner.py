@@ -8,6 +8,7 @@ from .strategies import BTCLiteStrategy, AccumulatorStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE
 from .ai import train_prediction_model, get_predictions
 from backend.src.data.storage import save_predictions_to_db
+from backend.src.data import storage
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ def log_summary_report(results, latest_indicators=None):
 
 
 def run_trading_system():
+    # 1. LIMPEZA ANTES DE COMEÇAR
+    storage.clear_simulation_data()
     """
     Orquestra o fluxo de alto nivel: Dados -> Modelo de ML -> Backtest.
     Implementa Walk-Forward: treina em passado distante, testa em passado recente.

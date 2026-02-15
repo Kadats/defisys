@@ -813,3 +813,20 @@ def save_predictions_to_db(df: pd.DataFrame):
     finally:
         if conn:
             conn.close()
+
+
+# ==================== SIMULATION ====================
+def clear_simulation_data():
+    """Limpa as tabelas de simulação para evitar dados duplicados."""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Apaga todos os registros de logs de posição
+            cursor.execute("DELETE FROM positions_log")
+            conn.commit()
+            print("🧹 Dados de simulação anteriores limpos com sucesso.")
+        except Exception as e:
+            print(f"Erro ao limpar dados: {e}")
+        finally:
+            conn.close()
