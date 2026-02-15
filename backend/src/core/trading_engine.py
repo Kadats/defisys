@@ -111,22 +111,34 @@ class TradingEngine:
         if timestamp is None:
             timestamp = pd.Timestamp.now()
             
-        # Charge gas for on-chain buy operation
+        # 1. BLINDAGEM: Nunca gastar mais do que tem
+        # Se o saldo for menor que a taxa, aborta.
         if self.usd_balance < SIMULATED_GAS_FEE_USD:
-            logger.error("Insufficient USD to pay gas for buy_and_hodl. Aborting operation.")
+            # logger.warning("Saldo insuficiente para cobrir Gas. Operação cancelada.")
             return
+
+        # 2. BLINDAGEM: Ajusta o valor da compra ao saldo real disponível
+        # Se a estratégia pediu $1 milhão, mas só tem $10, gasta só $10 (menos a taxa)
+        actual_available = self.usd_balance - SIMULATED_GAS_FEE_USD
+        if amount_usd > actual_available:
+            # Opcional: Logar que houve corte no pedido
+            amount_usd = actual_available
+
+        if amount_usd <= 0:
+            return
+
+        # Cobra a taxa
         self.usd_balance -= SIMULATED_GAS_FEE_USD
 
-        if self.usd_balance < amount_usd:
-            logger.warning("Capital insuficiente para comprar HODL.")
-            return
-            
+        # Executa a compra
         effective_price = current_btc_price * (1 + SLIPPAGE_PCT)
         btc_bought = amount_usd / effective_price
+        
+        # Deduz do saldo (que agora garantimos ser positivo)
         self.usd_balance -= amount_usd
         self.btc_hodl_balance += btc_bought
         
-        # V13: Log transaction
+        # Log...
         self._log_transaction(
             timestamp=timestamp,
             action_type="BUY_HODL",
