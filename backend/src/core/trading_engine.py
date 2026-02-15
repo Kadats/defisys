@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import math
@@ -37,6 +38,12 @@ class TradingEngine:
         self._reserve_critical_active = False
         # Emergency cooldown: timestamp until which emergency-close attempts are suppressed
         self._emergency_cooldown_until = None
+
+        self._audit_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..", "audit.csv")
+        )
+        with open(self._audit_path, "w", encoding="utf-8") as audit_file:
+            audit_file.write("Timestamp,Action,BTC_Price,USD_Balance,Total_Debt,BTC_Hodl,Net_Worth,Health_Factor\n")
         
         # Initialize Risk Manager
         self.risk_manager = RiskManager(
@@ -73,6 +80,44 @@ class TradingEngine:
             "details": details
         }
         self.transaction_log.append(transaction)
+
+        collateral_value = self.btc_hodl_balance * btc_price
+        net_worth = self._calculate_portfolio_value(btc_price)
+        if self.total_debt_usd > 0:
+            health_factor = self.risk_manager.calculate_health_factor(collateral_value, self.total_debt_usd)
+        else:
+            health_factor = 999.0
+
+        ts_value = timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp)
+        with open(self._audit_path, "a", encoding="utf-8") as audit_file:
+            audit_file.write(
+                f"{ts_value},{action_type},{btc_price:.8f},{self.usd_balance:.8f},{self.total_debt_usd:.8f},"
+                f"{self.btc_hodl_balance:.8f},{net_worth:.8f},{health_factor:.8f}\n"
+            )
+
+    def borrow_funds(self, amount: float, current_btc_price: float) -> float:
+        if amount <= 0:
+            return 0.0
+        if self.usd_balance < 0:
+            return 0.0
+
+        net_worth = self._calculate_portfolio_value(current_btc_price)
+        if net_worth < (self.total_debt_usd * 0.10):
+            return 0.0
+
+        self.total_debt_usd += amount
+        self.usd_balance += amount
+
+        self._log_transaction(
+            timestamp=pd.Timestamp.now(),
+            action_type="BORROW",
+            btc_price=current_btc_price,
+            usd_amount=amount,
+            btc_amount=0.0,
+            fee_usd=0.0,
+            details=""
+        )
+        return amount
 
     def _get_lp_value(self, lp: dict, current_btc_price: float) -> tuple:
         """Calculate LP position value using Uniswap V3 math.
