@@ -57,6 +57,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 
 	# Smart Harvest - Gas fees simulation (Polygon/Ethereum)
 	SIMULATED_GAS_FEE_USD: float = 0.10
+	SLIPPAGE_PCT: float = 0.001
 
 	# Gas Reserve: Always keep this amount in USD for operational costs (harvests, rebalancing)
 	GAS_RESERVE_USD: float = 50.0
@@ -151,7 +152,8 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.DEFAULT_INTERVAL = os.environ.get('DEFAULT_INTERVAL', "4h")
 			self.DEFAULT_KLINES_LIMIT = int(os.environ.get('DEFAULT_KLINES_LIMIT', 1000))
 			self.DEFAULT_HISTORICAL_DAYS = int(os.environ.get('DEFAULT_HISTORICAL_DAYS', 1825))
-			self.SIMULATED_GAS_FEE_USD = float(os.environ.get('SIMULATED_GAS_FEE_USD', 0.50))
+			self.SIMULATED_GAS_FEE_USD = float(os.environ.get('SIMULATED_GAS_FEE_USD', 0.10))
+			self.SLIPPAGE_PCT = float(os.environ.get('SLIPPAGE_PCT', 0.001))
 			self.TARGET_RESERVE_RATIO = float(os.environ.get('TARGET_RESERVE_RATIO', 0.20))
 			self.MIN_HARVEST_USD = float(os.environ.get('MIN_HARVEST_USD', 15.0))
 			self.MAX_DEBT_RATIO = float(os.environ.get('MAX_DEBT_RATIO', 0.45))
@@ -183,6 +185,7 @@ DEFAULT_KLINES_LIMIT = _settings.DEFAULT_KLINES_LIMIT
 DEFAULT_HISTORICAL_DAYS = _settings.DEFAULT_HISTORICAL_DAYS
 LOG_LEVEL = _settings.LOG_LEVEL
 SIMULATED_GAS_FEE_USD = _settings.SIMULATED_GAS_FEE_USD
+SLIPPAGE_PCT = _settings.SLIPPAGE_PCT
 GAS_RESERVE_USD = _settings.GAS_RESERVE_USD
 
 # Dynamic Allocation parameters

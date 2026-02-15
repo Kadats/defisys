@@ -90,6 +90,15 @@ def get_simulation_results() -> Dict[str, Any]:
             "trades": [],
         }
 
+    df = df.copy()
+    if "close_timestamp" in df.columns and "open_timestamp" in df.columns:
+        df["__sort_ts"] = df["close_timestamp"].where(pd.notna(df["close_timestamp"]), df["open_timestamp"])
+        df = df.sort_values(by="__sort_ts", ascending=True)
+    elif "close_timestamp" in df.columns:
+        df = df.sort_values(by="close_timestamp", ascending=True)
+    elif "open_timestamp" in df.columns:
+        df = df.sort_values(by="open_timestamp", ascending=True)
+
     initial_balance = DEFAULT_INITIAL_BALANCE
     if "initial_balance" in df.columns and pd.notna(df.iloc[0].get("initial_balance")):
         initial_balance = _to_float(df.iloc[0].get("initial_balance"), DEFAULT_INITIAL_BALANCE)
@@ -130,6 +139,8 @@ def get_simulation_results() -> Dict[str, Any]:
                 "pnl_percent": (pnl / amount_in * 100) if amount_in else 0.0,
             }
         )
+
+    trades.sort(key=lambda trade: trade.get("date") or "")
 
     final_balance = balance_after_list[-1] if balance_after_list else initial_balance
     roi = ((final_balance - initial_balance) / initial_balance * 100) if initial_balance else 0.0
