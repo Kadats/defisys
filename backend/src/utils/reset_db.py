@@ -1,8 +1,8 @@
 """
 Database and Model Reset Utility.
 
-This script completely clears all trading history, predictions, and cached models
-to force a fresh simulation from scratch.
+This script completely clears all trading history, predictions, cached models,
+AND market data (TVL, Volatility, Fees) to force a fresh simulation from scratch.
 
 Usage:
     python -m backend.src.utils.reset_db
@@ -20,12 +20,12 @@ def get_database_url():
     """Get database URL from environment or use default."""
     return os.environ.get(
         'DATABASE_URL',
-        'postgresql://user:password@localhost:5432/defisys'
+        'postgresql://defisys_user:defisys_pass@db:5432/defisys_db'
     )
 
 def reset_database():
     """
-    Truncate all trading-related tables to force a fresh start.
+    Truncate ALL tables (Trading History + Market Data) to force a fresh start.
     """
     database_url = get_database_url()
     
@@ -35,24 +35,44 @@ def reset_database():
         conn = psycopg2.connect(database_url)
         cursor = conn.cursor()
         
-        # List of tables to clear
+        # Lista completa de tabelas para apagar (Resultados + Dados de Mercado)
+        # A ordem não importa muito devido ao CASCADE, mas é bom listar tudo.
         tables_to_clear = [
-            'predictions',
+            # 1. Resultados da Simulação (O que o bot fez)
             'trades', 
             'positions',
-            'signals'
+            'positions_log',       # Nome usado no log do seu sistema
+            'signals',
+            'ml_predictions',      # Nome correto visto nos logs
+            'predictions',         # Mantendo por compatibilidade
+            
+            # 2. Dados de Mercado (O que o bot lê) - AQUI ESTAVA O PROBLEMA
+            'uniswap_pool_data',             # O culpado do TVL=1
+            'fear_and_greed_index',
+            'binance_futures_funding_rate',
+            'binance_futures_open_interest',
+            'implied_volatility',
+            'bitcoin_on_chain_metrics',
+            
+            # 3. Dados de Preço (Candles)
+            # Adicione aqui se souber o nome exato (ex: 'btcusdt_4h'), 
+            # senão o pipeline sobrescreve.
+            'btcusdt_4h',
+            'btcusdt_1d'
         ]
         
-        logger.info("Starting database cleanup...")
+        logger.info("Starting TOTAL database cleanup (Terra Arrasada)...")
         
         for table in tables_to_clear:
             try:
                 # Use TRUNCATE for fast deletion (resets auto-increment)
+                # CASCADE garante que tabelas dependentes também sejam limpas
                 cursor.execute(f"TRUNCATE TABLE {table} CASCADE;")
                 logger.info(f"✓ Cleared table: {table}")
             except psycopg2.errors.UndefinedTable:
-                logger.warning(f"⚠ Table '{table}' does not exist, skipping...")
-                conn.rollback()  # Rollback the failed transaction
+                # É normal falhar se a tabela ainda não existir (primeira rodada)
+                conn.rollback() 
+                logger.debug(f"Table '{table}' not found (skipping).")
             except Exception as e:
                 logger.warning(f"⚠ Could not clear table '{table}': {e}")
                 conn.rollback()
@@ -67,13 +87,14 @@ def reset_database():
         
     except Exception as e:
         logger.error(f"❌ Database reset failed: {e}")
-        raise
-
+        # Não damos raise aqui para permitir que a limpeza de arquivos continue
+        
 def delete_model_files():
     """
     Delete cached ML model files to force retraining.
     """
-    # Get the project root (2 levels up from utils)
+    # Get the project root (relative to this script location)
+    # backend/src/utils -> backend/src -> backend -> root
     script_dir = Path(__file__).parent
     project_root = script_dir.parent.parent.parent
     
@@ -108,15 +129,12 @@ def main():
     Main execution: Reset database and delete model files.
     """
     logger.info("=" * 60)
-    logger.info("DEFISYS V15 - HARD RESET")
+    logger.info("DEFISYS V15 - HARD RESET (FULL WIPE)")
     logger.info("=" * 60)
     
     # Step 1: Clear database tables
     logger.info("\n[Step 1/2] Clearing database tables...")
-    try:
-        reset_database()
-    except Exception as e:
-        logger.error(f"Database reset failed. Continuing with model cleanup...")
+    reset_database()
     
     # Step 2: Delete model files
     logger.info("\n[Step 2/2] Deleting cached model files...")
@@ -125,7 +143,8 @@ def main():
     # Done
     logger.info("\n" + "=" * 60)
     logger.info("✅ System Reset Complete.")
-    logger.info("Ready for fresh V15 Simulation with AccumulatorStrategy!")
+    logger.info("Ready for fresh V15 Simulation!")
+    logger.info("Run 'python -m backend.src.data.pipeline' to repopulate correct data.")
     logger.info("=" * 60)
 
 if __name__ == '__main__':
