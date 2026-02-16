@@ -58,6 +58,21 @@ def get_full_prepared_data() -> pd.DataFrame:
     open_interest_table_name = "binance_futures_open_interest"
     implied_vol_table_name = "implied_volatility"
     uniswap_table_name = "uniswap_pool_data"
+
+    conn = storage.create_connection()
+    if conn:
+        try:
+            storage.create_klines_table(conn, klines_table_name)
+            storage.create_fng_table(conn, fng_table_name)
+            storage.create_on_chain_table(conn, on_chain_table_name)
+            storage.create_funding_rate_table(conn, funding_rate_table_name)
+            storage.create_open_interest_table(conn, open_interest_table_name)
+            storage.create_implied_volatility_table(conn, implied_vol_table_name)
+            storage.create_uniswap_pool_table(conn, uniswap_table_name)
+            storage.create_positions_log_table(conn)
+            storage.create_ml_predictions_table(conn)
+        finally:
+            conn.close()
     
     # ===== PHASE 1: DATA COLLECTION =====
     logger.info(f"Starting collection/preparation process for {DEFAULT_SYMBOL} ({DEFAULT_INTERVAL})...")
@@ -233,20 +248,26 @@ def get_full_prepared_data() -> pd.DataFrame:
             if 'VolumeUSD' not in uniswap_df.columns:
                 logger.warning("Uniswap data missing 'VolumeUSD'. Filling with 0.")
                 uniswap_df['VolumeUSD'] = 0.0
+            if 'TVL_USD' not in uniswap_df.columns:
+                logger.warning("Uniswap data missing 'TVL_USD'. Filling with 0.")
+                uniswap_df['TVL_USD'] = 0.0
 
             uniswap_df['Date'] = uniswap_df['Timestamp'].dt.date
-            daily_uniswap = uniswap_df.groupby('Date').last().reset_index()[['Date', 'VolumeUSD']]
+            daily_uniswap = uniswap_df.groupby('Date').last().reset_index()[['Date', 'VolumeUSD', 'TVL_USD']]
             all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
             all_klines_df = pd.merge(all_klines_df, daily_uniswap, on='Date', how='left')
             all_klines_df['VolumeUSD'] = all_klines_df['VolumeUSD'].ffill().bfill()
+            all_klines_df['TVL_USD'] = all_klines_df['TVL_USD'].ffill().bfill()
             if 'Date' in all_klines_df.columns:
                 all_klines_df.drop(columns=['Date'], inplace=True)
         except Exception as e:
-            logger.warning(f"Failed to merge Uniswap data: {e}. Filling VolumeUSD with 0.")
+            logger.warning(f"Failed to merge Uniswap data: {e}. Filling VolumeUSD/TVL_USD with 0.")
             all_klines_df['VolumeUSD'] = 0.0
+            all_klines_df['TVL_USD'] = 0.0
     else:
-        logger.warning("No Uniswap data available; setting VolumeUSD to 0.")
+        logger.warning("No Uniswap data available; setting VolumeUSD/TVL_USD to 0.")
         all_klines_df['VolumeUSD'] = 0.0
+        all_klines_df['TVL_USD'] = 0.0
     
     # ===== PHASE 4: ML DATA PREPARATION =====
     try:

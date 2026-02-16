@@ -125,6 +125,7 @@ def fetch_all_klines(symbol: str, interval: str, start_timestamp: int, end_times
     current_end_time = end_timestamp
     batch_number = 0
     total_klines_collected = 0
+    did_future_fallback = False
 
     while True:
         batch_number += 1
@@ -137,6 +138,17 @@ def fetch_all_klines(symbol: str, interval: str, start_timestamp: int, end_times
         
         # Validação: resposta vazia interrompe o loop
         if not klines:
+            if not did_future_fallback:
+                logger.warning(
+                    f"Lote {batch_number}: Resposta vazia da API. Tentando fallback para o ultimo dado disponivel."
+                )
+                did_future_fallback = True
+                latest_klines = get_klines_from_api(
+                    symbol, interval, max_klines_per_request, None, binance_api_base_url=binance_api_base_url
+                )
+                if latest_klines:
+                    current_end_time = int(latest_klines[-1][0])
+                    continue
             logger.info(f"Lote {batch_number}: Resposta vazia da API - finalizando coleta")
             break
 

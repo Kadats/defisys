@@ -7,7 +7,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from backend.src.data.storage import log_open_position, log_close_position
-from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT
+from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL
 from ..utils.math import calculate_lp_value, calculate_liquidity_l
 from .risk_manager import RiskManager
 
@@ -150,6 +150,21 @@ class TradingEngine:
         
         net_value = (hodl_value + lp_total_value + cash_value) - debt_value
         return net_value
+
+    def _volume_per_candle(self, volume_24h: float) -> float:
+        # Convert 24h pool volume to per-candle volume based on configured interval.
+        interval = (DEFAULT_INTERVAL or "").strip().lower()
+        candles_per_day = 1
+        if interval.endswith("h"):
+            try:
+                hours = int(interval[:-1])
+                if hours > 0:
+                    candles_per_day = max(1, int(24 / hours))
+            except ValueError:
+                candles_per_day = 1
+        elif interval.endswith("d"):
+            candles_per_day = 1
+        return volume_24h / candles_per_day
 
     def buy_and_hodl(self, amount_usd: float, current_btc_price: float, timestamp: pd.Timestamp = None):
         """Aloca capital de USD para a carteira HODL de BTC."""
@@ -653,13 +668,14 @@ class TradingEngine:
                 if is_in_range:
                     # ... (lógica de cálculo de taxas) ...
                     total_pool_volume_24h = row.get('VolumeUSD', 0)
-                    total_pool_tvl_usd = row.get('TVL_USD', 1) 
-                    if total_pool_tvl_usd > 0 and total_pool_volume_24h > 0:
+                    total_pool_tvl_usd = row.get('TVL_USD')
+                    if total_pool_tvl_usd is not None and total_pool_tvl_usd > 0 and total_pool_volume_24h > 0:
+                        total_pool_volume_candle = self._volume_per_candle(total_pool_volume_24h)
                         my_lp_value_usd, _, _ = self._get_lp_value(lp, current_price)
                         # Convert Decimal result to float for fee calculations
                         my_lp_value_usd = float(my_lp_value_usd)
                         my_share_of_pool = my_lp_value_usd / total_pool_tvl_usd
-                        total_fees_generated_usd = total_pool_volume_24h * POOL_FEE_RATE
+                        total_fees_generated_usd = total_pool_volume_candle * POOL_FEE_RATE
                         fees_earned_today_usd = total_fees_generated_usd * my_share_of_pool
                         lp['fees_accrued_usdt'] += fees_earned_today_usd
                     lp['days_out_of_range'] = 0 

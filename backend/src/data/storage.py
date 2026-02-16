@@ -121,6 +121,9 @@ def get_last_timestamp_from_db(table_name: str) -> Optional[int]:
                 return last_timestamp + 1
             return None
     except psycopg2.Error as e:
+        if getattr(e, "pgcode", None) == "42P01":
+            logger.warning(f"Table '{table_name}' does not exist yet. Starting fresh.")
+            return None
         logger.error(f"Error fetching last timestamp from table '{table_name}': {e}")
         return None
     finally:
@@ -341,6 +344,9 @@ def get_last_fng_timestamp_from_db(table_name: str) -> Optional[int]:
                 return (last_timestamp_ms // 1000) + (24 * 60 * 60)
             return None
     except psycopg2.Error as e:
+        if getattr(e, "pgcode", None) == "42P01":
+            logger.warning(f"Table '{table_name}' does not exist yet. Starting fresh.")
+            return None
         logger.error(f"Error fetching last F&G timestamp: {e}")
         return None
     finally:
@@ -493,6 +499,9 @@ def get_last_implied_volatility_timestamp_from_db(table_name: str) -> Optional[i
                 return last_ts + 1
             return None
     except psycopg2.Error as e:
+        if getattr(e, "pgcode", None) == "42P01":
+            logger.warning(f"Table '{table_name}' does not exist yet. Starting fresh.")
+            return None
         logger.error(f"Error fetching last Implied Volatility timestamp: {e}")
         return None
     finally:
@@ -601,6 +610,9 @@ def get_last_uniswap_timestamp_from_db(table_name: str) -> Optional[int]:
                 return last_ts + 1
             return None
     except psycopg2.Error as e:
+        if getattr(e, "pgcode", None) == "42P01":
+            logger.warning(f"Table '{table_name}' does not exist yet. Starting fresh.")
+            return None
         logger.error(f"Error fetching last Uniswap Pool timestamp: {e}")
         return None
     finally:
