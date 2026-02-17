@@ -191,3 +191,37 @@ def get_predictions(model, scaler, df: pd.DataFrame) -> pd.DataFrame:
         df['prediction_correct'] = 0
         return df
 
+
+def predict_next_movement(model, scaler, X_new: pd.DataFrame):
+    """
+    Faz uma predição para uma única observação (ou múltiplas).
+    
+    Args:
+        model: Modelo treinado
+        scaler: StandardScaler ajustado
+        X_new: DataFrame com as features (uma ou mais linhas)
+    
+    Returns:
+        Tupla (prediction, probability):
+            - prediction (int): Classe prevista (0 ou 1)
+            - probability (float): Probabilidade da classe 1 (movimento de alta)
+    """
+    try:
+        # Normaliza os dados
+        X_scaled = scaler.transform(X_new)
+        
+        # Faz a predição da classe
+        prediction = model.predict(X_scaled)[0]
+        
+        # Obtém as probabilidades
+        proba = model.predict_proba(X_scaled)
+        
+        # Extrai a probabilidade da Classe 1 (movimento de alta)
+        probability = proba[0][1]
+        
+        return int(prediction), float(probability)
+        
+    except Exception as e:
+        logger.error(f"Falha ao fazer predição: {e}")
+        return 0, 0.0
+

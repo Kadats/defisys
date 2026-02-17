@@ -6,11 +6,12 @@ This package contains components for market prediction and analysis:
 - Heuristic market regime analyzers
 """
 
-from .prediction import train_prediction_model, get_predictions
+from .prediction import train_prediction_model, get_predictions, predict_next_movement
 from .heuristics import analyze_market_regime
 
 __all__ = [
     'train_prediction_model',
-    'get_predictions', 
+    'get_predictions',
+    'predict_next_movement',
     'analyze_market_regime'
 ]
