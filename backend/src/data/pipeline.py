@@ -95,14 +95,18 @@ def get_full_prepared_data() -> pd.DataFrame:
             binance_api_base_url=BINANCE_API_BASE_URL
         )
         
-        if not klines_df.empty:
+        # Guard clause: handle None or empty response from API
+        if klines_df is None:
+            logger.error("API returned None - connection failed. Will try to load from database.")
+            klines_df = pd.DataFrame()
+        elif not klines_df.empty:
             logger.info(f"✓ Collected {len(klines_df)} klines successfully")
             storage.save_klines_to_db(klines_df, klines_table_name)
             logger.info(f"✓ Klines saved to database (table: {klines_table_name})")
         else:
-            logger.warning("No klines collected (empty DataFrame)")
+            logger.warning("No klines collected (empty DataFrame) - will try to load from database.")
     else:
-        logger.warning("No new klines collected (invalid timestamps)")
+        logger.warning("No new klines collected (invalid timestamps) - will try to load from database.")
     
     # 2. Collect Fear & Greed
     start_ts_fng_sec = storage.get_start_timestamp_for_collection(
@@ -156,26 +160,43 @@ def get_full_prepared_data() -> pd.DataFrame:
     
     # ===== PHASE 2: LOAD DATA AND CALCULATE INDICATORS =====
     all_klines_df = storage.get_data_from_db(klines_table_name)
+    
+    # Guard clause: ensure we have a valid DataFrame
+    if all_klines_df is None:
+        logger.error("Failed to load data from database (returned None).")
+        return pd.DataFrame()
+    
     if all_klines_df.empty:
-        logger.warning("No sufficient data in database to continue.")
+        logger.error("No sufficient data in database to continue. Please check data collection.")
         return pd.DataFrame()
     
     logger.info(f"Klines DataFrame loaded with {len(all_klines_df)} klines for calculation.")
     
     # Calculate minimal indicator set (feature selection)
-    # 1. Momentum
-    all_klines_df['RSI'] = indicators.calculate_rsi(all_klines_df, column='Close', window=14)
+    try:
+        # 1. Momentum
+        all_klines_df['RSI'] = indicators.calculate_rsi(all_klines_df, column='Close', window=14)
 
-    # 2. Trend (EMA50 distance)
-    all_klines_df['EMA_50'] = indicators.calculate_ema(all_klines_df, column='Close', window=50)
+        # 2. Trend (EMA50 distance)
+        all_klines_df['EMA_50'] = indicators.calculate_ema(all_klines_df, column='Close', window=50)
 
-    # 3. Volatility (Bollinger Band Width)
-    bb_df = indicators.calculate_bollinger_bands(all_klines_df, column='Close', window=20)
-    all_klines_df['BB_Middle'] = bb_df['BB_Middle']
-    all_klines_df['BB_Upper'] = bb_df['BB_Upper']
-    all_klines_df['BB_Lower'] = bb_df['BB_Lower']
-    bb_middle_safe = all_klines_df['BB_Middle'].replace(0, np.nan)
-    all_klines_df['BB_Width'] = (all_klines_df['BB_Upper'] - all_klines_df['BB_Lower']) / bb_middle_safe
+        # 3. Volatility (Bollinger Band Width)
+        bb_df = indicators.calculate_bollinger_bands(all_klines_df, column='Close', window=20)
+        
+        # Guard clause: check if bb_df is valid
+        if bb_df is None or bb_df.empty:
+            logger.error("Bollinger Bands calculation returned None or empty DataFrame.")
+            return pd.DataFrame()
+            
+        all_klines_df['BB_Middle'] = bb_df['BB_Middle']
+        all_klines_df['BB_Upper'] = bb_df['BB_Upper']
+        all_klines_df['BB_Lower'] = bb_df['BB_Lower']
+        bb_middle_safe = all_klines_df['BB_Middle'].replace(0, np.nan)
+        all_klines_df['BB_Width'] = (all_klines_df['BB_Upper'] - all_klines_df['BB_Lower']) / bb_middle_safe
+        
+    except Exception as e:
+        logger.error(f"Failed to calculate technical indicators: {e}")
+        return pd.DataFrame()
     
     # ===== PHASE 3: MERGE AUXILIARY DATA SOURCES =====
     # Load auxiliary data
@@ -187,6 +208,13 @@ def get_full_prepared_data() -> pd.DataFrame:
     try:
         funding_rate_df = pd.read_sql(f"SELECT funding_time, funding_rate FROM {funding_rate_table_name}", conn)
         open_interest_df = pd.read_sql(f"SELECT timestamp, open_interest FROM {open_interest_table_name}", conn)
+        
+        # Guard clauses: ensure valid DataFrames
+        if funding_rate_df is None:
+            funding_rate_df = pd.DataFrame()
+        if open_interest_df is None:
+            open_interest_df = pd.DataFrame()
+            
     except Exception as e:
         logger.warning(f"Failed to load funding/OI data: {e}")
         funding_rate_df = pd.DataFrame()
@@ -196,41 +224,57 @@ def get_full_prepared_data() -> pd.DataFrame:
     
     uniswap_df = storage.get_uniswap_pool_data_from_db(uniswap_table_name)
     
+    # Guard clause: ensure uniswap_df is valid
+    if uniswap_df is None:
+        logger.warning("Uniswap data returned None. Using empty DataFrame.")
+        uniswap_df = pd.DataFrame()
+    
     # Merge Sentiment (Funding + OI)
     if not funding_rate_df.empty and not open_interest_df.empty:
-        funding_rate_df['Timestamp'] = pd.to_datetime(funding_rate_df['funding_time'], unit='ms')
-        open_interest_df['Timestamp'] = pd.to_datetime(open_interest_df['timestamp'], unit='ms')
-        
-        sentiment_data_df = pd.merge(
-            funding_rate_df[['Timestamp', 'funding_rate']], 
-            open_interest_df[['Timestamp', 'open_interest']], 
-            on='Timestamp', how='outer'
-        ).sort_values(by='Timestamp').ffill().dropna()
-        
-        if not sentiment_data_df.empty:
-            sentiment_data_df['Sentimento_Score'] = indicators.calculate_composite_sentiment(
-                sentiment_data_df['funding_rate'], sentiment_data_df['open_interest']
-            )
-            all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
-            sentiment_data_df['Date'] = sentiment_data_df['Timestamp'].dt.date
-            daily_sentiment = sentiment_data_df.groupby('Date').last().reset_index()
+        try:
+            funding_rate_df['Timestamp'] = pd.to_datetime(funding_rate_df['funding_time'], unit='ms')
+            open_interest_df['Timestamp'] = pd.to_datetime(open_interest_df['timestamp'], unit='ms')
             
-            cols_to_merge = ['Date', 'Sentimento_Score', 'funding_rate', 'open_interest']
-            cols_to_merge = [c for c in cols_to_merge if c in daily_sentiment.columns]
-            all_klines_df = pd.merge(all_klines_df, daily_sentiment[cols_to_merge], on='Date', how='left')
+            sentiment_data_df = pd.merge(
+                funding_rate_df[['Timestamp', 'funding_rate']], 
+                open_interest_df[['Timestamp', 'open_interest']], 
+                on='Timestamp', how='outer'
+            ).sort_values(by='Timestamp').ffill().dropna()
             
-            # Fill empty values
-            if 'funding_rate' in all_klines_df.columns:
-                all_klines_df['FundingRate'] = all_klines_df['funding_rate'].ffill().bfill()
-                all_klines_df.drop(columns=['funding_rate'], inplace=True)
-            if 'open_interest' in all_klines_df.columns:
-                all_klines_df['OpenInterest'] = all_klines_df['open_interest'].ffill().bfill()
-                all_klines_df.drop(columns=['open_interest'], inplace=True)
-            if 'Sentimento_Score' in all_klines_df.columns:
-                all_klines_df['Sentimento_Score'] = all_klines_df['Sentimento_Score'].ffill().bfill()
+            # Guard clause: ensure sentiment_data_df is valid
+            if sentiment_data_df is None:
+                logger.warning("Sentiment data merge returned None. Skipping sentiment merge.")
+                sentiment_data_df = pd.DataFrame()
             
-            if 'Date' in all_klines_df.columns:
-                all_klines_df.drop(columns=['Date'], inplace=True)
+            if not sentiment_data_df.empty:
+                sentiment_data_df['Sentimento_Score'] = indicators.calculate_composite_sentiment(
+                    sentiment_data_df['funding_rate'], sentiment_data_df['open_interest']
+                )
+                all_klines_df['Date'] = all_klines_df['Open_time'].dt.date
+                sentiment_data_df['Date'] = sentiment_data_df['Timestamp'].dt.date
+                daily_sentiment = sentiment_data_df.groupby('Date').last().reset_index()
+                
+                cols_to_merge = ['Date', 'Sentimento_Score', 'funding_rate', 'open_interest']
+                cols_to_merge = [c for c in cols_to_merge if c in daily_sentiment.columns]
+                all_klines_df = pd.merge(all_klines_df, daily_sentiment[cols_to_merge], on='Date', how='left')
+                
+                # Fill empty values
+                if 'funding_rate' in all_klines_df.columns:
+                    all_klines_df['FundingRate'] = all_klines_df['funding_rate'].ffill().bfill()
+                    all_klines_df.drop(columns=['funding_rate'], inplace=True)
+                if 'open_interest' in all_klines_df.columns:
+                    all_klines_df['OpenInterest'] = all_klines_df['open_interest'].ffill().bfill()
+                    all_klines_df.drop(columns=['open_interest'], inplace=True)
+                if 'Sentimento_Score' in all_klines_df.columns:
+                    all_klines_df['Sentimento_Score'] = all_klines_df['Sentimento_Score'].ffill().bfill()
+                
+                if 'Date' in all_klines_df.columns:
+                    all_klines_df.drop(columns=['Date'], inplace=True)
+                    
+        except Exception as e:
+            logger.warning(f"Failed to merge sentiment data: {e}. Filling FundingRate/OpenInterest with 0.")
+            all_klines_df['FundingRate'] = 0.0
+            all_klines_df['OpenInterest'] = 0.0
     else:
         logger.warning("No funding/open interest data available; filling FundingRate/OpenInterest with 0.")
         all_klines_df['FundingRate'] = 0.0
@@ -319,6 +363,11 @@ def get_positions_from_db(include_open: bool = True, include_closed: bool = True
         
         df = pd.read_sql(base_query, conn)
         
+        # Guard clause: ensure df is valid
+        if df is None:
+            logger.warning("pd.read_sql returned None for positions_log.")
+            return pd.DataFrame()
+        
         if not df.empty:
             df['open_timestamp'] = pd.to_datetime(df['open_timestamp'], unit='ms')
             if 'close_timestamp' in df.columns:
@@ -344,8 +393,15 @@ def get_predictions_from_db() -> pd.DataFrame:
         base_query = "SELECT * FROM ml_predictions ORDER BY open_time ASC"
         df = pd.read_sql(base_query, conn)
         
+        # Guard clause: ensure df is valid
+        if df is None:
+            logger.warning("pd.read_sql returned None for ml_predictions.")
+            return pd.DataFrame()
+        
         if not df.empty:
-            df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+            # open_time is already a TIMESTAMP in the database, pd.read_sql will convert it to datetime automatically
+            if not pd.api.types.is_datetime64_any_dtype(df['open_time']):
+                df['open_time'] = pd.to_datetime(df['open_time'])
         
         return df
     
