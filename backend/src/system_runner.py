@@ -123,11 +123,29 @@ def run_trading_system():
     backtest_results['profit_usd'] = total_equity - engine.initial_capital
     backtest_results['profit_percentage_usd'] = ((total_equity / engine.initial_capital) - 1) * 100
     
+    # ========== NOVAS MÉTRICAS: Token-Based Performance ==========
+    # Calcular saldo inicial em tokens (BTC): quanto BTC teríamos se comprássemos tudo no início
+    initial_token_balance = engine.initial_capital / price_initial
+    
+    # Calcular saldo final em tokens (BTC): quanto vale nosso patrimônio hoje em BTC
+    final_token_balance = total_equity / price_final
+    
+    # Calcular ROI em tokens: variação percentual do saldo em tokens
+    token_roi = ((final_token_balance - initial_token_balance) / initial_token_balance) * 100
+    
+    # Calcular Alpha vs HOLD: diferença entre ROI da estratégia e ROI do benchmark
+    alpha_vs_hold = backtest_results['profit_percentage_usd'] - btc_benchmark_profit_percentage
+    
     logger.info(
         f"✓ Total Equity Calculado: ${total_equity:.2f} "
         f"(Cash: ${engine.usd_balance:.2f} + BTC Value: ${btc_value:.2f})"
     )
     logger.info(f"✓ Benchmark BTC recalculado: {btc_benchmark_profit_percentage:.2f}% (Preço: ${price_initial:.2f} → ${price_final:.2f})")
+    logger.info(
+        f"✓ Token Metrics: Initial={initial_token_balance:.6f} BTC, "
+        f"Final={final_token_balance:.6f} BTC, ROI={token_roi:.2f}%, "
+        f"Alpha={alpha_vs_hold:.2f}%"
+    )
 
     # ========== FASE 4c: PERSISTIR O SUMMARY OFICIAL ==========
     # Salvar os valores finais OFICIAIS no banco de dados para o Dashboard
@@ -140,7 +158,11 @@ def run_trading_system():
         initial_capital=engine.initial_capital,
         cash_balance=engine.usd_balance,
         btc_amount=engine.btc_hodl_balance,
-        btc_price_final=price_final
+        btc_price_final=price_final,
+        initial_token_balance=initial_token_balance,
+        final_token_balance=final_token_balance,
+        token_roi=token_roi,
+        alpha_vs_hold=alpha_vs_hold
     )
 
     # 4. Logar o relatório final

@@ -12,6 +12,8 @@
       </button>
     </div>
 
+    <!-- Linha 1: Métricas em USD -->
+    <h2 class="mb-3 text-lg font-semibold text-white">Performance em Dólar (USD)</h2>
     <div class="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <StatCard label="Total de Trades" :value="kpis.total_trades" />
       <StatCard label="Saldo Inicial" :value="formatCurrency(kpis.initial_balance)" />
@@ -20,6 +22,29 @@
         label="ROI (Retorno)" 
         :value="kpis.roi.toFixed(2) + '%'" 
         :trend="kpis.roi" 
+      />
+    </div>
+
+    <!-- Linha 2: Métricas em Token (BTC) -->
+    <h2 class="mb-3 text-lg font-semibold text-white">Performance em Token (BTC)</h2>
+    <div class="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <StatCard 
+        label="Alpha vs HOLD" 
+        :value="tokenKpis.alpha_vs_hold.toFixed(2) + '%'" 
+        :trend="tokenKpis.alpha_vs_hold" 
+      />
+      <StatCard 
+        label="Saldo Inicial (BTC)" 
+        :value="tokenKpis.initial_token_balance.toFixed(6)" 
+      />
+      <StatCard 
+        label="Saldo Final (BTC)" 
+        :value="tokenKpis.final_token_balance.toFixed(6)" 
+      />
+      <StatCard 
+        label="ROI (Acúmulo Token)" 
+        :value="tokenKpis.token_roi.toFixed(2) + '%'" 
+        :trend="tokenKpis.token_roi" 
       />
     </div>
 
@@ -41,6 +66,12 @@ const kpis = ref({
   final_balance: 0,
   roi: 0,
 });
+const tokenKpis = ref({
+  alpha_vs_hold: 0,
+  initial_token_balance: 0,
+  final_token_balance: 0,
+  token_roi: 0,
+});
 
 const formatCurrency = (val) => 
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
@@ -61,7 +92,17 @@ const fetchData = async () => {
         final_balance: data.summary.total_equity || 0,
         roi: data.summary.roi_percent || 0,
       };
+      
+      // Token-based KPIs
+      tokenKpis.value = {
+        alpha_vs_hold: data.summary.alpha_vs_hold || 0,
+        initial_token_balance: data.summary.initial_token_balance || 0,
+        final_token_balance: data.summary.final_token_balance || 0,
+        token_roi: data.summary.token_roi || 0,
+      };
+      
       console.log('✓ Using OFFICIAL values from Backend Summary:', kpis.value);
+      console.log('✓ Token KPIs:', tokenKpis.value);
     } else {
       // Fallback to KPIs if summary not available (shouldn't happen after first run)
       kpis.value = {

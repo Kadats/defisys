@@ -1022,7 +1022,11 @@ def create_simulation_summary_table(conn: PGConnection):
                     initial_capital DOUBLE PRECISION NOT NULL,
                     cash_balance DOUBLE PRECISION NOT NULL,
                     btc_amount DOUBLE PRECISION NOT NULL,
-                    btc_price_final DOUBLE PRECISION NOT NULL
+                    btc_price_final DOUBLE PRECISION NOT NULL,
+                    initial_token_balance DOUBLE PRECISION,
+                    final_token_balance DOUBLE PRECISION,
+                    token_roi DOUBLE PRECISION,
+                    alpha_vs_hold DOUBLE PRECISION
                 )
             """)
             conn.commit()
@@ -1040,7 +1044,11 @@ def save_simulation_summary(
     initial_capital: float,
     cash_balance: float,
     btc_amount: float,
-    btc_price_final: float
+    btc_price_final: float,
+    initial_token_balance: float = None,
+    final_token_balance: float = None,
+    token_roi: float = None,
+    alpha_vs_hold: float = None
 ):
     """Saves the official simulation summary to the database."""
     conn = create_connection()
@@ -1055,8 +1063,9 @@ def save_simulation_summary(
             cursor.execute("""
                 INSERT INTO simulation_summary 
                 (total_equity, roi_percent, benchmark_roi_percent, total_trades,
-                 initial_capital, cash_balance, btc_amount, btc_price_final)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                 initial_capital, cash_balance, btc_amount, btc_price_final,
+                 initial_token_balance, final_token_balance, token_roi, alpha_vs_hold)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 total_equity,
                 roi_percent,
@@ -1065,13 +1074,18 @@ def save_simulation_summary(
                 initial_capital,
                 cash_balance,
                 btc_amount,
-                btc_price_final
+                btc_price_final,
+                initial_token_balance,
+                final_token_balance,
+                token_roi,
+                alpha_vs_hold
             ))
         
         conn.commit()
         logger.info(
             f"✓ Simulation summary saved: Equity=${total_equity:.2f}, "
-            f"ROI={roi_percent:.2f}%, Trades={total_trades}"
+            f"ROI={roi_percent:.2f}%, Trades={total_trades}, "
+            f"Token ROI={token_roi:.2f}%, Alpha={alpha_vs_hold:.2f}%"
         )
         return True
     except Exception as e:
@@ -1098,7 +1112,9 @@ def get_latest_simulation_summary():
                 SELECT 
                     total_equity, roi_percent, benchmark_roi_percent, 
                     total_trades, initial_capital, cash_balance, 
-                    btc_amount, btc_price_final, timestamp
+                    btc_amount, btc_price_final, timestamp,
+                    initial_token_balance, final_token_balance,
+                    token_roi, alpha_vs_hold
                 FROM simulation_summary
                 ORDER BY timestamp DESC
                 LIMIT 1
