@@ -28,22 +28,86 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Strategy-specific constants
-BULL_CONFIDENCE_THRESHOLD = 0.65  # Only leverage if prediction probability > 65%
-TARGET_SELL_MULTIPLIER = 1.05     # Single-sided LP target: 5% above current price
-DIP_BUY_RSI_THRESHOLD = 30        # Buy dips when RSI < 30
-MIN_USD_FOR_DIP_BUY = 100         # Minimum USD to trigger dip buying
+MOMENTUM_CONFIDENCE_THRESHOLD = 0.75  # High confidence: Buy regardless of RSI
+MOMENTUM_RSI_MAX = 70                 # Max RSI acceptable in momentum mode
+DIP_CONFIDENCE_THRESHOLD = 0.60       # Medium confidence: Buy on dips
+DIP_RSI_MAX = 55                      # Max RSI for dip entry
+TARGET_SELL_MULTIPLIER = 1.05         # Single-sided LP target: 5% above current price
+DEFENSE_RSI_THRESHOLD = 30            # Extreme oversold in defense mode
+MIN_USD_FOR_DIP_BUY = 100             # Minimum USD to trigger dip buying
 
 
 class AccumulatorStrategy(BaseStrategy):
     """
-    BTC Accumulator Strategy (V15).
+    BTC Accumulator Strategy (V16 - Dynamic Entry Logic).
     
     Designed for users who want to maximize BTC holdings:
-    - Bull Mode: Leverage to acquire more BTC satoshis
+    - Momentum Entry: High ML confidence (>75%) → Buy regardless of RSI
+    - Dip Entry: Medium ML confidence (>60%) → Buy on pullbacks (RSI<55)
     - Defense Mode: De-leverage to pure BTC HODL (no debt)
     - Never sells BTC except to repay debt
-    - Uses USD reserve to buy dips when oversold
+    - Uses USD reserve to buy extreme dips when oversold (RSI<30)
     """
+    
+    def _analyze_market_entry(self, prediction_proba: float, rsi: float, timestamp: pd.Timestamp) -> dict:
+        """
+        Analyze market conditions and determine if we should enter a position.
+        
+        Two-level entry logic based on ML confidence:
+        1. MOMENTUM ENTRY (High Confidence): proba > 0.75, RSI < 70
+           - When ML is very confident, don't wait for deep pullbacks
+        2. DIP ENTRY (Medium Confidence): proba > 0.60, RSI < 55
+           - When ML is moderately confident, wait for better prices
+        
+        Args:
+            prediction_proba: ML model confidence (0.0 to 1.0)
+            rsi: Current RSI indicator value
+            timestamp: Current timestamp for logging
+        
+        Returns:
+            dict with 'type' and 'reason' if entry signal, None otherwise
+        """
+        # Level 1: MOMENTUM ENTRY (Alta Confiança)
+        if prediction_proba > MOMENTUM_CONFIDENCE_THRESHOLD:
+            if rsi < MOMENTUM_RSI_MAX:
+                logger.info(
+                    f"[{timestamp.date()}] ✅ MOMENTUM ENTRY: ML Confidence={prediction_proba:.2%}, "
+                    f"RSI={rsi:.1f}. High conviction trade!"
+                )
+                return {
+                    'type': 'MOMENTUM',
+                    'reason': f'High ML confidence ({prediction_proba:.2%}) with RSI={rsi:.1f}'
+                }
+            else:
+                logger.info(
+                    f"[{timestamp.date()}] ⚠️  HIGH CONFIDENCE but RSI={rsi:.1f} > {MOMENTUM_RSI_MAX}. "
+                    f"Market may be overbought. Waiting..."
+                )
+        
+        # Level 2: DIP ENTRY (Média Confiança)
+        elif prediction_proba > DIP_CONFIDENCE_THRESHOLD:
+            if rsi < DIP_RSI_MAX:
+                logger.info(
+                    f"[{timestamp.date()}] ✅ DIP ENTRY: ML Confidence={prediction_proba:.2%}, "
+                    f"RSI={rsi:.1f}. Good risk/reward on pullback!"
+                )
+                return {
+                    'type': 'DIP',
+                    'reason': f'Medium ML confidence ({prediction_proba:.2%}) with favorable RSI={rsi:.1f}'
+                }
+            else:
+                logger.debug(
+                    f"[{timestamp.date()}] Medium confidence ({prediction_proba:.2%}) but RSI={rsi:.1f} "
+                    f"not low enough (need <{DIP_RSI_MAX}). Waiting for pullback..."
+                )
+        else:
+            # Low confidence - no entry
+            logger.debug(
+                f"[{timestamp.date()}] No entry signal: ML Confidence={prediction_proba:.2%} "
+                f"below threshold ({DIP_CONFIDENCE_THRESHOLD:.2%})"
+            )
+        
+        return None
     
     def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
         """
@@ -59,23 +123,27 @@ class AccumulatorStrategy(BaseStrategy):
         prediction_proba = float(row.get('prediction_proba', 0.0))
         rsi = float(row.get('RSI', 50))
         
-        # --- MODE DETECTION ---
-        is_bull_mode = (prediction == 1) and (prediction_proba > BULL_CONFIDENCE_THRESHOLD)
+        # --- DEFENSE MODE: De-leverage first if prediction is bearish ---
         is_defense_mode = (prediction == 0)
-        
-        # --- DEFENSE MODE: De-leverage and return to pure BTC HODL ---
         if is_defense_mode and (len(engine.active_lps) > 0 or engine.total_debt_usd > 0):
             self._execute_defense_mode(engine, current_price, timestamp)
             return
         
-        # --- DIP BUYER: Use USD reserve when oversold ---
-        if is_defense_mode and engine.usd_balance > MIN_USD_FOR_DIP_BUY and rsi < DIP_BUY_RSI_THRESHOLD:
-            self._buy_the_dip(engine, current_price, timestamp)
+        # --- ANALYZE MARKET: Check if we should enter a position ---
+        entry_signal = self._analyze_market_entry(prediction_proba, rsi, timestamp)
+        
+        # --- EXECUTE ENTRY: Based on signal type ---
+        if entry_signal and engine.total_debt_usd == 0 and engine.usd_balance > MIN_USD_FOR_DIP_BUY:
+            self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal)
             return
         
-        # --- BULL MODE: Aggressive leverage to accumulate BTC ---
-        if is_bull_mode and engine.total_debt_usd == 0:
-            self._execute_bull_entry(engine, current_price, timestamp, row)
+        # --- EXTREME DIP BUYER: In defense mode, buy extreme oversold ---
+        if is_defense_mode and engine.usd_balance > MIN_USD_FOR_DIP_BUY and rsi < DEFENSE_RSI_THRESHOLD:
+            logger.info(
+                f"[{timestamp.date()}] EXTREME DIP: RSI={rsi:.1f} < {DEFENSE_RSI_THRESHOLD}. "
+                f"Buying with available USD."
+            )
+            self._buy_the_dip(engine, current_price, timestamp)
             return
         
         # --- MAINTENANCE: Check LP health ---
@@ -177,10 +245,14 @@ class AccumulatorStrategy(BaseStrategy):
         engine: 'TradingEngine', 
         current_price: float, 
         timestamp: pd.Timestamp,
-        row: pd.Series
+        row: pd.Series,
+        entry_signal: dict
     ) -> None:
         """
         Bull Mode Entry: Leverage aggressively to accumulate more BTC.
+        
+        Args:
+            entry_signal: Dict with 'type' (MOMENTUM/DIP) and 'reason'
         
         Steps:
         1. Buy spot BTC with available USD
@@ -188,7 +260,13 @@ class AccumulatorStrategy(BaseStrategy):
         3. Buy more BTC with borrowed funds
         4. Open single-sided BTC LP at target price (1.05x)
         """
-        logger.info(f"[{timestamp.date()}] BULL MODE: Leveraging to accumulate BTC...")
+        entry_type = entry_signal.get('type', 'UNKNOWN')
+        entry_reason = entry_signal.get('reason', 'No reason provided')
+        
+        logger.info(
+            f"[{timestamp.date()}] 🚀 {entry_type} ENTRY TRIGGERED: {entry_reason}. "
+            f"Leveraging to accumulate BTC..."
+        )
         
         # Step 1: Buy spot BTC with available USD
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
