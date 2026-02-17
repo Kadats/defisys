@@ -7,7 +7,7 @@ from .core import TradingEngine
 from .strategies import BTCLiteStrategy, AccumulatorStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE
 from .ai import train_prediction_model, get_predictions
-from backend.src.data.storage import save_predictions_to_db, save_trades
+from backend.src.data.storage import save_predictions_to_db, save_trades, save_simulation_summary
 from backend.src.data import storage
 
 logger = logging.getLogger(__name__)
@@ -128,6 +128,20 @@ def run_trading_system():
         f"(Cash: ${engine.usd_balance:.2f} + BTC Value: ${btc_value:.2f})"
     )
     logger.info(f"✓ Benchmark BTC recalculado: {btc_benchmark_profit_percentage:.2f}% (Preço: ${price_initial:.2f} → ${price_final:.2f})")
+
+    # ========== FASE 4c: PERSISTIR O SUMMARY OFICIAL ==========
+    # Salvar os valores finais OFICIAIS no banco de dados para o Dashboard
+    num_trades = len(engine.transaction_log) if engine.transaction_log else 0
+    save_simulation_summary(
+        total_equity=total_equity,
+        roi_percent=backtest_results['profit_percentage_usd'],
+        benchmark_roi_percent=btc_benchmark_profit_percentage,
+        total_trades=num_trades,
+        initial_capital=engine.initial_capital,
+        cash_balance=engine.usd_balance,
+        btc_amount=engine.btc_hodl_balance,
+        btc_price_final=price_final
+    )
 
     # 4. Logar o relatório final
     latest_indicators = simulation_df.tail(5) if not simulation_df.empty else None

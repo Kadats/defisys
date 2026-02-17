@@ -50,8 +50,30 @@ const fetchData = async () => {
     const res = await fetch('/api/simulation');
     if (!res.ok) throw new Error('Falha ao buscar dados');
     const data = await res.json();
-    kpis.value = data.kpis;
-    trades.value = data.trades;
+    
+    // CRITICAL FIX: Use the OFFICIAL summary from the backend, not calculated values
+    // The Backend is the "Source of Truth"
+    if (data.summary) {
+      // Use the official summary that was persisted by the backend
+      kpis.value = {
+        total_trades: data.summary.total_trades || 0,
+        initial_balance: data.summary.initial_capital || 0,
+        final_balance: data.summary.total_equity || 0,
+        roi: data.summary.roi_percent || 0,
+      };
+      console.log('✓ Using OFFICIAL values from Backend Summary:', kpis.value);
+    } else {
+      // Fallback to KPIs if summary not available (shouldn't happen after first run)
+      kpis.value = {
+        total_trades: data.kpis.total_trades || 0,
+        initial_balance: data.kpis.initial_balance || 0,
+        final_balance: data.kpis.final_balance || 0,
+        roi: data.kpis.roi || 0,
+      };
+      console.warn('⚠ Using KPIs (backend hasn\'t persisted summary yet):', kpis.value);
+    }
+    
+    trades.value = data.trades || [];
   } catch (error) {
     console.error(error);
   }

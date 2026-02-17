@@ -1004,3 +1004,113 @@ def clear_simulation_data():
             print(f"Erro ao limpar dados: {e}")
         finally:
             conn.close()
+
+
+# ==================== SIMULATION SUMMARY ====================
+def create_simulation_summary_table(conn: PGConnection):
+    """Creates simulation_summary table if it doesn't exist."""
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS simulation_summary (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    total_equity DOUBLE PRECISION NOT NULL,
+                    roi_percent DOUBLE PRECISION NOT NULL,
+                    benchmark_roi_percent DOUBLE PRECISION NOT NULL,
+                    total_trades INTEGER NOT NULL,
+                    initial_capital DOUBLE PRECISION NOT NULL,
+                    cash_balance DOUBLE PRECISION NOT NULL,
+                    btc_amount DOUBLE PRECISION NOT NULL,
+                    btc_price_final DOUBLE PRECISION NOT NULL
+                )
+            """)
+            conn.commit()
+            logger.info("Table 'simulation_summary' verified/created successfully.")
+    except psycopg2.Error as e:
+        logger.error(f"Error creating table 'simulation_summary': {e}")
+        conn.rollback()
+
+
+def save_simulation_summary(
+    total_equity: float,
+    roi_percent: float,
+    benchmark_roi_percent: float,
+    total_trades: int,
+    initial_capital: float,
+    cash_balance: float,
+    btc_amount: float,
+    btc_price_final: float
+):
+    """Saves the official simulation summary to the database."""
+    conn = create_connection()
+    if not conn:
+        logger.error("Failed to connect to database for saving simulation summary")
+        return False
+    
+    try:
+        create_simulation_summary_table(conn)
+        
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO simulation_summary 
+                (total_equity, roi_percent, benchmark_roi_percent, total_trades,
+                 initial_capital, cash_balance, btc_amount, btc_price_final)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                total_equity,
+                roi_percent,
+                benchmark_roi_percent,
+                total_trades,
+                initial_capital,
+                cash_balance,
+                btc_amount,
+                btc_price_final
+            ))
+        
+        conn.commit()
+        logger.info(
+            f"✓ Simulation summary saved: Equity=${total_equity:.2f}, "
+            f"ROI={roi_percent:.2f}%, Trades={total_trades}"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error saving simulation summary: {e}")
+        conn.rollback()
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def get_latest_simulation_summary():
+    """Retrieves the latest simulation summary from database."""
+    conn = create_connection()
+    if not conn:
+        return None
+    
+    try:
+        with conn.cursor(cursor_factory=extras.RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT 
+                    total_equity, roi_percent, benchmark_roi_percent, 
+                    total_trades, initial_capital, cash_balance, 
+                    btc_amount, btc_price_final, timestamp
+                FROM simulation_summary
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            result = cursor.fetchone()
+            return dict(result) if result else None
+    except Exception as e:
+        logger.error(f"Error retrieving simulation summary: {e}")
+        return None
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass

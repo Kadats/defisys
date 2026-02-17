@@ -10,7 +10,7 @@ from decimal import Decimal
 
 # Imports internos
 from backend.src.data import storage
-from backend.src.data.storage import get_data_from_db
+from backend.src.data.storage import get_data_from_db, get_latest_simulation_summary
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db
 from backend.src.system_runner import run_trading_system
 from backend.src.services.analytics import get_simulation_results
@@ -127,12 +127,42 @@ async def websocket_logs(websocket: WebSocket):
     "/api/simulation",
     tags=["Simulation"],
     summary="Get Simulation Results",
-    description="Returns simulation KPIs and trade history based on positions_log."
+    description="Returns simulation KPIs, official summary, and trade history."
 )
 def get_simulation():
     try:
+        # Get the simulation results (trades from DB)
         results = get_simulation_results()
-        return sanitize_for_json(results)
+        
+        # Get the OFFICIAL summary from the database (the "truth")
+        official_summary = get_latest_simulation_summary()
+        
+        # If we have official summary, use it; otherwise use calculated values
+        if official_summary:
+            kpis = {
+                "total_trades": official_summary.get('total_trades', results['kpis']['total_trades']),
+                "initial_balance": official_summary.get('initial_capital', results['kpis']['initial_balance']),
+                "final_balance": official_summary.get('total_equity', results['kpis']['final_balance']),
+                "roi": official_summary.get('roi_percent', results['kpis']['roi']),
+                "benchmark_roi": official_summary.get('benchmark_roi_percent', results['kpis']['benchmark_roi']),
+            }
+            summary = {
+                **official_summary,
+                "total_equity": official_summary.get('total_equity'),
+                "roi_percent": official_summary.get('roi_percent'),
+            }
+        else:
+            # Fallback to calculated values if summary hasn't been persisted yet
+            kpis = results['kpis']
+            summary = None
+        
+        response = {
+            "kpis": kpis,
+            "trades": results['trades'],
+            "summary": summary  # The official summary object
+        }
+        
+        return sanitize_for_json(response)
     except Exception as e:
         logger.exception("Erro ao buscar simulation results: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -152,20 +182,70 @@ async def run_simulation():
     "/api/v1/summary",
     tags=["Dashboard"],
     summary="Get Backtest Summary",
-    description="Returns the backtest verdict including strategy returns, BTC HODL benchmark, ML accuracy, and win rate. Runs the trading system if cache is empty."
+    description="Returns the official backtest summary from database, including strategy returns, BTC HODL benchmark, ML accuracy, and win rate."
 )
 def get_summary():
     """
     Retorna o Veredicto do Backtest. 
-    Se o cache estiver vazio, roda o sistema.
+    Primeiro tenta obter o OFFICIAL do banco de dados (simulation_summary).
+    Se não existir, roda o sistema para gerar um novo.
     """
     global _SUMMARY_CACHE
     
-    # Se já temos um resultado recente (ex: lógica de expiração poderia vir aqui), retorna ele
+    # Primeiramente, tenta obter o summary OFFICIAL do banco de dados
+    official_summary = get_latest_simulation_summary()
+    if official_summary:
+        logger.info("✓ Using OFFICIAL summary from database")
+        
+        # Calcula apenas as métricas adicionais que não estão em simulation_summary
+        positions_df = get_positions_from_db(include_open=False, include_closed=True)
+        win_rate = 0.0
+        if not positions_df.empty:
+            wins = positions_df[positions_df['final_profit_usd'] > 0]
+            win_rate = len(wins) / len(positions_df)
+        
+        preds_df = get_predictions_from_db()
+        accuracy = 0.0
+        current_action = "AGUARDAR"
+        
+        if not preds_df.empty and 'prediction_correct' in preds_df.columns:
+            try:
+                preds_df['prediction_correct'] = pd.to_numeric(preds_df['prediction_correct'], errors='coerce')
+            except Exception as e:
+                logger.warning(f"Error converting prediction_correct to numeric: {e}")
+            valid_predictions = preds_df['prediction_correct'].dropna()
+            if len(valid_predictions) > 0:
+                accuracy = float(valid_predictions.astype(float).mean())
+            
+            if 'prediction' in preds_df.columns and len(preds_df) > 0:
+                last_pred = preds_df.iloc[-1]['prediction']
+                if last_pred == 1:
+                    current_action = "COMPRAR"
+                elif last_pred == 0:
+                    current_action = "AGUARDAR"
+        
+        summary_data = {
+            "initial_capital": official_summary.get("initial_capital", 0),
+            "final_capital": official_summary.get("total_equity", 0),
+            "net_profit": official_summary.get("total_equity", 0) - official_summary.get("initial_capital", 0),
+            "strategy_return_pct": official_summary.get("roi_percent", 0),
+            "btc_hodl_return_pct": official_summary.get("benchmark_roi_percent", 0),
+            "win_rate": win_rate,
+            "ml_accuracy": accuracy,
+            "current_action": current_action,
+            "backtest_start_date": None,  # Could be added to simulation_summary if needed
+            "backtest_end_date": None,    # Could be added to simulation_summary if needed
+            "last_updated": official_summary.get("timestamp", datetime.now().isoformat())
+        }
+        
+        _SUMMARY_CACHE = sanitize_for_json(summary_data)
+        return _SUMMARY_CACHE
+    
+    # Se não temos summary OFFICIAL, rodamos o sistema
+    logger.info("No official summary found. Running run_trading_system() to generate one...")
     if _SUMMARY_CACHE:
         return _SUMMARY_CACHE
 
-    logger.info("Cache vazio. Rodando run_trading_system() para gerar resumo...")
     try:
         # Executa o sistema completo
         result = run_trading_system()
