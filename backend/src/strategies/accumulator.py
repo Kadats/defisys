@@ -38,10 +38,14 @@ MIN_USD_FOR_DIP_BUY = 100             # Minimum USD to trigger dip buying
 POSITION_SIZE_PERCENT = 0.10          # Conservative position sizing: 10% per entry (was 80% causing all-in)
 MIN_POSITION_USD = 10.0               # Minimum USD per position (Binance minimum)
 
+# COOL-DOWN MECHANISM (Anti Over-Trading) - V18 Quantitative Refinement
+COOLDOWN_HOURS = 24                   # Hours to wait between trades (24h = 1 day)
+COOLDOWN_CANDLES_4H = 6               # Equivalent in 4h candles (24h / 4h = 6 candles)
+
 
 class AccumulatorStrategy(BaseStrategy):
     """
-    BTC Accumulator Strategy (V16 - Dynamic Entry Logic).
+    BTC Accumulator Strategy (V18 - Cool-Down Refinement).
     
     Designed for users who want to maximize BTC holdings:
     - Momentum Entry: High ML confidence (>75%) → Buy regardless of RSI
@@ -49,7 +53,43 @@ class AccumulatorStrategy(BaseStrategy):
     - Defense Mode: De-leverage to pure BTC HODL (no debt)
     - Never sells BTC except to repay debt
     - Uses USD reserve to buy extreme dips when oversold (RSI<30)
+    - Cool-Down: 24h minimum between trades to prevent over-trading
     """
+    
+    def __init__(self):
+        """Initialize strategy with cool-down tracking."""
+        super().__init__()
+        self.last_trade_time = None  # Track last trade timestamp for cool-down
+    
+    def _is_cooldown_passed(self, current_time: pd.Timestamp) -> bool:
+        """
+        Check if enough time has passed since the last trade (cool-down period).
+        
+        This prevents over-trading by enforcing a minimum time between entries.
+        
+        Args:
+            current_time: Current timestamp
+        
+        Returns:
+            True if cool-down period has passed or no previous trade, False otherwise
+        """
+        if self.last_trade_time is None:
+            return True  # No previous trade, cool-down not applicable
+        
+        # Calculate time difference in hours
+        time_delta = current_time - self.last_trade_time
+        hours_since_last_trade = time_delta.total_seconds() / 3600
+        
+        cooldown_passed = hours_since_last_trade >= COOLDOWN_HOURS
+        
+        if not cooldown_passed:
+            hours_remaining = COOLDOWN_HOURS - hours_since_last_trade
+            logger.debug(
+                f"[{current_time.date()}] ⏳ COOL-DOWN ACTIVE: Last trade was {hours_since_last_trade:.1f}h ago. "
+                f"Need to wait {hours_remaining:.1f}h more (Total: {COOLDOWN_HOURS}h)"
+            )
+        
+        return cooldown_passed
     
     def _analyze_market_entry(self, prediction_proba: float, rsi: float, timestamp: pd.Timestamp) -> dict:
         """
@@ -131,12 +171,21 @@ class AccumulatorStrategy(BaseStrategy):
             self._execute_defense_mode(engine, current_price, timestamp)
             return
         
+        # --- COOL-DOWN CHECK: Prevent over-trading by enforcing minimum time between entries ---
+        if not self._is_cooldown_passed(timestamp):
+            logger.debug(f"[{timestamp.date()}] Skipping entry due to active cool-down period.")
+            # Still maintain existing positions even during cool-down
+            if len(engine.active_lps) > 0:
+                self._maintain_positions(engine, current_price, timestamp)
+            return
+        
         # --- ANALYZE MARKET: Check if we should enter a position ---
         entry_signal = self._analyze_market_entry(prediction_proba, rsi, timestamp)
         
         # --- EXECUTE ENTRY: Based on signal type ---
         if entry_signal and engine.total_debt_usd == 0 and engine.usd_balance > MIN_USD_FOR_DIP_BUY:
             self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal)
+            self.last_trade_time = timestamp  # Update cool-down timer after entry
             return
         
         # --- EXTREME DIP BUYER: In defense mode, buy extreme oversold ---
@@ -146,6 +195,7 @@ class AccumulatorStrategy(BaseStrategy):
                 f"Buying with available USD."
             )
             self._buy_the_dip(engine, current_price, timestamp)
+            self.last_trade_time = timestamp  # Update cool-down timer after dip buy
             return
         
         # --- MAINTENANCE: Check LP health ---

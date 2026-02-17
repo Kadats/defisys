@@ -804,31 +804,39 @@ def save_trades(trades_list: list, current_price: float = 0.0):
         for trade in trades_list:
             trade_copy = trade.copy()
             
-            # V17: Calcular PnL flutuante para posições abertas (Buy Only)
-            # Se for uma ação de compra e não tiver PnL (posição aberta), calcular PnL flutuante
+            # V18: QUANTITATIVE REFINEMENT - Calcular PnL virtual para posições abertas
+            # Posições abertas são identificadas por ações de compra sem venda correspondente
             is_buy_action = trade_copy.get("action", "") in ["BUY_HODL", "BUY"]
-            has_no_exit = trade_copy.get("pnl_usd", 0) == 0 and trade_copy.get("btc_amount", 0) > 0
+            btc_amount = float(trade_copy.get("btc_amount", 0))
+            entry_price = float(trade_copy.get("btc_price", 0))
             
-            if is_buy_action and has_no_exit and current_price > 0:
-                # Calcular PnL flutuante baseado no preço atual
-                entry_price = float(trade_copy.get("btc_price", 0))
-                btc_amount = float(trade_copy.get("btc_amount", 0))
+            # Se é uma posição aberta (compra com BTC > 0) e temos preço atual válido
+            if is_buy_action and btc_amount > 0 and entry_price > 0 and current_price > 0:
+                # Calcular PnL virtual usando preço atual como "exit_price virtual"
+                # PnL = (Preço Atual - Preço de Entrada) × Quantidade
+                virtual_pnl_usd = (current_price - entry_price) * btc_amount
                 
-                if entry_price > 0 and btc_amount > 0:
-                    # PnL flutuante = (preço_atual - preço_entrada) * quantidade
-                    floating_pnl_usd = (current_price - entry_price) * btc_amount
-                    trade_copy["pnl_usd"] = floating_pnl_usd
-                    
-                    # Marcar como posição aberta
-                    details = trade_copy.get("details", "")
-                    if "OPEN" not in details:
-                        trade_copy["details"] = f"OPEN POSITION @ {entry_price:.2f} USD | {details}".strip()
-                    
-                    logger.debug(
-                        f"Floating PnL calculated for {trade_copy.get('action')}: "
-                        f"Entry ${entry_price:.2f}, Current ${current_price:.2f}, "
-                        f"Amount {btc_amount:.6f} BTC, PnL ${floating_pnl_usd:.2f}"
-                    )
+                # Calcular ROI: (PnL / Capital Investido) × 100%
+                capital_invested = entry_price * btc_amount
+                virtual_roi_percent = (virtual_pnl_usd / capital_invested * 100) if capital_invested > 0 else 0
+                
+                # Atualizar o PnL no trade (sem alterar o banco para trades fechados)
+                trade_copy["pnl_usd"] = virtual_pnl_usd
+                
+                # Adicionar tag [OPEN POSITION] nos detalhes para identificação visual
+                details = trade_copy.get("details", "")
+                if "[OPEN POSITION]" not in details:
+                    trade_copy["details"] = (
+                        f"[OPEN POSITION] Entry: ${entry_price:.2f} | "
+                        f"Current: ${current_price:.2f} | "
+                        f"Virtual ROI: {virtual_roi_percent:+.2f}% | {details}"
+                    ).strip()
+                
+                logger.info(
+                    f"💼 Virtual PnL calculated: {trade_copy.get('action')} - "
+                    f"Entry ${entry_price:.2f} → Current ${current_price:.2f}, "
+                    f"Amount {btc_amount:.6f} BTC, PnL ${virtual_pnl_usd:+.2f} (ROI: {virtual_roi_percent:+.2f}%)"
+                )
             
             trades_to_save.append(trade_copy)
         
