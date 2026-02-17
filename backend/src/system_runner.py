@@ -92,7 +92,8 @@ def run_trading_system():
     
     # Salvar os trades no banco de dados
     logger.info("Fase 4b: Salvando trades no banco de dados...")
-    save_trades(engine.transaction_log)
+    price_final = float(simulation_df.iloc[-1]['Close'])
+    save_trades(engine.transaction_log, current_price=price_final)
     
     # FIX: Recalcular o benchmark corretamente usando apenas preço do ativo
     price_initial = float(simulation_df.iloc[0]['Close'])

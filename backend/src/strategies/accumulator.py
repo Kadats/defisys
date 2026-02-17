@@ -35,6 +35,8 @@ DIP_RSI_MAX = 55                      # Max RSI for dip entry
 TARGET_SELL_MULTIPLIER = 1.05         # Single-sided LP target: 5% above current price
 DEFENSE_RSI_THRESHOLD = 30            # Extreme oversold in defense mode
 MIN_USD_FOR_DIP_BUY = 100             # Minimum USD to trigger dip buying
+POSITION_SIZE_PERCENT = 0.10          # Conservative position sizing: 10% per entry (was 80% causing all-in)
+MIN_POSITION_USD = 10.0               # Minimum USD per position (Binance minimum)
 
 
 class AccumulatorStrategy(BaseStrategy):
@@ -212,15 +214,18 @@ class AccumulatorStrategy(BaseStrategy):
                     engine.total_debt_usd -= repay_amount
                     engine.usd_balance -= repay_amount
         
-        # Step 4: Convert any remaining USD to BTC if we're fully de-leveraged
+        # Step 4: Convert some USD to BTC if we're fully de-leveraged
         if engine.total_debt_usd == 0 and engine.usd_balance > 50:
             remaining_usd = engine.usd_balance - GAS_RESERVE_USD
-            if remaining_usd > 10:
-                engine.buy_and_hodl(remaining_usd, current_price, timestamp)
-                logger.info(
-                    f"[{timestamp.date()}] Converted remaining ${remaining_usd:.2f} to BTC. "
-                    f"Now pure BTC HODL."
-                )
+            if remaining_usd > MIN_POSITION_USD:
+                # Only convert a portion to preserve capital for future entries
+                defense_convert_amount = min(remaining_usd * 0.30, remaining_usd * 0.50)  # Max 50% of remaining
+                if defense_convert_amount >= MIN_POSITION_USD:
+                    engine.buy_and_hodl(defense_convert_amount, current_price, timestamp)
+                    logger.info(
+                        f"[{timestamp.date()}] Converted ${defense_convert_amount:.2f} to BTC (30% of remaining). "
+                        f"Preserving capital for future entries. Balance: ${engine.usd_balance:.2f}"
+                    )
     
     def _buy_the_dip(
         self, 
@@ -230,15 +235,20 @@ class AccumulatorStrategy(BaseStrategy):
     ) -> None:
         """
         Dip Buyer: Use USD reserve to buy BTC when oversold (RSI < 30).
+        Uses conservative position sizing to avoid all-in.
         """
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        if safe_balance > 10:
+        if safe_balance > MIN_POSITION_USD:
+            # Use conservative dip-buying amount (max 20% of available for dips)
+            dip_buy_amount = safe_balance * 0.20
+            dip_buy_amount = max(MIN_POSITION_USD, min(dip_buy_amount, safe_balance * 0.50))
+            
             logger.info(
                 f"[{timestamp.date()}] DIP BUY: RSI oversold. "
-                f"Buying BTC with ${safe_balance:.2f}"
+                f"Buying BTC with ${dip_buy_amount:.2f} (20% of available)"
             )
-            engine.buy_and_hodl(safe_balance, current_price, timestamp)
+            engine.buy_and_hodl(dip_buy_amount, current_price, timestamp)
     
     def _execute_bull_entry(
         self, 
@@ -271,11 +281,17 @@ class AccumulatorStrategy(BaseStrategy):
         # Step 1: Buy spot BTC with available USD
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        if safe_balance > 10:
-            # Keep 20% as reserve, use 80% for entry
-            entry_capital = safe_balance * 0.80
+        if safe_balance > MIN_POSITION_USD:
+            # Use conservative position sizing (10% per entry instead of 80%-ing all-in)
+            # This allows ~10 entries with current balance, supporting multiple setup opportunities
+            entry_capital = safe_balance * POSITION_SIZE_PERCENT
+            entry_capital = max(MIN_POSITION_USD, min(entry_capital, safe_balance * 0.50))  # Cap at 50% max
+            
             engine.buy_and_hodl(entry_capital, current_price, timestamp)
-            logger.info(f"[{timestamp.date()}] Spot Entry: Bought BTC with ${entry_capital:.2f}")
+            logger.info(
+                f"[{timestamp.date()}] Spot Entry: Bought BTC with ${entry_capital:.2f} "
+                f"({POSITION_SIZE_PERCENT:.0%} of available). Remaining: ${safe_balance - entry_capital:.2f}"
+            )
         
         # Step 2: Borrow USDT against BTC collateral
         if engine.btc_hodl_balance > 0:
@@ -297,14 +313,14 @@ class AccumulatorStrategy(BaseStrategy):
                     f"(Projected HF: {projected_hf:.2f})"
                 )
                 
-                # Step 3: Use half of borrowed funds to buy more BTC
-                btc_buy_amount = borrowed_amount * 0.50
-                if btc_buy_amount > 10:
+                # Step 3: Use a smaller portion of borrowed funds to buy more BTC (conservative)
+                btc_buy_amount = borrowed_amount * 0.30  # Reduced from 50% to 30% for safety
+                if btc_buy_amount > MIN_POSITION_USD:
                     engine.buy_and_hodl(btc_buy_amount, current_price, timestamp)
-                    logger.info(f"[{timestamp.date()}] Bought more BTC with ${btc_buy_amount:.2f} borrowed USDT")
+                    logger.info(f"[{timestamp.date()}] Bought more BTC with ${btc_buy_amount:.2f} borrowed USDT (30% of borrowed)")
                 
-                # Step 4: Open single-sided BTC LP with the other half
-                lp_capital = borrowed_amount * 0.50
+                # Step 4: Open single-sided BTC LP with remaining borrowed funds
+                lp_capital = borrowed_amount * 0.70  # Use remaining 70% for LP (30% was used for BTC buy)
                 if lp_capital > 10:
                     # Single-sided LP range: current price to 5% above
                     range_lower = current_price

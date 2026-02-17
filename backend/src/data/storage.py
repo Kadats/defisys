@@ -767,15 +767,18 @@ def create_trades_table(conn: PGConnection):
         conn.rollback()
 
 
-def save_trades(trades_list: list):
+def save_trades(trades_list: list, current_price: float = 0.0):
     """
     Salva a lista de trades (transaction_log) no banco de dados.
+    Calcula PnL flutuante para posições abertas (Buy Only).
     Limpa os dados antigos antes de inserir os novos.
     
     Args:
         trades_list: Lista de dicionários contendo os dados das transações.
                      Cada dicionário deve ter: timestamp, action, btc_price, 
                      usd_amount, btc_amount, fee_usd, pnl_usd, details
+        current_price: Preço atual do BTC para calcular PnL flutuante de posições abertas.
+                      Se 0 ou não fornecido, usa o último preço do histórico.
     """
     conn = create_connection()
     if not conn:
@@ -796,8 +799,41 @@ def save_trades(trades_list: list):
             conn.commit()
             return
         
+        # Processa cada trade, calculando PnL flutuante para posições abertas
+        trades_to_save = []
+        for trade in trades_list:
+            trade_copy = trade.copy()
+            
+            # V17: Calcular PnL flutuante para posições abertas (Buy Only)
+            # Se for uma ação de compra e não tiver PnL (posição aberta), calcular PnL flutuante
+            is_buy_action = trade_copy.get("action", "") in ["BUY_HODL", "BUY"]
+            has_no_exit = trade_copy.get("pnl_usd", 0) == 0 and trade_copy.get("btc_amount", 0) > 0
+            
+            if is_buy_action and has_no_exit and current_price > 0:
+                # Calcular PnL flutuante baseado no preço atual
+                entry_price = float(trade_copy.get("btc_price", 0))
+                btc_amount = float(trade_copy.get("btc_amount", 0))
+                
+                if entry_price > 0 and btc_amount > 0:
+                    # PnL flutuante = (preço_atual - preço_entrada) * quantidade
+                    floating_pnl_usd = (current_price - entry_price) * btc_amount
+                    trade_copy["pnl_usd"] = floating_pnl_usd
+                    
+                    # Marcar como posição aberta
+                    details = trade_copy.get("details", "")
+                    if "OPEN" not in details:
+                        trade_copy["details"] = f"OPEN POSITION @ {entry_price:.2f} USD | {details}".strip()
+                    
+                    logger.debug(
+                        f"Floating PnL calculated for {trade_copy.get('action')}: "
+                        f"Entry ${entry_price:.2f}, Current ${current_price:.2f}, "
+                        f"Amount {btc_amount:.6f} BTC, PnL ${floating_pnl_usd:.2f}"
+                    )
+            
+            trades_to_save.append(trade_copy)
+        
         with conn.cursor() as cursor:
-            for trade in trades_list:
+            for trade in trades_to_save:
                 # Converter timestamp para formato PostgreSQL
                 timestamp = trade.get("timestamp")
                 if isinstance(timestamp, pd.Timestamp):
@@ -823,7 +859,7 @@ def save_trades(trades_list: list):
                 ))
         
         conn.commit()
-        logger.info(f"{len(trades_list)} trades salvos com sucesso na tabela 'trades'.")
+        logger.info(f"{len(trades_to_save)} trades salvos com sucesso na tabela 'trades'.")
         
     except psycopg2.Error as e:
         logger.error(f"Erro ao salvar trades no banco de dados: {e}")
