@@ -7,7 +7,7 @@ from .core import TradingEngine
 from .strategies import BTCLiteStrategy, AccumulatorStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE
 from .ai import train_prediction_model, get_predictions
-from backend.src.data.storage import save_predictions_to_db
+from backend.src.data.storage import save_predictions_to_db, save_trades
 from backend.src.data import storage
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,10 @@ def run_trading_system():
     
     # O backtester roda APENAS no DataFrame de teste (post-split)
     backtest_results = engine.run(simulation_df, strategy=strategy) 
+    
+    # Salvar os trades no banco de dados
+    logger.info("Fase 4b: Salvando trades no banco de dados...")
+    save_trades(engine.transaction_log)
     
     # FIX: Recalcular o benchmark corretamente usando apenas preço do ativo
     price_initial = float(simulation_df.iloc[0]['Close'])

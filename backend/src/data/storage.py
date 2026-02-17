@@ -741,6 +741,101 @@ def log_close_position(position_id: int, close_timestamp: int, close_price: floa
             conn.close()
 
 
+# ==================== TRADES TABLE ====================
+
+def create_trades_table(conn: PGConnection):
+    """Creates the 'trades' table to store all transaction log data."""
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL,
+                    action TEXT NOT NULL,
+                    btc_price DOUBLE PRECISION NOT NULL,
+                    usd_amount DOUBLE PRECISION DEFAULT 0.0,
+                    btc_amount DOUBLE PRECISION DEFAULT 0.0,
+                    fee_usd DOUBLE PRECISION DEFAULT 0.0,
+                    pnl_usd DOUBLE PRECISION DEFAULT 0.0,
+                    details TEXT
+                )
+            """)
+            conn.commit()
+            logger.info("Table 'trades' verified/created successfully.")
+    except psycopg2.Error as e:
+        logger.error(f"Error creating 'trades' table: {e}")
+        conn.rollback()
+
+
+def save_trades(trades_list: list):
+    """
+    Salva a lista de trades (transaction_log) no banco de dados.
+    Limpa os dados antigos antes de inserir os novos.
+    
+    Args:
+        trades_list: Lista de dicionários contendo os dados das transações.
+                     Cada dicionário deve ter: timestamp, action, btc_price, 
+                     usd_amount, btc_amount, fee_usd, pnl_usd, details
+    """
+    conn = create_connection()
+    if not conn:
+        logger.error("Não foi possível conectar ao banco de dados para salvar trades.")
+        return
+    
+    try:
+        create_trades_table(conn)
+        
+        # Limpar trades antigos
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM trades")
+            logger.info("Trades antigos removidos da tabela 'trades'.")
+        
+        # Inserir novos trades
+        if not trades_list:
+            logger.info("Nenhum trade para salvar.")
+            conn.commit()
+            return
+        
+        with conn.cursor() as cursor:
+            for trade in trades_list:
+                # Converter timestamp para formato PostgreSQL
+                timestamp = trade.get("timestamp")
+                if isinstance(timestamp, pd.Timestamp):
+                    timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                elif hasattr(timestamp, 'isoformat'):
+                    timestamp_str = timestamp.isoformat()
+                else:
+                    timestamp_str = str(timestamp)
+                
+                cursor.execute("""
+                    INSERT INTO trades (timestamp, action, btc_price, usd_amount, 
+                                      btc_amount, fee_usd, pnl_usd, details)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    timestamp_str,
+                    trade.get("action", ""),
+                    float(trade.get("btc_price", 0)),
+                    float(trade.get("usd_amount", 0)),
+                    float(trade.get("btc_amount", 0)),
+                    float(trade.get("fee_usd", 0)),
+                    float(trade.get("pnl_usd", 0)),
+                    trade.get("details", "")
+                ))
+        
+        conn.commit()
+        logger.info(f"{len(trades_list)} trades salvos com sucesso na tabela 'trades'.")
+        
+    except psycopg2.Error as e:
+        logger.error(f"Erro ao salvar trades no banco de dados: {e}")
+        conn.rollback()
+    except Exception as e:
+        logger.error(f"Erro inesperado ao salvar trades: {e}")
+        conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
+
 # ==================== ML PREDICTIONS TABLE ====================
 
 def create_ml_predictions_table(conn: PGConnection):
@@ -857,6 +952,8 @@ def clear_simulation_data():
             cursor = conn.cursor()
             # Apaga todos os registros de logs de posição
             cursor.execute("DELETE FROM positions_log")
+            # Apaga todos os registros de trades
+            cursor.execute("DELETE FROM trades")
             conn.commit()
             print("🧹 Dados de simulação anteriores limpos com sucesso.")
         except Exception as e:

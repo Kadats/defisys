@@ -59,9 +59,10 @@ def get_simulation_results() -> Dict[str, Any]:
         }
 
     try:
-        df = pd.read_sql("SELECT * FROM positions_log ORDER BY open_timestamp ASC", conn)
+        # Ler da tabela trades ao invés de positions_log
+        df = pd.read_sql("SELECT * FROM trades ORDER BY timestamp ASC", conn)
     except Exception as exc:
-        logger.exception("Failed to read positions_log: %s", exc)
+        logger.exception("Failed to read trades: %s", exc)
         return {
             "kpis": {
                 "total_trades": 0,
@@ -90,65 +91,82 @@ def get_simulation_results() -> Dict[str, Any]:
             "trades": [],
         }
 
-    df = df.copy()
-    if "close_timestamp" in df.columns and "open_timestamp" in df.columns:
-        df["__sort_ts"] = df["close_timestamp"].where(pd.notna(df["close_timestamp"]), df["open_timestamp"])
-        df = df.sort_values(by="__sort_ts", ascending=True)
-    elif "close_timestamp" in df.columns:
-        df = df.sort_values(by="close_timestamp", ascending=True)
-    elif "open_timestamp" in df.columns:
-        df = df.sort_values(by="open_timestamp", ascending=True)
-
-    initial_balance = DEFAULT_INITIAL_BALANCE
-    if "initial_balance" in df.columns and pd.notna(df.iloc[0].get("initial_balance")):
-        initial_balance = _to_float(df.iloc[0].get("initial_balance"), DEFAULT_INITIAL_BALANCE)
-    elif "balance_before" in df.columns and pd.notna(df.iloc[0].get("balance_before")):
-        initial_balance = _to_float(df.iloc[0].get("balance_before"), DEFAULT_INITIAL_BALANCE)
-
-    pnl_series = df.get("final_profit_usd", pd.Series([0] * len(df))).fillna(0)
-    amount_in_series = df.get("capital_allocated_usd", pd.Series([0] * len(df))).fillna(0)
-
-    if "balance_after" in df.columns:
-        balance_after_series = df["balance_after"].fillna(method="ffill")
-        balance_after_list = [_to_float(value, initial_balance) for value in balance_after_series]
-    else:
-        running_balance = initial_balance
-        balance_after_list = []
-        for pnl_value in pnl_series:
-            running_balance += _to_float(pnl_value, 0.0)
-            balance_after_list.append(running_balance)
-
+    # Converter transaction_log para formato esperado pelo frontend
     trades: List[Dict[str, Any]] = []
+    balance = DEFAULT_INITIAL_BALANCE
+    
     for idx, row in df.iterrows():
-        amount_in = _to_float(row.get("capital_allocated_usd"))
-        pnl = _to_float(row.get("final_profit_usd"))
-        amount_out = amount_in + pnl
-        balance_after = balance_after_list[idx] if idx < len(balance_after_list) else initial_balance
+        action = row.get("action", "")
+        usd_amount = _to_float(row.get("usd_amount", 0))
+        btc_amount = _to_float(row.get("btc_amount", 0))
+        pnl_usd = _to_float(row.get("pnl_usd", 0))
+        fee_usd = _to_float(row.get("fee_usd", 0))
+        btc_price = _to_float(row.get("btc_price", 0))
+        
+        # Atualizar o saldo baseado na ação
+        if action == "BUY_HODL":
+            balance -= (usd_amount + fee_usd)
+            amount_in = usd_amount + fee_usd
+            amount_out = 0
+            trade_type = "Buy"
+            pnl_percent = 0.0
+        elif action == "OPEN_LP":
+            balance -= (usd_amount + fee_usd)
+            amount_in = usd_amount + fee_usd
+            amount_out = 0
+            trade_type = "Open LP"
+            pnl_percent = 0.0
+        elif action == "CLOSE_LP":
+            balance += (pnl_usd - fee_usd)
+            amount_in = usd_amount  # capital original
+            amount_out = usd_amount + pnl_usd
+            trade_type = "Close LP"
+            pnl_percent = (pnl_usd / usd_amount * 100) if usd_amount > 0 else 0.0
+        elif action == "HARVEST":
+            balance += pnl_usd - fee_usd
+            amount_in = 0
+            amount_out = pnl_usd
+            trade_type = "Harvest"
+            pnl_percent = 100.0 if pnl_usd > 0 else 0.0
+        elif action == "BORROW":
+            balance += usd_amount
+            amount_in = 0
+            amount_out = usd_amount
+            trade_type = "Borrow"
+            pnl_percent = 0.0
+        elif action == "DEBT_REPAY":
+            balance -= usd_amount
+            amount_in = usd_amount
+            amount_out = 0
+            trade_type = "Repay"
+            pnl_percent = 0.0
+        else:
+            # Outras ações (EMERGENCY_CLOSE, etc.)
+            balance += (pnl_usd - fee_usd)
+            amount_in = usd_amount
+            amount_out = usd_amount + pnl_usd
+            trade_type = action
+            pnl_percent = (pnl_usd / usd_amount * 100) if usd_amount > 0 else 0.0
+        
+        # Formatar data
+        date_str = _format_date(row.get("timestamp"))
+        
+        trades.append({
+            "date": date_str,
+            "type": trade_type,
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "balance_after": balance,
+            "pnl_percent": pnl_percent,
+        })
 
-        close_ts = row.get("close_timestamp")
-        open_ts = row.get("open_timestamp")
-        date_value = close_ts if pd.notna(close_ts) else open_ts
-
-        trades.append(
-            {
-                "date": _format_date(date_value),
-                "type": _infer_trade_type(row.get("strategy_used")),
-                "amount_in": amount_in,
-                "amount_out": amount_out,
-                "balance_after": balance_after,
-                "pnl_percent": (pnl / amount_in * 100) if amount_in else 0.0,
-            }
-        )
-
-    trades.sort(key=lambda trade: trade.get("date") or "")
-
-    final_balance = balance_after_list[-1] if balance_after_list else initial_balance
-    roi = ((final_balance - initial_balance) / initial_balance * 100) if initial_balance else 0.0
+    final_balance = balance
+    roi = ((final_balance - DEFAULT_INITIAL_BALANCE) / DEFAULT_INITIAL_BALANCE * 100) if DEFAULT_INITIAL_BALANCE > 0 else 0.0
 
     return {
         "kpis": {
             "total_trades": int(len(trades)),
-            "initial_balance": float(initial_balance),
+            "initial_balance": float(DEFAULT_INITIAL_BALANCE),
             "final_balance": float(final_balance),
             "roi": float(roi),
             "benchmark_roi": 0.0,
