@@ -107,6 +107,26 @@ def run_trading_system():
     backtest_results['start_date'] = simulation_df.iloc[0]['Open_time'].isoformat()
     backtest_results['end_date'] = simulation_df.iloc[-1]['Open_time'].isoformat()
     
+    # ========== PROBLEMA 2 FIX: Calcular total_equity ==========
+    # O Dashboard deve mostrar o valor total dos ativos (Cash + BTC), não apenas o saldo em dólar
+    btc_value = engine.btc_hodl_balance * price_final
+    total_equity = engine.usd_balance + btc_value
+    
+    # Atualizar os resultados com o total equity
+    # final_usd_value agora reflete o valor TOTAL da carteira (cash + BTC)
+    backtest_results['final_usd_value'] = total_equity
+    backtest_results['cash_balance'] = engine.usd_balance  # Saldo em dólar puro
+    backtest_results['btc_amount'] = engine.btc_hodl_balance  # Quantidade de BTC
+    backtest_results['btc_price_final'] = price_final  # Preço final do BTC
+    
+    # Recalcular ROI usando o total_equity para refletir corretamente a performance
+    backtest_results['profit_usd'] = total_equity - engine.initial_capital
+    backtest_results['profit_percentage_usd'] = ((total_equity / engine.initial_capital) - 1) * 100
+    
+    logger.info(
+        f"✓ Total Equity Calculado: ${total_equity:.2f} "
+        f"(Cash: ${engine.usd_balance:.2f} + BTC Value: ${btc_value:.2f})"
+    )
     logger.info(f"✓ Benchmark BTC recalculado: {btc_benchmark_profit_percentage:.2f}% (Preço: ${price_initial:.2f} → ${price_final:.2f})")
 
     # 4. Logar o relatório final

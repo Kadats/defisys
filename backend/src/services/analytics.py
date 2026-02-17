@@ -94,6 +94,8 @@ def get_simulation_results() -> Dict[str, Any]:
     # Converter transaction_log para formato esperado pelo frontend
     trades: List[Dict[str, Any]] = []
     balance = DEFAULT_INITIAL_BALANCE
+    btc_accumulated = 0.0  # Track accumulated BTC for total equity calculation
+    btc_price_final = 0.0  # Track final BTC price
     
     for idx, row in df.iterrows():
         action = row.get("action", "")
@@ -103,6 +105,10 @@ def get_simulation_results() -> Dict[str, Any]:
         fee_usd = _to_float(row.get("fee_usd", 0))
         btc_price = _to_float(row.get("btc_price", 0))
         
+        # CRITICAL FIX: Track final BTC price and accumulated BTC for equity calculation
+        if btc_price > 0:
+            btc_price_final = btc_price
+        
         # Atualizar o saldo baseado na ação
         if action == "BUY_HODL":
             balance -= (usd_amount + fee_usd)
@@ -110,6 +116,9 @@ def get_simulation_results() -> Dict[str, Any]:
             amount_out = 0
             trade_type = "Buy"
             pnl_percent = 0.0
+            # Track accumulated BTC
+            if btc_amount > 0:
+                btc_accumulated += btc_amount
         elif action == "OPEN_LP":
             balance -= (usd_amount + fee_usd)
             amount_in = usd_amount + fee_usd
@@ -160,7 +169,17 @@ def get_simulation_results() -> Dict[str, Any]:
             "pnl_percent": pnl_percent,
         })
 
-    final_balance = balance
+    # CRITICAL FIX: Calculate total equity = cash balance + BTC value
+    btc_value = btc_accumulated * btc_price_final
+    final_balance = balance + btc_value
+    
+    # Log the calculation for debugging
+    if btc_accumulated > 0:
+        logger.info(
+            f"📊 Total Equity Calculation: Cash ${balance:.2f} + "
+            f"BTC {btc_accumulated:.6f} @ ${btc_price_final:.2f} = ${final_balance:.2f}"
+        )
+    
     roi = ((final_balance - DEFAULT_INITIAL_BALANCE) / DEFAULT_INITIAL_BALANCE * 100) if DEFAULT_INITIAL_BALANCE > 0 else 0.0
 
     return {

@@ -231,7 +231,9 @@ class AccumulatorStrategy(BaseStrategy):
                 safe_balance -= SIMULATED_GAS_FEE_USD
                 
                 # Repay as much debt as possible
+                # CRITICAL FIX: Validate repay_amount never exceeds available balance
                 repay_amount = min(safe_balance, engine.total_debt_usd)
+                repay_amount = min(repay_amount, engine.usd_balance)  # Double-check: never exceed actual USD balance
                 
                 if repay_amount > 0:
                     engine.total_debt_usd -= repay_amount
@@ -270,6 +272,8 @@ class AccumulatorStrategy(BaseStrategy):
             if remaining_usd > MIN_POSITION_USD:
                 # Only convert a portion to preserve capital for future entries
                 defense_convert_amount = min(remaining_usd * 0.30, remaining_usd * 0.50)  # Max 50% of remaining
+                # CRITICAL FIX: Validate conversion amount never exceeds available USD
+                defense_convert_amount = min(defense_convert_amount, engine.usd_balance - GAS_RESERVE_USD)
                 if defense_convert_amount >= MIN_POSITION_USD:
                     engine.buy_and_hodl(defense_convert_amount, current_price, timestamp)
                     logger.info(
@@ -365,12 +369,16 @@ class AccumulatorStrategy(BaseStrategy):
                 
                 # Step 3: Use a smaller portion of borrowed funds to buy more BTC (conservative)
                 btc_buy_amount = borrowed_amount * 0.30  # Reduced from 50% to 30% for safety
+                # CRITICAL FIX: Validate amount doesn't exceed available USD balance
+                btc_buy_amount = min(btc_buy_amount, engine.usd_balance - GAS_RESERVE_USD)
                 if btc_buy_amount > MIN_POSITION_USD:
                     engine.buy_and_hodl(btc_buy_amount, current_price, timestamp)
                     logger.info(f"[{timestamp.date()}] Bought more BTC with ${btc_buy_amount:.2f} borrowed USDT (30% of borrowed)")
                 
                 # Step 4: Open single-sided BTC LP with remaining borrowed funds
                 lp_capital = borrowed_amount * 0.70  # Use remaining 70% for LP (30% was used for BTC buy)
+                # CRITICAL FIX: Validate LP capital doesn't exceed available USD balance
+                lp_capital = min(lp_capital, engine.usd_balance - GAS_RESERVE_USD)
                 if lp_capital > 10:
                     # Single-sided LP range: current price to 5% above
                     range_lower = current_price
