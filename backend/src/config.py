@@ -31,8 +31,10 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	DEFAULT_SYMBOL: str = "BTCUSDT"
 	DEFAULT_INTERVAL: str = "4h"
 	DEFAULT_KLINES_LIMIT: int = 1000
-	# Collect 5 years of 4h klines for SMA_200 indicator (1825 days = ~5 years)
-	DEFAULT_HISTORICAL_DAYS: int = 1825
+	# Collect full BTC cycle history from BTCUSDT launch (2017-08-17) to present
+	# Covers all major bull/bear cycles: 2017 bull, 2018 bear, 2020-2021 super bull, 2022 bear, 2024 bull
+	# ~8.5 years of 4h klines = ~3200 days
+	DEFAULT_HISTORICAL_DAYS: int = 3200
 
 	# The Graph - Uniswap v3 configuration (configurable)
 	# Base gateway URL (no API key or subgraph id included)
@@ -88,7 +90,9 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 
 	# Machine Learning Configuration
 	# Hard cut for Walk-Forward validation - train before, test after
-	ML_TRAIN_SPLIT_DATE: str = "2025-01-01"
+	# Train on: 2017-08-17 to 2023-12-31 (full historical cycles)
+	# Backtest on: 2024-01-01 to 2026-02-20 (Halving cycle + post-ETF market)
+	ML_TRAIN_SPLIT_DATE: str = "2024-01-01"
 	# Minimum probability threshold to trigger a buy signal (65%)
 	ML_CONFIDENCE_THRESHOLD: float = 0.65
 	# Price must rise by at least 4% to be considered a positive target (swing trade)
@@ -151,7 +155,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.DEFAULT_SYMBOL = os.environ.get('DEFAULT_SYMBOL', "BTCUSDT")
 			self.DEFAULT_INTERVAL = os.environ.get('DEFAULT_INTERVAL', "4h")
 			self.DEFAULT_KLINES_LIMIT = int(os.environ.get('DEFAULT_KLINES_LIMIT', 1000))
-			self.DEFAULT_HISTORICAL_DAYS = int(os.environ.get('DEFAULT_HISTORICAL_DAYS', 1825))
+			self.DEFAULT_HISTORICAL_DAYS = int(os.environ.get('DEFAULT_HISTORICAL_DAYS', 3200))
 			self.SIMULATED_GAS_FEE_USD = float(os.environ.get('SIMULATED_GAS_FEE_USD', 0.10))
 			self.SLIPPAGE_PCT = float(os.environ.get('SLIPPAGE_PCT', 0.001))
 			self.TARGET_RESERVE_RATIO = float(os.environ.get('TARGET_RESERVE_RATIO', 0.20))
@@ -159,7 +163,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.MAX_DEBT_RATIO = float(os.environ.get('MAX_DEBT_RATIO', 0.45))
 			
 			# Machine Learning Configuration
-			self.ML_TRAIN_SPLIT_DATE = os.environ.get('ML_TRAIN_SPLIT_DATE', '2025-01-01')
+			self.ML_TRAIN_SPLIT_DATE = os.environ.get('ML_TRAIN_SPLIT_DATE', '2024-01-01')
 			self.ML_CONFIDENCE_THRESHOLD = float(os.environ.get('ML_CONFIDENCE_THRESHOLD', 0.65))
 			self.ML_TARGET_MIN_CHANGE = float(os.environ.get('ML_TARGET_MIN_CHANGE', 0.04))
 			self.ML_PREDICTION_HORIZON = int(os.environ.get('ML_PREDICTION_HORIZON', 30))

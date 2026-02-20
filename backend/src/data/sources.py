@@ -203,23 +203,39 @@ def fetch_all_klines(symbol: str, interval: str, start_timestamp: int, end_times
     logger.warning(f"Nenhuma vela foi coletada para {symbol} {interval}")
     return pd.DataFrame()
 
-def get_funding_rate_history(symbol: str, limit: int = 100, binance_futures_api_base_url: str = None) -> list:
+def get_funding_rate_history(symbol: str, limit: int = 1000, start_time_ms: int = None, end_time_ms: int = None, binance_futures_api_base_url: str = None) -> list:
     """
-    Coleta o histórico de Funding Rate da API da Binance Futures.
+    Coleta o histórico de Funding Rate da API da Binance Futures com suporte a paginação.
+    
+    Permet data range retroativa para coleta histórica completa. API suporta até ~1625 registros
+    por request. Para períodos extensos (anos), implementar paginação no nível superior se necessário.
 
     Args:
         symbol (str): O par de trading (ex: "BTCUSDT").
-        limit (int): O número de entradas a retornar (máximo 1000).
+        limit (int): Número máximo de entradas por requisição (padrão: 1000, máximo: 1000).
+        start_time_ms (int): Timestamp inicial em ms (opcional). Se não fornecido, retorna últimas N.
+        end_time_ms (int): Timestamp final em ms (opcional). Se não fornecido, usa agora.
 
     Returns:
         list: Uma lista de dicionários com os dados do Funding Rate, ou uma lista vazia.
+        
+    Note:
+        Funding Rate na Binance Futures iniciou em 2019-06. Períodos anteriores retornarão vazio.
     """
     endpoint = "/fapi/v1/fundingRate"
-    params = {"symbol": symbol, "limit": limit}
+    params = {"symbol": symbol, "limit": min(limit, 1000)}
+    
+    if start_time_ms:
+        params["startTime"] = int(start_time_ms)
+    if end_time_ms:
+        params["endTime"] = int(end_time_ms)
+    
     if not binance_futures_api_base_url:
         raise ValueError("binance_futures_api_base_url must be provided to get_funding_rate_history")
+    
     base_url = binance_futures_api_base_url
     client = APIClient(base_url=base_url, timeout=10, max_retries=3, backoff_factor=1)
+    
     try:
         resp = client.get(endpoint, params=params)
         try:
