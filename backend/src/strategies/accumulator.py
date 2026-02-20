@@ -28,19 +28,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Strategy-specific constants
-MOMENTUM_CONFIDENCE_THRESHOLD = 0.75  # High confidence: Buy regardless of RSI
-MOMENTUM_RSI_MAX = 70                 # Max RSI acceptable in momentum mode
-DIP_CONFIDENCE_THRESHOLD = 0.60       # Medium confidence: Buy on dips
-DIP_RSI_MAX = 55                      # Max RSI for dip entry
+MOMENTUM_CONFIDENCE_THRESHOLD = 0.65  # High confidence: Buy regardless of RSI (lowered from 0.70)
+MOMENTUM_RSI_MAX = 75                 # Max RSI acceptable in momentum mode (relaxed from 70)
+DIP_CONFIDENCE_THRESHOLD = 0.55       # Medium confidence: Buy on dips (relaxed from 0.60)
+DIP_RSI_MAX = 60                      # Max RSI for dip entry (relaxed from 55)
 TARGET_SELL_MULTIPLIER = 1.05         # Single-sided LP target: 5% above current price
-DEFENSE_RSI_THRESHOLD = 30            # Extreme oversold in defense mode
+DEFENSE_RSI_THRESHOLD = 35            # Extreme oversold in defense mode (relaxed from 30)
 MIN_USD_FOR_DIP_BUY = 100             # Minimum USD to trigger dip buying
+MIN_RESERVE_USD = 200.0               # Capital reserve to avoid full depletion
 POSITION_SIZE_PERCENT = 0.10          # Conservative position sizing: 10% per entry (was 80% causing all-in)
 MIN_POSITION_USD = 10.0               # Minimum USD per position (Binance minimum)
 
 # COOL-DOWN MECHANISM (Anti Over-Trading) - V18 Quantitative Refinement
-COOLDOWN_HOURS = 24                   # Hours to wait between trades (24h = 1 day)
-COOLDOWN_CANDLES_4H = 6               # Equivalent in 4h candles (24h / 4h = 6 candles)
+COOLDOWN_HOURS = 12                   # Hours to wait between trades (reduced from 24 to 12 hours for more activity)
+COOLDOWN_CANDLES_4H = 3               # Equivalent in 4h candles (12h / 4h = 3 candles)
 
 
 class AccumulatorStrategy(BaseStrategy):
@@ -165,9 +166,13 @@ class AccumulatorStrategy(BaseStrategy):
         prediction_proba = float(row.get('prediction_proba', 0.0))
         rsi = float(row.get('RSI', 50))
         
-        # --- DEFENSE MODE: De-leverage first if prediction is bearish ---
-        is_defense_mode = (prediction == 0)
-        if is_defense_mode and (len(engine.active_lps) > 0 or engine.total_debt_usd > 0):
+        # --- DEFENSE MODE: De-leverage only on real risk (HF or cash crunch) ---
+        has_leverage = (len(engine.active_lps) > 0 or engine.total_debt_usd > 0)
+        is_defense_mode = (
+            engine.health_factor < 1.5 or
+            (engine.usd_balance < 50 and has_leverage)
+        )
+        if is_defense_mode and has_leverage:
             self._execute_defense_mode(engine, current_price, timestamp)
             return
         
@@ -182,23 +187,43 @@ class AccumulatorStrategy(BaseStrategy):
         # --- ANALYZE MARKET: Check if we should enter a position ---
         entry_signal = self._analyze_market_entry(prediction_proba, rsi, timestamp)
         
-        # --- EXECUTE ENTRY: Based on signal type ---
-        if entry_signal and engine.total_debt_usd == 0 and engine.usd_balance > MIN_USD_FOR_DIP_BUY:
-            self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal)
-            self.last_trade_time = timestamp  # Update cool-down timer after entry
-            return
+        # --- PRIMARY: BULL ENTRY WITH DEFI (Momentum or DIP) ---
+        if entry_signal and engine.usd_balance > MIN_USD_FOR_DIP_BUY:
+            # HIGH CONFIDENCE: OPEN_LP + BORROW (if conditions safe)
+            if entry_signal['type'] == 'MOMENTUM' and engine.total_debt_usd == 0:
+                logger.info(f"[{timestamp.date()}] 🔥 MOMENTUM + HIGH CONFIDENCE: Executing full DeFi strategy (LP + Borrow)")
+                self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal)
+                self.last_trade_time = timestamp
+                return
+            
+            # MEDIUM CONFIDENCE: Try OPEN_LP only (risky borrow prevented)
+            elif entry_signal['type'] == 'DIP' and engine.total_debt_usd == 0:
+                logger.info(f"[{timestamp.date()}] 📍 DIP + MEDIUM CONFIDENCE: Opening LP for yield farming")
+                self._open_lp_conservative(engine, current_price, timestamp, entry_signal)
+                self.last_trade_time = timestamp
+                return
+            
+            # FALLBACK: If already leveraged or conditions not ideal, just buy spot
+            else:
+                logger.info(
+                    f"[{timestamp.date()}] ✓ SIGNAL ({entry_signal['type']}) but DeFi conditions not met. "
+                    f"Debt: ${engine.total_debt_usd:.2f}. Doing simple buy."
+                )
+                self._simple_spot_buy(engine, current_price, timestamp)
+                self.last_trade_time = timestamp
+                return
         
-        # --- EXTREME DIP BUYER: In defense mode, buy extreme oversold ---
-        if is_defense_mode and engine.usd_balance > MIN_USD_FOR_DIP_BUY and rsi < DEFENSE_RSI_THRESHOLD:
+        # --- SECONDARY: EXTREME DIP BUYER (even without high confidence signal) ---
+        if engine.usd_balance > MIN_USD_FOR_DIP_BUY and rsi < DEFENSE_RSI_THRESHOLD:
             logger.info(
                 f"[{timestamp.date()}] EXTREME DIP: RSI={rsi:.1f} < {DEFENSE_RSI_THRESHOLD}. "
                 f"Buying with available USD."
             )
-            self._buy_the_dip(engine, current_price, timestamp)
-            self.last_trade_time = timestamp  # Update cool-down timer after dip buy
+            self._dip_buy(engine, current_price, timestamp)
+            self.last_trade_time = timestamp
             return
         
-        # --- MAINTENANCE: Check LP health ---
+        # --- TERTIARY: If we have existing LPs, maintain them ---
         if len(engine.active_lps) > 0:
             self._maintain_positions(engine, current_price, timestamp)
     
@@ -281,7 +306,74 @@ class AccumulatorStrategy(BaseStrategy):
                         f"Preserving capital for future entries. Balance: ${engine.usd_balance:.2f}"
                     )
     
-    def _buy_the_dip(
+    def _simple_spot_buy(
+        self,
+        engine: 'TradingEngine',
+        current_price: float,
+        timestamp: pd.Timestamp
+    ) -> None:
+        """
+        Simple spot BTC buy for when DeFi conditions are not met.
+        This is a fallback when we don't want to use leverage/LP.
+        """
+        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+        
+        if safe_balance > MIN_POSITION_USD:
+            # Allocate 15% of available USD for spot buy
+            spot_amount = safe_balance * 0.15
+            spot_amount = max(MIN_POSITION_USD, min(spot_amount, safe_balance * 0.50))
+            
+            logger.info(f"[{timestamp.date()}] SPOT BUY: Accumulating BTC with ${spot_amount:.2f} (no leverage)")
+            engine.buy_and_hodl(spot_amount, current_price, timestamp)
+    
+    def _open_lp_conservative(
+        self,
+        engine: 'TradingEngine',
+        current_price: float,
+        timestamp: pd.Timestamp,
+        entry_signal: dict
+    ) -> None:
+        """
+        Open LP position conservatively when we have medium confidence but want to farm yields.
+        
+        This is a middle ground: We allocate capital to an LP position instead of just holding,
+        but without aggressive borrowing (which is risky).
+        """
+        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+        
+        if safe_balance > MIN_POSITION_USD:
+            # Use smaller allocation for LP (15-20% of available)
+            lp_capital = safe_balance * 0.15
+            lp_capital = max(MIN_POSITION_USD, min(lp_capital, safe_balance * 0.40))
+            
+            # Single-sided LP range: current price to 5% above
+            range_lower = current_price
+            range_upper = current_price * TARGET_SELL_MULTIPLIER
+            
+            logger.info(
+                f"[{timestamp.date()}] 🌾 OPEN_LP (Conservative): ${lp_capital:.2f} "
+                f"Range: ${range_lower:.2f} - ${range_upper:.2f} (Yield Farming)"
+            )
+            
+            engine.open_lp(
+                lp_capital,
+                range_lower,
+                range_upper,
+                current_price,
+                timestamp,
+                strategy="ACCUMULATOR_CONSERVATIVE_LP"
+            )
+            
+            # Also buy some spot BTC to build position
+            remaining_safe = safe_balance - lp_capital
+            if remaining_safe > MIN_POSITION_USD * 2:
+                spot_buy = remaining_safe * 0.20  # 20% of what's left for spot
+                spot_buy = min(spot_buy, remaining_safe * 0.50)
+                if spot_buy > MIN_POSITION_USD:
+                    engine.buy_and_hodl(spot_buy, current_price, timestamp)
+                    logger.info(f"[{timestamp.date()}] Also bought BTC spot: ${spot_buy:.2f}")
+    
+    def _dip_buy(
         self, 
         engine: 'TradingEngine', 
         current_price: float, 
@@ -294,9 +386,13 @@ class AccumulatorStrategy(BaseStrategy):
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
         if safe_balance > MIN_POSITION_USD:
-            # Use conservative dip-buying amount (max 20% of available for dips)
-            dip_buy_amount = safe_balance * 0.20
-            dip_buy_amount = max(MIN_POSITION_USD, min(dip_buy_amount, safe_balance * 0.50))
+            # Preserve a USD reserve to avoid draining capital in prolonged dips
+            available_for_trade = max(0.0, engine.usd_balance - MIN_RESERVE_USD)
+            if engine.usd_balance < MIN_RESERVE_USD:
+                dip_buy_amount = MIN_POSITION_USD
+            else:
+                dip_buy_amount = max(MIN_POSITION_USD, available_for_trade * 0.20)
+            dip_buy_amount = min(dip_buy_amount, safe_balance)
             
             logger.info(
                 f"[{timestamp.date()}] DIP BUY: RSI oversold. "
@@ -313,92 +409,118 @@ class AccumulatorStrategy(BaseStrategy):
         entry_signal: dict
     ) -> None:
         """
-        Bull Mode Entry: Leverage aggressively to accumulate more BTC.
+        Bull Mode Entry: Leverage aggressively to accumulate more BTC and farm yields.
+        
+        CRITICAL: This function is now the main path for DeFi operations.
+        It should maximize:
+        1. OPEN_LP for yield farming
+        2. BORROW_USDT for leverage
+        
+        Risk management is strict: Never exceed safe Health Factor.
         
         Args:
             entry_signal: Dict with 'type' (MOMENTUM/DIP) and 'reason'
-        
-        Steps:
-        1. Buy spot BTC with available USD
-        2. Borrow USDT against BTC collateral (safe LTV)
-        3. Buy more BTC with borrowed funds
-        4. Open single-sided BTC LP at target price (1.05x)
         """
         entry_type = entry_signal.get('type', 'UNKNOWN')
         entry_reason = entry_signal.get('reason', 'No reason provided')
         
         logger.info(
-            f"[{timestamp.date()}] 🚀 {entry_type} ENTRY TRIGGERED: {entry_reason}. "
-            f"Leveraging to accumulate BTC..."
+            f"[{timestamp.date()}] 🚀 BULL ENTRY ({entry_type}): {entry_reason}. "
+            f"Unleashing DeFi Power! Opening LPs and Borrowing..."
         )
         
-        # Step 1: Buy spot BTC with available USD
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        if safe_balance > MIN_POSITION_USD:
-            # Use conservative position sizing (10% per entry instead of 80%-ing all-in)
-            # This allows ~10 entries with current balance, supporting multiple setup opportunities
-            entry_capital = safe_balance * POSITION_SIZE_PERCENT
-            entry_capital = max(MIN_POSITION_USD, min(entry_capital, safe_balance * 0.50))  # Cap at 50% max
-            
-            engine.buy_and_hodl(entry_capital, current_price, timestamp)
+        # Step 1: Build spot BTC position first (always allocate some to HODL)
+        spot_allocation = safe_balance * 0.20  # 20% for spot buying
+        spot_allocation = max(MIN_POSITION_USD, min(spot_allocation, safe_balance * 0.40))
+        
+        if spot_allocation > MIN_POSITION_USD:
+            engine.buy_and_hodl(spot_allocation, current_price, timestamp)
             logger.info(
-                f"[{timestamp.date()}] Spot Entry: Bought BTC with ${entry_capital:.2f} "
-                f"({POSITION_SIZE_PERCENT:.0%} of available). Remaining: ${safe_balance - entry_capital:.2f}"
+                f"[{timestamp.date()}] Spot Entry: Bought BTC with ${spot_allocation:.2f}. "
+                f"Remaining USD: ${safe_balance - spot_allocation:.2f}"
             )
         
-        # Step 2: Borrow USDT against BTC collateral
+        # Step 2: OPEN LIQUIDITY POOL (Yield Farming)
+        # Even WITHOUT borrowing, we should open LPs if we have capital
+        lp_allocation = safe_balance * 0.40  # 40% for LP (larger allocation for yield farming)
+        lp_allocation = max(MIN_POSITION_USD, min(lp_allocation, safe_balance * 0.60))
+        lp_allocation = min(lp_allocation, engine.usd_balance - GAS_RESERVE_USD)
+        
+        if lp_allocation > 10:
+            range_lower = current_price
+            range_upper = current_price * TARGET_SELL_MULTIPLIER
+            
+            engine.open_lp(
+                lp_allocation,
+                range_lower,
+                range_upper,
+                current_price,
+                timestamp,
+                strategy="ACCUMULATOR_BULL"
+            )
+            logger.info(
+                f"[{timestamp.date()}] 💰 OPEN LP (Bull): ${lp_allocation:.2f} "
+                f"| Range: ${range_lower:.2f} - ${range_upper:.2f} (YIELD FARMING!)"
+            )
+        
+        # Step 3: BORROW USDT for aggressive leverage (only if conditions are safe)
         if engine.btc_hodl_balance > 0:
             collateral_value = engine.btc_hodl_balance * current_price
+            max_borrow = collateral_value * MAX_DEBT_RATIO  # 45% LTV
             
-            # Calculate safe borrow amount (conservative 40% LTV)
-            max_borrow = collateral_value * MAX_DEBT_RATIO
-            
-            # Ensure we maintain safe Health Factor
+            # Check safe HF before borrowing
             projected_debt = engine.total_debt_usd + max_borrow
             projected_hf = (collateral_value * 0.80) / projected_debt if projected_debt > 0 else 999.0
             
-            if projected_hf >= SAFE_HF_AFTER_BORROW:
+            if projected_hf >= SAFE_HF_AFTER_BORROW and max_borrow > MIN_POSITION_USD:
                 borrowed_amount = engine.borrow_funds(max_borrow, current_price)
-                if borrowed_amount <= 0:
-                    return
-                logger.info(
-                    f"[{timestamp.date()}] LEVERAGE: Borrowed ${borrowed_amount:.2f} "
-                    f"(Projected HF: {projected_hf:.2f})"
-                )
                 
-                # Step 3: Use a smaller portion of borrowed funds to buy more BTC (conservative)
-                btc_buy_amount = borrowed_amount * 0.30  # Reduced from 50% to 30% for safety
-                # CRITICAL FIX: Validate amount doesn't exceed available USD balance
-                btc_buy_amount = min(btc_buy_amount, engine.usd_balance - GAS_RESERVE_USD)
-                if btc_buy_amount > MIN_POSITION_USD:
-                    engine.buy_and_hodl(btc_buy_amount, current_price, timestamp)
-                    logger.info(f"[{timestamp.date()}] Bought more BTC with ${btc_buy_amount:.2f} borrowed USDT (30% of borrowed)")
-                
-                # Step 4: Open single-sided BTC LP with remaining borrowed funds
-                lp_capital = borrowed_amount * 0.70  # Use remaining 70% for LP (30% was used for BTC buy)
-                # CRITICAL FIX: Validate LP capital doesn't exceed available USD balance
-                lp_capital = min(lp_capital, engine.usd_balance - GAS_RESERVE_USD)
-                if lp_capital > 10:
-                    # Single-sided LP range: current price to 5% above
-                    range_lower = current_price
-                    range_upper = current_price * TARGET_SELL_MULTIPLIER
-                    
-                    engine.open_lp(
-                        lp_capital, 
-                        range_lower, 
-                        range_upper, 
-                        current_price, 
-                        timestamp, 
-                        strategy="ACCUMULATOR_BULL"
-                    )
+                if borrowed_amount > 0:
                     logger.info(
-                        f"[{timestamp.date()}] Opened BTC LP: Range ${range_lower:.2f} - ${range_upper:.2f}"
+                        f"[{timestamp.date()}] 🏦 BORROW: ${borrowed_amount:.2f} USDT "
+                        f"(Projected HF: {projected_hf:.2f}, Safe Threshold: {SAFE_HF_AFTER_BORROW})"
                     )
+                    
+                    # Step 4: Use borrowed USDT for more OPEN_LP (leverage LP yield farming)
+                    borrowed_lp_allocation = borrowed_amount * 0.60  # 60% of borrowed → another LP
+                    borrowed_lp_allocation = min(borrowed_lp_allocation, engine.usd_balance - GAS_RESERVE_USD)
+                    
+                    if borrowed_lp_allocation > 10:
+                        # Put this LP slightly HIGHER than current price (capture upside more)
+                        range_lower_lever = current_price * 0.98  # Slightly below
+                        range_upper_lever = current_price * 1.08  # 8% above (vs normal 5%)
+                        
+                        engine.open_lp(
+                            borrowed_lp_allocation,
+                            range_lower_lever,
+                            range_upper_lever,
+                            current_price,
+                            timestamp,
+                            strategy="ACCUMULATOR_LEVERAGED_LP"
+                        )
+                        logger.info(
+                            f"[{timestamp.date()}] 🚀 LEVERAGED LP: ${borrowed_lp_allocation:.2f} "
+                            f"(from borrowed funds) | Range: ${range_lower_lever:.2f} - ${range_upper_lever:.2f}"
+                        )
+                    
+                    # Step 5: Use remaining borrowed for spot BTC (leverage spot accumulation)
+                    remaining_borrowed = max(0.0, borrowed_amount - borrowed_lp_allocation)
+                    borrowed_spot = remaining_borrowed * 0.70
+                    borrowed_spot = min(borrowed_spot, engine.usd_balance - GAS_RESERVE_USD)
+                    
+                    if borrowed_spot > MIN_POSITION_USD:
+                        engine.buy_and_hodl(borrowed_spot, current_price, timestamp)
+                        logger.info(
+                            f"[{timestamp.date()}] 📈 LEVERAGED BTC BUY: ${borrowed_spot:.2f} "
+                            f"(from borrowed USDT)"
+                        )
             else:
                 logger.warning(
                     f"[{timestamp.date()}] Cannot borrow safely. "
-                    f"Projected HF ({projected_hf:.2f}) < {SAFE_HF_AFTER_BORROW}"
+                    f"Projected HF ({projected_hf:.2f}) < Safe Threshold ({SAFE_HF_AFTER_BORROW}). "
+                    f"Sticking with spot + LP only."
                 )
     
     def _maintain_positions(
