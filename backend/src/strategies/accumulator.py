@@ -166,12 +166,9 @@ class AccumulatorStrategy(BaseStrategy):
         prediction_proba = float(row.get('prediction_proba', 0.0))
         rsi = float(row.get('RSI', 50))
         
-        # --- DEFENSE MODE: De-leverage only on real risk (HF or cash crunch) ---
+        # --- DEFENSE MODE: De-leverage only on real liquidation risk ---
         has_leverage = (len(engine.active_lps) > 0 or engine.total_debt_usd > 0)
-        is_defense_mode = (
-            engine.health_factor < 1.5 or
-            (engine.usd_balance < 50 and has_leverage)
-        )
+        is_defense_mode = engine.health_factor < 1.5
         if is_defense_mode and has_leverage:
             self._execute_defense_mode(engine, current_price, timestamp)
             return
@@ -188,7 +185,7 @@ class AccumulatorStrategy(BaseStrategy):
         entry_signal = self._analyze_market_entry(prediction_proba, rsi, timestamp)
         
         # --- PRIMARY: BULL ENTRY WITH DEFI (Momentum or DIP) ---
-        if entry_signal and engine.usd_balance > MIN_USD_FOR_DIP_BUY:
+        if entry_signal:
             # HIGH CONFIDENCE: OPEN_LP + BORROW (if conditions safe)
             if entry_signal['type'] == 'MOMENTUM' and engine.total_debt_usd == 0:
                 logger.info(f"[{timestamp.date()}] 🔥 MOMENTUM + HIGH CONFIDENCE: Executing full DeFi strategy (LP + Borrow)")
@@ -197,7 +194,7 @@ class AccumulatorStrategy(BaseStrategy):
                 return
             
             # MEDIUM CONFIDENCE: Try OPEN_LP only (risky borrow prevented)
-            elif entry_signal['type'] == 'DIP' and engine.total_debt_usd == 0:
+            elif entry_signal['type'] == 'DIP' and engine.total_debt_usd == 0 and engine.usd_balance > MIN_USD_FOR_DIP_BUY:
                 logger.info(f"[{timestamp.date()}] 📍 DIP + MEDIUM CONFIDENCE: Opening LP for yield farming")
                 self._open_lp_conservative(engine, current_price, timestamp, entry_signal)
                 self.last_trade_time = timestamp
@@ -239,11 +236,12 @@ class AccumulatorStrategy(BaseStrategy):
         """
         logger.info(f"[{timestamp.date()}] DEFENSE MODE: De-leveraging to pure BTC HODL...")
         
-        # Step 1: Close all active LPs
-        lps_to_close = list(engine.active_lps)  # Copy to avoid modification during iteration
-        for lp in lps_to_close:
-            logger.info(f"[{timestamp.date()}] Closing LP {lp['id']} to de-leverage...")
-            engine.close_lp(lp['id'], current_price, timestamp, is_emergency=False)
+        # Step 1: Close LPs only if health factor is at real liquidation risk
+        if engine.health_factor < 1.5:
+            lps_to_close = list(engine.active_lps)  # Copy to avoid modification during iteration
+            for lp in lps_to_close:
+                logger.info(f"[{timestamp.date()}] Closing LP {lp['id']} to de-leverage...")
+                engine.close_lp(lp['id'], current_price, timestamp, is_emergency=False)
         
         # Step 2: Repay debt with available USD
         if engine.total_debt_usd > 0:
@@ -346,9 +344,9 @@ class AccumulatorStrategy(BaseStrategy):
             lp_capital = safe_balance * 0.15
             lp_capital = max(MIN_POSITION_USD, min(lp_capital, safe_balance * 0.40))
             
-            # Single-sided LP range: current price to 5% above
-            range_lower = current_price
-            range_upper = current_price * TARGET_SELL_MULTIPLIER
+            # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
+            range_lower = current_price * 0.95
+            range_upper = current_price * 1.25
             
             logger.info(
                 f"[{timestamp.date()}] 🌾 OPEN_LP (Conservative): ${lp_capital:.2f} "
@@ -449,8 +447,9 @@ class AccumulatorStrategy(BaseStrategy):
         lp_allocation = min(lp_allocation, engine.usd_balance - GAS_RESERVE_USD)
         
         if lp_allocation > 10:
-            range_lower = current_price
-            range_upper = current_price * TARGET_SELL_MULTIPLIER
+            # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
+            range_lower = current_price * 0.95
+            range_upper = current_price * 1.25
             
             engine.open_lp(
                 lp_allocation,
@@ -468,7 +467,7 @@ class AccumulatorStrategy(BaseStrategy):
         # Step 3: BORROW USDT for aggressive leverage (only if conditions are safe)
         if engine.btc_hodl_balance > 0:
             collateral_value = engine.btc_hodl_balance * current_price
-            max_borrow = collateral_value * MAX_DEBT_RATIO  # 45% LTV
+            max_borrow = collateral_value * 0.40  # 40% LTV
             
             # Check safe HF before borrowing
             projected_debt = engine.total_debt_usd + max_borrow
@@ -488,9 +487,9 @@ class AccumulatorStrategy(BaseStrategy):
                     borrowed_lp_allocation = min(borrowed_lp_allocation, engine.usd_balance - GAS_RESERVE_USD)
                     
                     if borrowed_lp_allocation > 10:
-                        # Put this LP slightly HIGHER than current price (capture upside more)
-                        range_lower_lever = current_price * 0.98  # Slightly below
-                        range_upper_lever = current_price * 1.08  # 8% above (vs normal 5%)
+                        # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
+                        range_lower_lever = current_price * 0.95
+                        range_upper_lever = current_price * 1.25
                         
                         engine.open_lp(
                             borrowed_lp_allocation,
@@ -530,26 +529,26 @@ class AccumulatorStrategy(BaseStrategy):
         timestamp: pd.Timestamp
     ) -> None:
         """
-        Maintain existing LP positions: Close if out of range or hit target.
+        Maintain existing LP positions: Track out-of-range duration and avoid panic closes.
         """
         lps_to_close = []
         
         for lp in engine.active_lps:
-            # Check if LP is out of range (above upper bound = take profit)
-            if current_price >= lp['range_upper']:
-                logger.info(
-                    f"[{timestamp.date()}] LP {lp['id']} hit take-profit target "
-                    f"(Price ${current_price:.2f} >= ${lp['range_upper']:.2f}). Closing..."
-                )
-                lps_to_close.append(lp['id'])
-            
-            # Check if LP has been out of range for too long (below range)
-            elif current_price < lp['range_lower']:
-                # This shouldn't happen often in bull mode, but close if it does
-                logger.info(
-                    f"[{timestamp.date()}] LP {lp['id']} out of range below. Closing..."
-                )
-                lps_to_close.append(lp['id'])
+            is_out_of_range = current_price > lp['range_upper'] or current_price < lp['range_lower']
+            if is_out_of_range:
+                last_date = lp.get('last_out_of_range_date')
+                if last_date != timestamp.date():
+                    lp['days_out_of_range'] = lp.get('days_out_of_range', 0) + 1
+                    lp['last_out_of_range_date'] = timestamp.date()
+                if lp.get('days_out_of_range', 0) > 10:
+                    logger.info(
+                        f"[{timestamp.date()}] LP {lp['id']} out of range for {lp['days_out_of_range']} days. "
+                        f"Closing to recycle capital."
+                    )
+                    lps_to_close.append(lp['id'])
+            else:
+                lp['days_out_of_range'] = 0
+                lp['last_out_of_range_date'] = None
         
         # Close marked LPs
         for lp_id in lps_to_close:
