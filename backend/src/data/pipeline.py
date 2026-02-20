@@ -123,9 +123,16 @@ def get_full_prepared_data() -> pd.DataFrame:
     if on_chain_data:
         storage.save_on_chain_to_db(on_chain_data, on_chain_table_name)
     
-    # 4. Collect Funding Rate
+    # 4. Collect Funding Rate (with date range support for retroactive collection)
+    # Binance Futures Funding Rate started 2019-06-01; anything before returns empty but doesn't crash
+    start_ts_funding = storage.get_start_timestamp_for_collection(
+        storage.get_last_funding_rate_timestamp_from_db, funding_rate_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    end_ts_funding = int(datetime.now().timestamp() * 1000)
+    
     funding_data = sources.get_funding_rate_history(
-        DEFAULT_SYMBOL, limit=100, binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
+        DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
+        binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
     )
     if funding_data:
         storage.save_funding_rate_to_db(funding_data, funding_rate_table_name)

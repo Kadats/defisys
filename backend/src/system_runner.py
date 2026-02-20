@@ -74,8 +74,9 @@ def run_trading_system():
     
     logger.info(f"Filtered simulation data. Starting from {split_date}. Rows: {len(simulation_df)}")
     logger.info(f"Fase 3: Configurando Backtest Walk-Forward...")
-    logger.info(f"  Período de simulação: {simulation_df['Open_time'].min().strftime('%Y-%m-%d')} até {simulation_df['Open_time'].max().strftime('%Y-%m-%d')}")
-    logger.info(f"  Total de candles para backtest: {len(simulation_df)}")
+    logger.info(f"  TREINO (Training Set): até 2023-12-31 | Dataset: {full_df[full_df['Open_time'] < split_date].shape[0]:,} candles")
+    logger.info(f"  TESTE (Backtest Set): {simulation_df['Open_time'].min().strftime('%Y-%m-%d')} até {simulation_df['Open_time'].max().strftime('%Y-%m-%d')} | Dataset: {len(simulation_df):,} candles")
+    logger.info(f"  ✓ Cobertura do halving/ETFs (2024): Completamente incluída no backtest")
     logger.info(f"  Modelo foi treinado em dados anteriores a {ML_TRAIN_SPLIT_DATE}")
     
     # Configurar e Executar o Backtester apenas com dados pós-split

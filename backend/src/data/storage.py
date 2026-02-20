@@ -277,6 +277,31 @@ def save_funding_rate_to_db(data: List[Dict[str, Any]], table_name: str):
             conn.close()
 
 
+def get_last_funding_rate_timestamp_from_db(table_name: str) -> Optional[int]:
+    """Gets the timestamp of the last Funding Rate entry saved in the database (milliseconds)."""
+    conn = create_connection()
+    if not conn:
+        return None
+        
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql.SQL("SELECT MAX(funding_time) FROM {}").format(sql.Identifier(table_name)))
+            result = cursor.fetchone()
+            last_timestamp_ms = result[0] if result else None
+            if last_timestamp_ms:
+                return last_timestamp_ms + 1
+            return None
+    except psycopg2.Error as e:
+        if getattr(e, "pgcode", None) == "42P01":
+            logger.warning(f"Table '{table_name}' does not exist yet. Starting fresh.")
+            return None
+        logger.error(f"Error fetching last Funding Rate timestamp: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 # ==================== FEAR & GREED INDEX TABLE ====================
 
 def create_fng_table(conn: PGConnection, table_name: str):
