@@ -5,7 +5,7 @@ import os
 from backend.src.data.pipeline import get_full_prepared_data
 from .core import TradingEngine
 from .strategies import BTCLiteStrategy, AccumulatorStrategy
-from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE
+from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE, GEMINI_BACKTEST_DAYS
 from .ai import train_prediction_model, get_predictions
 from backend.src.data.storage import save_predictions_to_db, save_trades, save_simulation_summary
 from backend.src.data import storage
@@ -70,6 +70,18 @@ def run_trading_system(start_date: str = None, end_date: str = None, initial_cap
     # CRÍTICO: Usar apenas dados a partir de ML_TRAIN_SPLIT_DATE para o backtest
     split_date = pd.Timestamp(ML_TRAIN_SPLIT_DATE)
     simulation_df = full_df_with_predictions[full_df_with_predictions['Open_time'] >= split_date].copy()
+    
+    # Apply GEMINI_BACKTEST_DAYS limit if configured (for API testing without rate limit)
+    if GEMINI_BACKTEST_DAYS > 0:
+        max_date = simulation_df['Open_time'].max()
+        min_date = max_date - pd.Timedelta(days=GEMINI_BACKTEST_DAYS)
+        logger.warning(
+            f"⚠️  GEMINI_BACKTEST_DAYS={GEMINI_BACKTEST_DAYS}: "
+            f"Limiting backtest to last {GEMINI_BACKTEST_DAYS} days "
+            f"({min_date.date()} to {max_date.date()}) to avoid API rate limits."
+        )
+        simulation_df = simulation_df[simulation_df['Open_time'] >= min_date].copy()
+    
     if start_date:
         start_ts = pd.Timestamp(start_date)
         simulation_df = simulation_df[simulation_df['Open_time'] >= start_ts].copy()
