@@ -100,6 +100,11 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Number of candles ahead to look for the target move (30 candles = 5 days for 4h candles)
 	ML_PREDICTION_HORIZON: int = 30
 
+	# Gemini API Testing: Limit backtest window to avoid rate limit during development
+	# Set GEMINI_BACKTEST_DAYS=30 in .env to use only last N days for backtest
+	# Useful for testing Gemini API integration without hitting free tier rate limits
+	GEMINI_BACKTEST_DAYS: int = int(os.environ.get("GEMINI_BACKTEST_DAYS", 0))  # 0 = use full window
+
 	# Multi-pool and entry sizing
 	# Maximum number of concurrently active LPs
 	MAX_ACTIVE_LPS: int = 4
@@ -167,6 +172,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.ML_CONFIDENCE_THRESHOLD = float(os.environ.get('ML_CONFIDENCE_THRESHOLD', 0.65))
 			self.ML_TARGET_MIN_CHANGE = float(os.environ.get('ML_TARGET_MIN_CHANGE', 0.04))
 			self.ML_PREDICTION_HORIZON = int(os.environ.get('ML_PREDICTION_HORIZON', 30))
+			self.GEMINI_BACKTEST_DAYS = int(os.environ.get('GEMINI_BACKTEST_DAYS', 0))
 
 
 # Instantiate settings for module-level import
@@ -209,6 +215,7 @@ ML_TRAIN_SPLIT_DATE = _settings.ML_TRAIN_SPLIT_DATE
 ML_CONFIDENCE_THRESHOLD = _settings.ML_CONFIDENCE_THRESHOLD
 ML_TARGET_MIN_CHANGE = _settings.ML_TARGET_MIN_CHANGE
 ML_PREDICTION_HORIZON = _settings.ML_PREDICTION_HORIZON
+GEMINI_BACKTEST_DAYS = _settings.GEMINI_BACKTEST_DAYS
 
 # New exports for The Graph multi-subgraph support
 THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS

@@ -21,6 +21,7 @@ from ..config import (
     ML_CONFIDENCE_THRESHOLD,
     MAX_DEBT_RATIO
 )
+from ..ai.llm_agent import consult_risk_agent
 
 if TYPE_CHECKING:
     from ..core import TradingEngine
@@ -156,6 +157,12 @@ class AccumulatorStrategy(BaseStrategy):
         """
         Execute the BTC Accumulator strategy for a single time step.
         
+        Flow:
+        1. Check DEFENSE MODE (liquidation risk)
+        2. Check COOL-DOWN (prevent over-trading)
+        3. Consult LLM Risk Agent for final decision
+        4. Route to appropriate execution method based on agent recommendation
+        
         Args:
             row: Current market data with indicators and predictions
             engine: TradingEngine instance with portfolio state
@@ -181,48 +188,63 @@ class AccumulatorStrategy(BaseStrategy):
                 self._maintain_positions(engine, current_price, timestamp)
             return
         
-        # --- ANALYZE MARKET: Check if we should enter a position ---
-        entry_signal = self._analyze_market_entry(prediction_proba, rsi, timestamp)
+        # --- CONSULT RISK AGENT: LLM-based decision making ---
+        agent_context = {
+            'usd_balance': engine.usd_balance,
+            'btc_collateral': engine.btc_hodl_balance,
+            'aave_debt': engine.total_debt_usd,
+            'health_factor': engine.health_factor,
+            'ml_confidence': prediction_proba,
+            'rsi': rsi,
+        }
         
-        # --- PRIMARY: BULL ENTRY WITH DEFI (Momentum or DIP) ---
-        if entry_signal:
-            # HIGH CONFIDENCE: OPEN_LP + BORROW (if conditions safe)
-            if entry_signal['type'] == 'MOMENTUM' and engine.total_debt_usd == 0:
-                logger.info(f"[{timestamp.date()}] 🔥 MOMENTUM + HIGH CONFIDENCE: Executing full DeFi strategy (LP + Borrow)")
-                self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal)
-                self.last_trade_time = timestamp
-                return
-            
-            # MEDIUM CONFIDENCE: Try OPEN_LP only (risky borrow prevented)
-            elif entry_signal['type'] == 'DIP' and engine.total_debt_usd == 0 and engine.usd_balance > MIN_USD_FOR_DIP_BUY:
-                logger.info(f"[{timestamp.date()}] 📍 DIP + MEDIUM CONFIDENCE: Opening LP for yield farming")
-                self._open_lp_conservative(engine, current_price, timestamp, entry_signal)
-                self.last_trade_time = timestamp
-                return
-            
-            # FALLBACK: If already leveraged or conditions not ideal, just buy spot
-            else:
-                logger.info(
-                    f"[{timestamp.date()}] ✓ SIGNAL ({entry_signal['type']}) but DeFi conditions not met. "
-                    f"Debt: ${engine.total_debt_usd:.2f}. Doing simple buy."
-                )
-                self._simple_spot_buy(engine, current_price, timestamp)
-                self.last_trade_time = timestamp
-                return
+        agent_decision = consult_risk_agent(agent_context)
+        action = agent_decision.get('action', 'DO_NOTHING')
+        amount_pct = agent_decision.get('amount_pct', 0.0)
+        reason = agent_decision.get('reason', 'No reason provided')
         
-        # --- SECONDARY: EXTREME DIP BUYER (even without high confidence signal) ---
-        if engine.usd_balance > MIN_USD_FOR_DIP_BUY and rsi < DEFENSE_RSI_THRESHOLD:
-            logger.info(
-                f"[{timestamp.date()}] EXTREME DIP: RSI={rsi:.1f} < {DEFENSE_RSI_THRESHOLD}. "
-                f"Buying with available USD."
-            )
-            self._dip_buy(engine, current_price, timestamp)
+        logger.info(
+            f"[{timestamp.date()}] 🤖 AGENT DECISION: {action} | Allocation: {amount_pct:.0%} | {reason}"
+        )
+        
+        # --- ROUTE BASED ON AGENT ACTION ---
+        if action == 'BORROW_AND_LP':
+            # Full DeFi strategy: Borrow + LP + Spot leverage
+            logger.info(f"[{timestamp.date()}] 🔥 EXECUTING BORROW_AND_LP strategy with {amount_pct:.0%} allocation")
+            entry_signal = {'type': 'MOMENTUM', 'reason': reason}
+            self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal)
             self.last_trade_time = timestamp
-            return
         
-        # --- TERTIARY: If we have existing LPs, maintain them ---
-        if len(engine.active_lps) > 0:
-            self._maintain_positions(engine, current_price, timestamp)
+        elif action == 'CONSERVATIVE_LP':
+            # Conservative LP without aggressive borrowing
+            logger.info(f"[{timestamp.date()}] 🌾 EXECUTING CONSERVATIVE_LP strategy with {amount_pct:.0%} allocation")
+            entry_signal = {'type': 'DIP', 'reason': reason}
+            self._open_lp_conservative(engine, current_price, timestamp, entry_signal)
+            self.last_trade_time = timestamp
+        
+        elif action == 'SPOT_ONLY':
+            # Simple spot buy without leverage/LP
+            logger.info(f"[{timestamp.date()}] 📍 EXECUTING SPOT_ONLY strategy with {amount_pct:.0%} allocation")
+            self._simple_spot_buy(engine, current_price, timestamp)
+            self.last_trade_time = timestamp
+        
+        elif action == 'DEFENSE_MODE':
+            # De-leverage and reduce risk
+            logger.warning(f"[{timestamp.date()}] 🛡️  EXECUTING DEFENSE_MODE: De-leveraging for safety")
+            self._execute_defense_mode(engine, current_price, timestamp)
+            self.last_trade_time = timestamp
+        
+        elif action == 'DO_NOTHING':
+            # No clear signal, maintain existing positions
+            logger.debug(f"[{timestamp.date()}] ⏸️  DO_NOTHING: {reason}")
+            if len(engine.active_lps) > 0:
+                self._maintain_positions(engine, current_price, timestamp)
+        
+        else:
+            # Unknown action, log warning and maintain positions
+            logger.warning(f"[{timestamp.date()}] ⚠️  Unknown agent action: {action}. Maintaining positions.")
+            if len(engine.active_lps) > 0:
+                self._maintain_positions(engine, current_price, timestamp)
     
     def _execute_defense_mode(
         self, 
