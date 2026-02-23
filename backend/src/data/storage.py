@@ -782,9 +782,11 @@ def create_trades_table(conn: PGConnection):
                     btc_amount DOUBLE PRECISION DEFAULT 0.0,
                     fee_usd DOUBLE PRECISION DEFAULT 0.0,
                     pnl_usd DOUBLE PRECISION DEFAULT 0.0,
+                    post_trade_equity DOUBLE PRECISION DEFAULT 0.0,
                     details TEXT
                 )
             """)
+            cursor.execute("ALTER TABLE trades ADD COLUMN IF NOT EXISTS post_trade_equity DOUBLE PRECISION DEFAULT 0.0")
             conn.commit()
             logger.info("Table 'trades' verified/created successfully.")
     except psycopg2.Error as e:
@@ -878,8 +880,8 @@ def save_trades(trades_list: list, current_price: float = 0.0):
                 
                 cursor.execute("""
                     INSERT INTO trades (timestamp, action, btc_price, usd_amount, 
-                                      btc_amount, fee_usd, pnl_usd, details)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                      btc_amount, fee_usd, pnl_usd, post_trade_equity, details)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     timestamp_str,
                     trade.get("action", ""),
@@ -888,6 +890,7 @@ def save_trades(trades_list: list, current_price: float = 0.0):
                     float(trade.get("btc_amount", 0)),
                     float(trade.get("fee_usd", 0)),
                     float(trade.get("pnl_usd", 0)),
+                    float(trade.get("post_trade_equity", 0.0)),
                     trade.get("details", "")
                 ))
         
@@ -1048,12 +1051,26 @@ def create_simulation_summary_table(conn: PGConnection):
                     cash_balance DOUBLE PRECISION NOT NULL,
                     btc_amount DOUBLE PRECISION NOT NULL,
                     btc_price_final DOUBLE PRECISION NOT NULL,
+                    wallet_spot_total_usd DOUBLE PRECISION,
+                    wallet_lp_value_usd DOUBLE PRECISION,
+                    lp_active_count INTEGER,
+                    lp_fees_usd DOUBLE PRECISION,
+                    aave_collateral_usd DOUBLE PRECISION,
+                    aave_debt_usd DOUBLE PRECISION,
+                    aave_health_factor DOUBLE PRECISION,
                     initial_token_balance DOUBLE PRECISION,
                     final_token_balance DOUBLE PRECISION,
                     token_roi DOUBLE PRECISION,
                     alpha_vs_hold DOUBLE PRECISION
                 )
             """)
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS wallet_spot_total_usd DOUBLE PRECISION")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS wallet_lp_value_usd DOUBLE PRECISION")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS lp_active_count INTEGER")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS lp_fees_usd DOUBLE PRECISION")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS aave_collateral_usd DOUBLE PRECISION")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS aave_debt_usd DOUBLE PRECISION")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS aave_health_factor DOUBLE PRECISION")
             conn.commit()
             logger.info("Table 'simulation_summary' verified/created successfully.")
     except psycopg2.Error as e:
@@ -1070,6 +1087,13 @@ def save_simulation_summary(
     cash_balance: float,
     btc_amount: float,
     btc_price_final: float,
+    wallet_spot_total_usd: float,
+    wallet_lp_value_usd: float,
+    lp_active_count: int,
+    lp_fees_usd: float,
+    aave_collateral_usd: float,
+    aave_debt_usd: float,
+    aave_health_factor: float,
     initial_token_balance: float = None,
     final_token_balance: float = None,
     token_roi: float = None,
@@ -1089,8 +1113,10 @@ def save_simulation_summary(
                 INSERT INTO simulation_summary 
                 (total_equity, roi_percent, benchmark_roi_percent, total_trades,
                  initial_capital, cash_balance, btc_amount, btc_price_final,
+                 wallet_spot_total_usd, wallet_lp_value_usd, lp_active_count,
+                 lp_fees_usd, aave_collateral_usd, aave_debt_usd, aave_health_factor,
                  initial_token_balance, final_token_balance, token_roi, alpha_vs_hold)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 total_equity,
                 roi_percent,
@@ -1100,6 +1126,13 @@ def save_simulation_summary(
                 cash_balance,
                 btc_amount,
                 btc_price_final,
+                wallet_spot_total_usd,
+                wallet_lp_value_usd,
+                lp_active_count,
+                lp_fees_usd,
+                aave_collateral_usd,
+                aave_debt_usd,
+                aave_health_factor,
                 initial_token_balance,
                 final_token_balance,
                 token_roi,
@@ -1138,6 +1171,8 @@ def get_latest_simulation_summary():
                     total_equity, roi_percent, benchmark_roi_percent, 
                     total_trades, initial_capital, cash_balance, 
                     btc_amount, btc_price_final, timestamp,
+                    wallet_spot_total_usd, wallet_lp_value_usd, lp_active_count,
+                    lp_fees_usd, aave_collateral_usd, aave_debt_usd, aave_health_factor,
                     initial_token_balance, final_token_balance,
                     token_roi, alpha_vs_hold
                 FROM simulation_summary

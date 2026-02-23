@@ -6,6 +6,7 @@
           <tr>
             <th class="px-6 py-3">Data</th>
             <th class="px-6 py-3">Tipo</th>
+            <th class="px-6 py-3">Origem/Destino</th>
             <th class="px-6 py-3 text-right">Entrada ($)</th>
             <th class="px-6 py-3 text-right">Saída ($)</th>
             <th class="px-6 py-3 text-right">Resultado</th>
@@ -18,10 +19,13 @@
             <td class="whitespace-nowrap px-6 py-4">
               <span
                 class="rounded px-2 py-1 text-xs font-medium"
-                :class="trade.type === 'Long' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'"
+                :class="typeClass(trade.type)"
               >
                 {{ trade.type }}
               </span>
+            </td>
+            <td class="whitespace-nowrap px-6 py-4 text-slate-200">
+              {{ trade.flow || '-' }}
             </td>
             <td class="whitespace-nowrap px-6 py-4 text-right">
               {{ formatCurrency(trade.amount_in) }}
@@ -34,11 +38,11 @@
               {{ trade.pnl_percent.toFixed(2) }}%
             </td>
             <td class="whitespace-nowrap px-6 py-4 text-right text-white">
-              {{ formatCurrency(trade.balance_after) }}
+              {{ formatCurrency(trade.post_trade_equity ?? trade.balance_after) }}
             </td>
           </tr>
           <tr v-if="trades.length === 0">
-            <td colspan="6" class="px-6 py-8 text-center text-slate-500">
+            <td colspan="7" class="px-6 py-8 text-center text-slate-500">
               Nenhuma simulação executada ainda.
             </td>
           </tr>
@@ -61,5 +65,16 @@ const formatCurrency = (value) => {
     style: 'currency',
     currency: 'USD',
   }).format(value);
+};
+
+const typeClass = (type) => {
+  const value = String(type || '').toLowerCase();
+  if (value.includes('buy') || value.includes('open') || value.includes('borrow')) {
+    return 'bg-emerald-900/30 text-emerald-400';
+  }
+  if (value.includes('close') || value.includes('repay') || value.includes('harvest')) {
+    return 'bg-sky-900/30 text-sky-300';
+  }
+  return 'bg-slate-700/40 text-slate-200';
 };
 </script>

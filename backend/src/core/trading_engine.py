@@ -69,6 +69,13 @@ class TradingEngine:
             pnl_usd: Profit/Loss for this transaction (mainly for CLOSE_LP)
             details: Additional context
         """
+        collateral_value = self.btc_hodl_balance * btc_price
+        net_worth = self._calculate_portfolio_value(btc_price)
+        if self.total_debt_usd > 0:
+            health_factor = self.risk_manager.calculate_health_factor(collateral_value, self.total_debt_usd)
+        else:
+            health_factor = 999.0
+
         transaction = {
             "timestamp": timestamp,
             "action": action_type,
@@ -77,16 +84,10 @@ class TradingEngine:
             "btc_amount": btc_amount,
             "fee_usd": fee_usd,
             "pnl_usd": pnl_usd,
+            "post_trade_equity": net_worth,
             "details": details
         }
         self.transaction_log.append(transaction)
-
-        collateral_value = self.btc_hodl_balance * btc_price
-        net_worth = self._calculate_portfolio_value(btc_price)
-        if self.total_debt_usd > 0:
-            health_factor = self.risk_manager.calculate_health_factor(collateral_value, self.total_debt_usd)
-        else:
-            health_factor = 999.0
 
         ts_value = timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp)
         with open(self._audit_path, "a", encoding="utf-8") as audit_file:

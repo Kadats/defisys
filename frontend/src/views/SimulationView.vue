@@ -124,7 +124,11 @@ const runSimulation = async () => {
   isRunning.value = true;
   try {
     // 1. Dispara a simulação no backend
-    await fetch('/api/simulation/run', { method: 'POST' });
+    await fetch('/api/simulation/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
     
     // 2. Aguarda um pouco para o backend começar a processar (polling simples)
     // Em um app real, usaríamos WebSocket para saber quando acabou. 

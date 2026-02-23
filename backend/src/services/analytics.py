@@ -44,6 +44,20 @@ def _format_date(value: Any) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+def _infer_flow(action: str) -> str:
+    if action == "BUY_HODL":
+        return "Spot -> BTC"
+    if action == "OPEN_LP":
+        return "Spot -> Uniswap"
+    if action in {"CLOSE_LP", "HARVEST"}:
+        return "Uniswap -> Spot"
+    if action == "BORROW":
+        return "AAVE -> Spot"
+    if action == "DEBT_REPAY":
+        return "Spot -> AAVE"
+    return "System"
+
+
 def get_simulation_results() -> Dict[str, Any]:
     conn = storage.create_connection()
     if not conn:
@@ -60,7 +74,7 @@ def get_simulation_results() -> Dict[str, Any]:
 
     try:
         # Ler da tabela trades ao invés de positions_log
-        df = pd.read_sql("SELECT * FROM trades ORDER BY timestamp ASC", conn)
+        df = pd.read_sql("SELECT * FROM trades ORDER BY timestamp DESC", conn)
     except Exception as exc:
         logger.exception("Failed to read trades: %s", exc)
         return {
@@ -96,14 +110,47 @@ def get_simulation_results() -> Dict[str, Any]:
     balance = DEFAULT_INITIAL_BALANCE
     btc_accumulated = 0.0  # Track accumulated BTC for total equity calculation
     btc_price_final = 0.0  # Track final BTC price
-    
-    for idx, row in df.iterrows():
+    balance_by_id = {}
+
+    df_sorted = df.sort_values("timestamp", ascending=True)
+    for _, row in df_sorted.iterrows():
         action = row.get("action", "")
         usd_amount = _to_float(row.get("usd_amount", 0))
         btc_amount = _to_float(row.get("btc_amount", 0))
         pnl_usd = _to_float(row.get("pnl_usd", 0))
         fee_usd = _to_float(row.get("fee_usd", 0))
         btc_price = _to_float(row.get("btc_price", 0))
+
+        if btc_price > 0:
+            btc_price_final = btc_price
+
+        if action == "BUY_HODL":
+            balance -= (usd_amount + fee_usd)
+            if btc_amount > 0:
+                btc_accumulated += btc_amount
+        elif action == "OPEN_LP":
+            balance -= (usd_amount + fee_usd)
+        elif action == "CLOSE_LP":
+            balance += (pnl_usd - fee_usd)
+        elif action == "HARVEST":
+            balance += pnl_usd - fee_usd
+        elif action == "BORROW":
+            balance += usd_amount
+        elif action == "DEBT_REPAY":
+            balance -= usd_amount
+        else:
+            balance += (pnl_usd - fee_usd)
+
+        balance_by_id[row.get("id")] = balance
+
+    for _, row in df.iterrows():
+        action = row.get("action", "")
+        usd_amount = _to_float(row.get("usd_amount", 0))
+        btc_amount = _to_float(row.get("btc_amount", 0))
+        pnl_usd = _to_float(row.get("pnl_usd", 0))
+        fee_usd = _to_float(row.get("fee_usd", 0))
+        btc_price = _to_float(row.get("btc_price", 0))
+        post_trade_equity = _to_float(row.get("post_trade_equity"), fallback=None)
         
         # CRITICAL FIX: Track final BTC price and accumulated BTC for equity calculation
         if btc_price > 0:
@@ -160,13 +207,16 @@ def get_simulation_results() -> Dict[str, Any]:
         # Formatar data
         date_str = _format_date(row.get("timestamp"))
         
+        balance_after = post_trade_equity if post_trade_equity is not None else balance_by_id.get(row.get("id"))
         trades.append({
             "date": date_str,
             "type": trade_type,
             "amount_in": amount_in,
             "amount_out": amount_out,
-            "balance_after": balance,
+            "balance_after": balance_after,
+            "post_trade_equity": post_trade_equity,
             "pnl_percent": pnl_percent,
+            "flow": _infer_flow(action),
         })
 
     # CRITICAL FIX: Calculate total equity = cash balance + BTC value

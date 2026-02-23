@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from decimal import Decimal
+from pydantic import BaseModel
 
 # Imports internos
 from backend.src.data import storage
@@ -32,6 +33,12 @@ app.add_middleware(
 
 # Cache simples em memória para não rodar backtest a cada F5
 _SUMMARY_CACHE = {}
+
+
+class SimulationRunRequest(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+    initial_capital: float | None = None
 
 
 @app.on_event("startup")
@@ -150,6 +157,8 @@ def get_simulation():
                 **official_summary,
                 "total_equity": official_summary.get('total_equity'),
                 "roi_percent": official_summary.get('roi_percent'),
+                "wallet_spot_usd": official_summary.get('cash_balance'),
+                "wallet_spot_btc": official_summary.get('btc_amount'),
             }
         else:
             # Fallback to calculated values if summary hasn't been persisted yet
@@ -174,8 +183,15 @@ def get_simulation():
     summary="Run Simulation",
     description="Triggers the trading system to run without blocking the API."
 )
-async def run_simulation():
-    asyncio.create_task(run_in_threadpool(run_trading_system))
+async def run_simulation(payload: SimulationRunRequest):
+    asyncio.create_task(
+        run_in_threadpool(
+            run_trading_system,
+            payload.start_date,
+            payload.end_date,
+            payload.initial_capital
+        )
+    )
     return {"status": "started"}
 
 @app.get(
