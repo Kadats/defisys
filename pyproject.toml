@@ -24,7 +24,7 @@ scikit-learn = "^1.7.2"
 psycopg2-binary = "^2.9.9"
 sqlalchemy = "^2.0.23"
 xgboost = "^2.1.0"
-google-generativeai = "^0.4.1"
+google-generativeai = "^0.7.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.2"
