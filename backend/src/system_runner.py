@@ -39,14 +39,30 @@ def log_summary_report(results, latest_indicators=None):
     # No .txt file generation needed in V2 architecture
 
 
-def run_trading_system(start_date: str = None, end_date: str = None, initial_capital: float = None):
-    # 1. LIMPEZA ANTES DE COMEÇAR
-    storage.clear_simulation_data()
+def run_trading_system(
+    start_date: str = None,
+    end_date: str = None,
+    initial_capital: float = None,
+    backtest_days: int | None = None,
+):
     """
     Orquestra o fluxo de alto nivel: Dados -> Modelo de ML -> Backtest.
     Implementa Walk-Forward: treina em passado distante, testa em passado recente.
     """
-    logger.info("Iniciando o sistema de trade com validação Walk-Forward...")
+    # 🚀 LOG CLARO DE INÍCIO
+    logger.info("=" * 80)
+    logger.info("🚀 INICIANDO SIMULAÇÃO COM GEMINI + ML WALK-FORWARD")
+    logger.info(
+        f"   Start: {start_date} | End: {end_date} | Capital: ${initial_capital} | "
+        f"Days: {backtest_days}"
+    )
+    logger.info("=" * 80)
+    
+    # 1. LIMPEZA ANTES DE COMEÇAR
+    storage.clear_simulation_data()
+    logger.info("✓ Dados antigos limpos da base")
+    
+    logger.info("Fase 1: Preparando dados de mercado e indicadores...")
 
     # 1. Obter os dados (agora com features e alvos de ML)
     logger.info("Fase 1: Preparando todos os dados de mercado e indicadores...")
@@ -71,13 +87,19 @@ def run_trading_system(start_date: str = None, end_date: str = None, initial_cap
     split_date = pd.Timestamp(ML_TRAIN_SPLIT_DATE)
     simulation_df = full_df_with_predictions[full_df_with_predictions['Open_time'] >= split_date].copy()
     
-    # Apply GEMINI_BACKTEST_DAYS limit if configured (for API testing without rate limit)
-    if GEMINI_BACKTEST_DAYS > 0:
+    # Apply backtest window limit (use request override if provided, fallback to env, or default to 30 days)
+    # CRITICAL: Always enforce a limit to avoid showing data from years ago
+    effective_days = (
+        backtest_days
+        if backtest_days is not None
+        else (GEMINI_BACKTEST_DAYS if GEMINI_BACKTEST_DAYS > 0 else 30)
+    )
+    if effective_days and effective_days > 0:
         max_date = simulation_df['Open_time'].max()
-        min_date = max_date - pd.Timedelta(days=GEMINI_BACKTEST_DAYS)
+        min_date = max_date - pd.Timedelta(days=int(effective_days))
         logger.warning(
-            f"⚠️  GEMINI_BACKTEST_DAYS={GEMINI_BACKTEST_DAYS}: "
-            f"Limiting backtest to last {GEMINI_BACKTEST_DAYS} days "
+            f"⚠️  BACKTEST_DAYS={int(effective_days)}: "
+            f"Limiting backtest to last {int(effective_days)} days "
             f"({min_date.date()} to {max_date.date()}) to avoid API rate limits."
         )
         simulation_df = simulation_df[simulation_df['Open_time'] >= min_date].copy()
@@ -213,8 +235,11 @@ def run_trading_system(start_date: str = None, end_date: str = None, initial_cap
     latest_indicators = simulation_df.tail(5) if not simulation_df.empty else None
     log_summary_report(backtest_results, latest_indicators)
 
-    logger.info("Processamento do sistema de trade concluído.")
-    
+    logger.info("=" * 80)
+    logger.info("✅ SIMULAÇÃO CONCLUÍDA COM SUCESSO!")
+    logger.info(f"   Trades: {num_trades} | ROI: {backtest_results['profit_percentage_usd']:.2f}%")
+    logger.info(f"   Equity: ${backtest_results['final_usd_value']:.2f}")
+    logger.info("=" * 80)
     if not backtest_results:
         backtest_results = {"error": "Backtest execution failed"}
         

@@ -27,6 +27,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/defisys
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_BACKTEST_DAYS=30
     volumes:
       - ./backend:/app/backend
     depends_on:

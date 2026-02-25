@@ -33,12 +33,14 @@ app.add_middleware(
 
 # Cache simples em memória para não rodar backtest a cada F5
 _SUMMARY_CACHE = {}
+_SIMULATION_RUNNING = False  # Flag para rastrear se simulação está em andamento
 
 
 class SimulationRunRequest(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     initial_capital: float | None = None
+    simulation_days: int | None = None
 
 
 @app.on_event("startup")
@@ -141,6 +143,10 @@ def get_simulation():
         # Get the simulation results (trades from DB)
         results = get_simulation_results()
         
+        # Garantir que trades estão ordenados por timestamp DESC (mais recentes primeiro)
+        if results.get('trades'):
+            results['trades'] = sorted(results['trades'], key=lambda x: x.get('date', ''), reverse=True)
+        
         # Get the OFFICIAL summary from the database (the "truth")
         official_summary = get_latest_simulation_summary()
         
@@ -153,28 +159,101 @@ def get_simulation():
                 "roi": official_summary.get('roi_percent', results['kpis']['roi']),
                 "benchmark_roi": official_summary.get('benchmark_roi_percent', results['kpis']['benchmark_roi']),
             }
+            
+            # Estruturar summary com as chaves esperadas pelo frontend
             summary = {
-                **official_summary,
+                "total_trades": official_summary.get('total_trades'),
+                "initial_capital": official_summary.get('initial_capital'),
                 "total_equity": official_summary.get('total_equity'),
                 "roi_percent": official_summary.get('roi_percent'),
+                "benchmark_roi_percent": official_summary.get('benchmark_roi_percent'),
+                # Tesourarias Isoladas
                 "wallet_spot_usd": official_summary.get('cash_balance'),
                 "wallet_spot_btc": official_summary.get('btc_amount'),
+                "wallet_spot_total_usd": (official_summary.get('cash_balance', 0) + 
+                                         (official_summary.get('btc_amount', 0) * official_summary.get('btc_price_final', 0))),
+                "wallet_lp_value_usd": official_summary.get('wallet_lp_value_usd'),
+                "lp_active_count": official_summary.get('lp_active_count'),
+                "lp_fees_usd": official_summary.get('lp_fees_usd'),
+                "aave_collateral_usd": official_summary.get('aave_collateral_usd'),
+                "aave_debt_usd": official_summary.get('aave_debt_usd'),
+                "aave_health_factor": official_summary.get('aave_health_factor'),
+                # Token metrics
+                "alpha_vs_hold": official_summary.get('alpha_vs_hold'),
+                "initial_token_balance": official_summary.get('initial_token_balance'),
+                "final_token_balance": official_summary.get('final_token_balance'),
+                "token_roi": official_summary.get('token_roi'),
             }
         else:
-            # Fallback to calculated values if summary hasn't been persisted yet
+            # Fallback: Calculate summary from computed KPIs (trades already have post_trade_equity)
+            logger.info("✓ No official summary in DB, using calculated KPIs for summary")
             kpis = results['kpis']
-            summary = None
+            
+            # Calcular valores das tesourarias a partir do último trade
+            last_equity = results['kpis']['final_balance']
+            summary = {
+                "total_trades": results['kpis']['total_trades'],
+                "initial_capital": results['kpis']['initial_balance'],
+                "total_equity": last_equity,
+                "roi_percent": results['kpis']['roi'],
+                "benchmark_roi_percent": results['kpis']['benchmark_roi'],
+                # Tesourarias Isoladas - valores padrões (0) se não houver summary
+                "wallet_spot_usd": 0,
+                "wallet_spot_btc": 0,
+                "wallet_spot_total_usd": 0,
+                "wallet_lp_value_usd": 0,
+                "lp_active_count": 0,
+                "lp_fees_usd": 0,
+                "aave_collateral_usd": 0,
+                "aave_debt_usd": 0,
+                "aave_health_factor": 0,
+                # Token metrics
+                "alpha_vs_hold": 0,
+                "initial_token_balance": 0,
+                "final_token_balance": 0,
+                "token_roi": 0,
+            }
         
         response = {
             "kpis": kpis,
             "trades": results['trades'],
-            "summary": summary  # The official summary object
+            "summary": summary  # ALWAYS return summary object (never null)
         }
         
         return sanitize_for_json(response)
     except Exception as e:
         logger.exception("Erro ao buscar simulation results: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        # Retornar resposta vazia válida em vez de erro 500
+        return {
+            "kpis": {
+                "total_trades": 0,
+                "initial_balance": 1000.0,
+                "final_balance": 1000.0,
+                "roi": 0.0,
+                "benchmark_roi": 0.0,
+            },
+            "trades": [],
+            "summary": {
+                "total_trades": 0,
+                "initial_capital": 1000.0,
+                "total_equity": 1000.0,
+                "roi_percent": 0.0,
+                "benchmark_roi_percent": 0.0,
+                "wallet_spot_usd": 0.0,
+                "wallet_spot_btc": 0.0,
+                "wallet_spot_total_usd": 0.0,
+                "wallet_lp_value_usd": 0.0,
+                "lp_active_count": 0,
+                "lp_fees_usd": 0.0,
+                "aave_collateral_usd": 0.0,
+                "aave_debt_usd": 0.0,
+                "aave_health_factor": 0.0,
+                "alpha_vs_hold": 0.0,
+                "initial_token_balance": 0.0,
+                "final_token_balance": 0.0,
+                "token_roi": 0.0,
+            }
+        }
 
 
 @app.post(
@@ -184,15 +263,153 @@ def get_simulation():
     description="Triggers the trading system to run without blocking the API."
 )
 async def run_simulation(payload: SimulationRunRequest):
+    global _SUMMARY_CACHE, _SIMULATION_RUNNING
+    
+    # 🧹 LIMPAR CACHE ANTIGO - força recompute dos resultados
+    _SUMMARY_CACHE = {}
+    _SIMULATION_RUNNING = True
+    logger.info("✓ Cache limpo e flag iniciado. Disparando simulação com Gemini...")
+    
+    def run_and_mark_done():
+        try:
+            run_trading_system(
+                payload.start_date,
+                payload.end_date,
+                payload.initial_capital,
+                backtest_days=payload.simulation_days,
+            )
+            logger.info("✓ Simulação do Gemini concluída!")
+        except Exception as e:
+            logger.exception(f"❌ Erro na simulação: {e}")
+        finally:
+            global _SIMULATION_RUNNING
+            _SIMULATION_RUNNING = False
+    
     asyncio.create_task(
-        run_in_threadpool(
-            run_trading_system,
-            payload.start_date,
-            payload.end_date,
-            payload.initial_capital
-        )
+        run_in_threadpool(run_and_mark_done)
     )
-    return {"status": "started"}
+    return {
+        "status": "started",
+        "message": "Simulação iniciada em background. O processo pode levar alguns minutos devido à API da IA."
+    }
+
+@app.get(
+    "/api/simulation/status",
+    tags=["Simulation"],
+    summary="Get Simulation Status",
+    description="Returns whether simulation is currently running."
+)
+def get_simulation_status():
+    """
+    Retorna o status atual da simulação (rodando ou parada).
+    Útil para polling no frontend.
+    """
+    try:
+        # Obter summary oficial do banco
+        official_summary = get_latest_simulation_summary()
+        
+        return {
+            "running": _SIMULATION_RUNNING,
+            "has_results": official_summary is not None,
+            "trades_count": official_summary.get('total_trades', 0) if official_summary else 0
+        }
+    except Exception as e:
+        logger.exception("Erro ao buscar status: %s", e)
+        return {
+            "running": _SIMULATION_RUNNING,
+            "has_results": False,
+            "trades_count": 0,
+            "error": str(e)
+        }
+
+@app.get(
+    "/api/simulation/summary",
+    tags=["Simulation"],
+    summary="Get Isolated Treasuries Summary",
+    description="Returns the final state of 3 distinct wallets: Spot (USD/BTC), DeFi (LPs), and AAVE (Collateral/Debt)."
+)
+def get_treasuries_summary():
+    """
+    Retorna o estado final de 3 carteiras isoladas (Tesourarias):
+    
+    1. 🏦 SPOT: USD em caixa + BTC em HODL
+    2. 🌾 DeFi: Capital alocado em Uniswap LPs
+    3. 👻 AAVE: BTC em garantia (collateral), Dívida (borrow), Health Factor
+    """
+    try:
+        # Obter o último summary oficial do banco
+        official_summary = get_latest_simulation_summary()
+        
+        if official_summary:
+            logger.info("✓ Returning treasuries summary from database")
+            
+            # Estruturar resposta com 3 carteiras isoladas
+            response = {
+                "spot": {
+                    "label": "🏦 Bot Wallet (Spot)",
+                    "usd_available": official_summary.get("cash_balance", 0),
+                    "btc_balance": official_summary.get("btc_amount", 0),
+                    "btc_price": official_summary.get("btc_price_final", 0),
+                    "total_usd": (official_summary.get("cash_balance", 0) + 
+                                 (official_summary.get("btc_amount", 0) * official_summary.get("btc_price_final", 0)))
+                },
+                "defi": {
+                    "label": "🌾 DeFi LPs (Yield)",
+                    "capital_allocated": official_summary.get("wallet_lp_value_usd", 0),
+                    "active_positions": official_summary.get("lp_active_count", 0),
+                    "fees_earned": official_summary.get("lp_fees_usd", 0),
+                },
+                "aave": {
+                    "label": "👻 AAVE (Crédito)",
+                    "collateral_btc_usd": official_summary.get("aave_collateral_usd", 0),
+                    "debt_borrow_usd": official_summary.get("aave_debt_usd", 0),
+                    "health_factor": official_summary.get("aave_health_factor", 0),
+                    "health_status": _get_health_factor_status(official_summary.get("aave_health_factor", 0))
+                },
+                "summary": {
+                    "initial_capital": official_summary.get("initial_capital", 0),
+                    "total_equity": official_summary.get("total_equity", 0),
+                    "roi_percent": official_summary.get("roi_percent", 0),
+                    "benchmark_roi_percent": official_summary.get("benchmark_roi_percent", 0)
+                }
+            }
+            
+            return sanitize_for_json(response)
+        else:
+            logger.warning("No simulation summary found. Run simulation first.")
+            # Retornar valores padrão em vez de erro
+            return {
+                "spot": {"label": "🏦 Bot Wallet (Spot)", "usd_available": 0, "btc_balance": 0, "btc_price": 0, "total_usd": 0},
+                "defi": {"label": "🌾 DeFi LPs (Yield)", "capital_allocated": 0, "active_positions": 0, "fees_earned": 0},
+                "aave": {"label": "👻 AAVE (Crédito)", "collateral_btc_usd": 0, "debt_borrow_usd": 0, "health_factor": 0, "health_status": "NONE"},
+                "summary": {"initial_capital": 0, "total_equity": 0, "roi_percent": 0, "benchmark_roi_percent": 0}
+            }
+    
+    except Exception as e:
+        logger.exception("Erro ao buscar treasuries summary: %s", e)
+        # Retornar valores padrão em vez de erro 500
+        return {
+            "spot": {"label": "🏦 Bot Wallet (Spot)", "usd_available": 0, "btc_balance": 0, "btc_price": 0, "total_usd": 0},
+            "defi": {"label": "🌾 DeFi LPs (Yield)", "capital_allocated": 0, "active_positions": 0, "fees_earned": 0},
+            "aave": {"label": "👻 AAVE (Crédito)", "collateral_btc_usd": 0, "debt_borrow_usd": 0, "health_factor": 0, "health_status": "NONE"},
+            "summary": {"initial_capital": 0, "total_equity": 0, "roi_percent": 0, "benchmark_roi_percent": 0}
+        }
+
+def _get_health_factor_status(health_factor: float) -> str:
+    """
+    Retorna status de saúde do AAVE baseado no health factor.
+    Verde: > 1.5
+    Amarelo: 1.2 - 1.5
+    Vermelho: < 1.2
+    """
+    if health_factor >= 1.5:
+        return "SAFE"  # Verde
+    elif health_factor >= 1.2:
+        return "WARNING"  # Amarelo
+    elif health_factor > 0:
+        return "DANGER"  # Vermelho
+    else:
+        return "LIQUIDATED"  # Preto (liquidação)
 
 @app.get(
     "/api/v1/summary",

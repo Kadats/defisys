@@ -207,14 +207,18 @@ def get_simulation_results() -> Dict[str, Any]:
         # Formatar data
         date_str = _format_date(row.get("timestamp"))
         
-        balance_after = post_trade_equity if post_trade_equity is not None else balance_by_id.get(row.get("id"))
+        # Garantir que post_trade_equity está sempre preenchido com um valor válido
+        balance_after = post_trade_equity if post_trade_equity is not None else balance_by_id.get(row.get("id"), balance)
+        if balance_after is None:
+            balance_after = balance
+        
         trades.append({
             "date": date_str,
             "type": trade_type,
             "amount_in": amount_in,
             "amount_out": amount_out,
             "balance_after": balance_after,
-            "post_trade_equity": post_trade_equity,
+            "post_trade_equity": float(balance_after),  # Garantir que sempre tem um valor float válido
             "pnl_percent": pnl_percent,
             "flow": _infer_flow(action),
         })
