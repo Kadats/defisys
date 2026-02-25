@@ -11,7 +11,7 @@ Siga estas regras estritamente ao propor ou analisar código:
 
 ## 2. Arquitetura (Frontend vs Backend)
 * **Regra de Ouro:** "Smart Backend, Dumb Frontend".
-* O Frontend (React) NUNCA deve fazer cálculos de lógica de negócios, ROI, ou PnL. Ele apenas exibe os dados.
+* O Frontend (Vue.js) NUNCA deve fazer cálculos de lógica de negócios, ROI, ou PnL. Ele apenas exibe os dados.
 * O Backend (Python) é a única fonte da verdade. Todos os cálculos financeiros ocorrem no servidor ou no banco de dados.
 
 ## 3. Padrões de Código Python
@@ -22,3 +22,15 @@ Siga estas regras estritamente ao propor ou analisar código:
 ## 4. Regras de Negócio (Trading)
 * Estratégias nunca devem alocar 100% do capital (All-in) em uma única entrada.
 * Respeite sempre a variável de cooldown de operações para evitar over-trading.
+
+## 5. Integração com Google Gemini API
+* **Versão da Biblioteca:** Use `google-generativeai >= 0.7.2` (versões antigas como 0.4.1 têm bugs e podem causar NotFound em modelos recentes).
+* **Modelo Recomendado:** Use `models/gemini-2.5-flash` (JSON estavel com `response_mime_type`).
+* **Fallback de Modelo:** Se `models/gemini-2.5-flash` nao estiver disponivel, use `models/gemini-flash-latest`.
+* **Override por Env:** Para trocar o modelo sem alterar codigo, defina `GEMINI_MODEL`.
+* **Configuração:** Use `genai.configure(api_key=..., transport="rest")` para evitar truncamento em gRPC e configure `GenerationConfig` (temperature, max_output_tokens) durante a inicialização do modelo via `GenerativeModel()`.
+* **Rate Limiting:** A API gratuita do Gemini tem limite de 15 RPM (requests por minuto). SEMPRE implemente delay entre chamadas usando `GEMINI_API_DELAY_SECONDS` (padrão: 5s). Isso garante máximo de 12 RPM, abaixo do limite de 15 RPM. Para simulações de 30 dias (180 candles de 4h), o tempo total será ~15 minutos (180 × 5s).
+* **Retry com Backoff:** Implemente retry exponencial (2s, 4s, 8s) para erros 429 (TooManyRequests). Após 3 tentativas falhadas, caia para fallback heurístico.
+* **Fallback Obrigatório:** Sempre implemente fallback heurístico quando a API Gemini falhar. O projeto não pode depender exclusivamente de APIs externas.
+* **Logging de Erros:** Log erros da API com `logger.error()` incluindo o tipo de exceção completo e mensagem truncada (máximo 150 caracteres).
+* **Validação de Resposta:** Sempre valide a resposta JSON antes de usar (verificar tipo dict, estrutura esperada, ranges de valores numéricos).

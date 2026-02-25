@@ -4,13 +4,15 @@ Agentic Risk Manager - Google Gemini API Integration.
 This module integrates with Google Gemini API to make LLM-based risk management decisions.
 Uses JSON Mode to force structured responses.
 
-Current: Google Gemini 1.5 Flash (fast, low-cost)
+Current: Google Gemini 2.5 Flash (fast, low-cost, stable JSON output)
 Fallback: Deterministic heuristic-based decision making if API fails
+Requires: google-generativeai >= 0.7.2 (avoid 0.4.1 which has compatibility issues)
 """
 
 import logging
 import json
 import os
+import time
 from typing import Dict, Optional, Any
 
 try:
@@ -22,15 +24,69 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Default model can be overridden via env (e.g., models/gemini-2.5-flash)
+DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-2.5-flash")
+
+# Delay between API calls to respect rate limits (15 RPM = 4s per request)
+# Default: 5s (conservative) - can be overridden via GEMINI_API_DELAY_SECONDS
+GEMINI_API_DELAY = float(os.environ.get("GEMINI_API_DELAY_SECONDS", "5.0"))
+
+
+def _select_gemini_model(preferred_models: list[str]) -> Optional[str]:
+    """
+    Pick the first available model that supports generateContent.
+    Falls back to the first preferred model if listing fails.
+    """
+    try:
+        available_models: list[str] = []
+        for model in genai.list_models():
+            if "generateContent" in getattr(model, "supported_generation_methods", []):
+                available_models.append(model.name)
+
+        for model_name in preferred_models:
+            if model_name in available_models:
+                return model_name
+
+        if available_models:
+            return available_models[0]
+        return None
+    except Exception as exc:
+        logger.warning("[GEMINI] Failed to list models: %s", exc)
+        return preferred_models[0] if preferred_models else None
+
 # Configure Gemini API
+MODEL = None
 if GEMINI_AVAILABLE:
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key:
-        genai.configure(api_key=api_key)
-        MODEL = genai.GenerativeModel("gemini-1.5-flash")
-        logger.info("[GEMINI] API configured successfully with gemini-1.5-flash")
+        try:
+            genai.configure(api_key=api_key, transport="rest")
+            preferred_models = [
+                DEFAULT_GEMINI_MODEL,
+                "models/gemini-2.5-flash",
+                "models/gemini-2.0-flash",
+                "models/gemini-pro-latest",
+                "models/gemini-flash-latest",
+            ]
+            model_name = _select_gemini_model(preferred_models)
+            if not model_name:
+                raise RuntimeError("No Gemini models available for generateContent")
+
+            MODEL = genai.GenerativeModel(
+                model_name,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=500,
+                    response_mime_type="application/json",
+                )
+            )
+            logger.info("[GEMINI] API configured successfully with %s", model_name)
+        except Exception as e:
+            logger.warning("[GEMINI] Failed to configure API: %s. Will use fallback.", e)
+            GEMINI_AVAILABLE = False
+            MODEL = None
     else:
-        logger.warning("[GEMINI] GEMINI_API_KEY not found in environment. Using fallback mode.")
+        logger.warning("[GEMINI] GEMINI_API_KEY not found. Using fallback mode.")
         GEMINI_AVAILABLE = False
 else:
     logger.warning("[GEMINI] google-generativeai not installed. Using fallback mode.")
@@ -77,6 +133,36 @@ CRITICAL RULES:
 - RESPOND WITH JSON ONLY. NO OTHER TEXT."""
 
 
+def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """Extract a JSON object from model output text."""
+    if not text:
+        return None
+
+    cleaned = text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    return None
+
+
 def _consult_gemini(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Consult Google Gemini API for risk management decision.
@@ -87,13 +173,14 @@ def _consult_gemini(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Returns:
         Dictionary with action, amount_pct, reason, or None if API fails
     """
-    if not GEMINI_AVAILABLE:
+    if not GEMINI_AVAILABLE or MODEL is None:
         logger.debug("[GEMINI] API not available, using fallback")
         return None
     
     try:
         # Format context for the prompt
-        context_str = f"""
+        context_str = f"""{SYSTEM_PROMPT}
+
 Current Market & Portfolio State:
 - USD Balance: ${context.get('usd_balance', 0):.2f}
 - BTC Collateral: {context.get('btc_collateral', 0):.6f} BTC
@@ -104,32 +191,38 @@ Current Market & Portfolio State:
 
 Analyze this state and recommend the best action. Return ONLY valid JSON."""
         
-        # Call Gemini API with JSON Mode
-        # Note: response_mime_type is not yet supported in python client, so we enforce JSON via system prompt
-        response = MODEL.generate_content(
-            context_str,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.3,  # Low temperature for more deterministic responses
-                max_output_tokens=500,
-            ),
-        )
+        # Call Gemini API (generation_config already set in MODEL initialization)
+        # Retry with exponential backoff for rate limits (429)
+        max_retries = 3
+        api_call_successful = False
+        for attempt in range(max_retries):
+            try:
+                logger.debug("[GEMINI] Calling API with context... (attempt %d/%d)", attempt + 1, max_retries)
+                response = MODEL.generate_content(context_str)
+                api_call_successful = True
+                break  # Success, exit retry loop
+            except Exception as e:
+                error_str = str(e)
+                # Check for rate limit error
+                if "429" in error_str or "TooManyRequests" in error_str or "quota" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2  # 2s, 4s, 8s
+                        logger.warning("[GEMINI] Rate limit hit (429), retrying in %ds... (%d/%d)", 
+                                      wait_time, attempt + 1, max_retries)
+                        time.sleep(wait_time)
+                        continue
+                # Non-retryable error or max retries exceeded
+                raise
         
         # Parse JSON response
         response_text = response.text.strip()
-        logger.debug(f"[GEMINI] Raw response: {response_text[:100]}")
-        
-        # Clean response if wrapped in markdown code blocks
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
-        
-        result = json.loads(response_text)
-        
+        logger.debug("[GEMINI] Raw response: %s", response_text[:200])
+
+        result = _extract_json_from_text(response_text)
+
         # Validate response structure
         if not isinstance(result, dict):
-            logger.error(f"[GEMINI] Response is not a dict: {type(result)}")
+            logger.error("[GEMINI] Response is not valid JSON dict")
             return None
         
         action = result.get("action", "").upper()
@@ -150,18 +243,24 @@ Analyze this state and recommend the best action. Return ONLY valid JSON."""
             f"[GEMINI] Decision: {action} | Amount: {amount_pct:.0%} | {reason}"
         )
         
+        # Sleep to respect API rate limits (15 RPM = 4s between calls)
+        # Only sleep if API call was successful (not during retry delays)
+        if api_call_successful and GEMINI_API_DELAY > 0:
+            logger.debug("[GEMINI] Waiting %.1fs to respect rate limit (15 RPM)...", GEMINI_API_DELAY)
+            time.sleep(GEMINI_API_DELAY)
+        
         return {
             "action": action,
             "amount_pct": amount_pct,
             "reason": reason,
         }
     
-    except json.JSONDecodeError as e:
-        logger.error(f"[GEMINI] JSON Decode Error: {e}")
-        return None
-    
     except Exception as e:
-        logger.error(f"[GEMINI] API Error: {type(e).__name__}: {str(e)[:100]}")
+        logger.error(
+            "[GEMINI] API Error: %s: %s. Will use fallback.",
+            type(e).__name__,
+            str(e)[:150],
+        )
         return None
 
 

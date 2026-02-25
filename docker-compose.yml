@@ -28,6 +28,7 @@ services:
       - DATABASE_URL=postgresql://user:password@postgres:5432/defisys
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_BACKTEST_DAYS=30
+      - GEMINI_API_DELAY_SECONDS=5.0  # Delay between API calls (15 RPM limit = 4s min, using 5s for safety)
     volumes:
       - ./backend:/app/backend
     depends_on:
