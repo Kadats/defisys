@@ -4,42 +4,19 @@
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <p class="text-xs uppercase tracking-[0.3em] text-slate-400">Hedge Fund DeFi</p>
-          <h1 class="mt-2 text-3xl font-semibold text-white">Mesa Institucional de Simulacao</h1>
+          <h1 class="mt-2 text-3xl font-semibold text-white">Mesa Institucional de Trading</h1>
           <p class="mt-2 max-w-2xl text-sm text-slate-400">
-            Controle integrado de simulacoes, tesourarias segregadas e fluxo DeFi.
+            Dados ao vivo de tesourarias segregadas e monitoramento de posições DeFi.
           </p>
         </div>
       </header>
 
-      <section class="panel">
-        <div class="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h2 class="text-lg font-semibold text-white">Controles de Simulacao</h2>
-            <p class="text-sm text-slate-400">Defina o periodo e o capital para o backtest.</p>
-          </div>
-          <button
-            @click="runSimulation"
-            :disabled="isRunning"
-            class="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span v-if="isRunning" class="h-4 w-4 animate-spin rounded-full border-2 border-slate-950 border-t-transparent"></span>
-            {{ isRunning ? 'Rodando...' : 'Rodar Simulacao' }}
-          </button>
-        </div>
-        <div class="mt-6 grid gap-4 sm:grid-cols-3">
-          <label class="control">
-            <span>Data de Inicio</span>
-            <input v-model="startDate" type="date" />
-          </label>
-          <label class="control">
-            <span>Data de Fim</span>
-            <input v-model="endDate" type="date" />
-          </label>
-          <label class="control">
-            <span>Capital Inicial (USD)</span>
-            <input v-model.number="initialCapital" type="number" min="0" step="50" />
-          </label>
-        </div>
+      <!-- AVISO: Dados ao vivo -->
+      <section class="panel border-l-4 border-l-amber-500 bg-amber-900/20">
+        <p class="text-sm text-amber-200">
+          ⚠️ <strong>Modo Simulação</strong>: Para dados ao vivo, conecte a corretora nas configurações. 
+          Para backtests, acesse a aba "Simulação".
+        </p>
       </section>
 
       <section class="grid gap-6 lg:grid-cols-3">
@@ -100,33 +77,14 @@
         </div>
       </section>
 
-      <section class="panel">
-        <h2 class="text-lg font-semibold text-white">Historico de Operacoes</h2>
-        <div class="mt-4">
-          <TradesTable :trades="trades" />
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold text-white">Grafico de Preco</h2>
-          <span class="text-xs text-slate-400">BTCUSDT 4H</span>
-        </div>
-        <div v-if="isLoading" class="mt-4 text-slate-400">Carregando...</div>
-        <CryptoChart v-else :data="candles" :volume="volumes" />
-      </section>
+      <!-- Observação: Histórico e Gráfico estão na aba "Simulação" -->
     </div>
   </div>
 </template>
 
 <script setup>
 import { onMounted, ref } from 'vue';
-import CryptoChart from '../components/CryptoChart.vue';
-import TradesTable from '../components/TradesTable.vue';
 
-const candles = ref([]);
-const volumes = ref([]);
-const trades = ref([]);
 const summary = ref({
   wallet_spot_usd: 0,
   wallet_spot_btc: 0,
@@ -138,12 +96,6 @@ const summary = ref({
   aave_debt_usd: 0,
   aave_health_factor: 0,
 });
-
-const startDate = ref('');
-const endDate = ref('');
-const initialCapital = ref(1050);
-const isLoading = ref(true);
-const isRunning = ref(false);
 
 const formatCurrency = (value) => {
   const numeric = Number(value ?? 0);
@@ -167,107 +119,9 @@ const healthFactorClass = (value) => {
   return 'text-red-400';
 };
 
-const normalizeTime = (value) => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
-  }
-
-  if (typeof value === 'string') {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric)) {
-      return numeric > 1e12 ? Math.floor(numeric / 1000) : Math.floor(numeric);
-    }
-
-    const parsed = Date.parse(value);
-    if (!Number.isNaN(parsed)) {
-      return Math.floor(parsed / 1000);
-    }
-  }
-
-  return undefined;
-};
-
-const buildSeries = (rows) => {
-  const candleSeries = [];
-  const volumeSeries = [];
-
-  rows.forEach((row) => {
-    const time = normalizeTime(row.time ?? row.timestamp ?? row.date);
-    if (!time) return;
-
-    const open = Number(row.open);
-    const high = Number(row.high);
-    const low = Number(row.low);
-    const close = Number(row.close);
-    if ([open, high, low, close].some((value) => Number.isNaN(value))) return;
-
-    candleSeries.push({ time, open, high, low, close });
-
-    const volume = Number(row.volume ?? row.value ?? 0);
-    const isUp = close >= open;
-    volumeSeries.push({
-      time,
-      value: Number.isNaN(volume) ? 0 : volume,
-      color: isUp ? 'rgba(34, 197, 94, 0.8)' : 'rgba(239, 68, 68, 0.8)',
-    });
-  });
-
-  return { candleSeries, volumeSeries };
-};
-
-const fetchMarketData = async () => {
-  try {
-    const response = await fetch('/api/history');
-    const payload = await response.json();
-    const rows = Array.isArray(payload) ? payload : payload?.candles || [];
-
-    const { candleSeries, volumeSeries } = buildSeries(rows);
-    candles.value = candleSeries;
-    volumes.value = volumeSeries;
-  } catch (error) {
-    candles.value = [];
-    volumes.value = [];
-  } finally {
-    isLoading.value = false;
-  }
-};
-
-const fetchSimulation = async () => {
-  try {
-    const response = await fetch('/api/simulation');
-    if (!response.ok) throw new Error('Falha ao buscar dados');
-    const data = await response.json();
-    summary.value = data.summary || summary.value;
-    trades.value = data.trades || [];
-  } catch (error) {
-    trades.value = [];
-  }
-};
-
-const runSimulation = async () => {
-  isRunning.value = true;
-  try {
-    await fetch('/api/simulation/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        start_date: startDate.value || null,
-        end_date: endDate.value || null,
-        initial_capital: initialCapital.value || null,
-      }),
-    });
-
-    setTimeout(async () => {
-      await fetchSimulation();
-      isRunning.value = false;
-    }, 5000);
-  } catch (error) {
-    isRunning.value = false;
-  }
-};
-
 onMounted(async () => {
-  await Promise.all([fetchMarketData(), fetchSimulation()]);
+  // Dashboard carrega apenas dados ao vivo (placeholder por enquanto)
+  // Implementar integração com dados de corretora aqui
 });
 </script>
 

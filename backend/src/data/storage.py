@@ -1019,19 +1019,26 @@ def save_predictions_to_db(df: pd.DataFrame):
 def clear_simulation_data():
     """Limpa as tabelas de simulação para evitar dados duplicados."""
     conn = create_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
+    if not conn:
+        logger.error("Não foi possível conectar ao banco para limpar dados")
+        return
+    try:
+        with conn.cursor() as cursor:
             # Apaga todos os registros de logs de posição
             cursor.execute("DELETE FROM positions_log")
             # Apaga todos os registros de trades
             cursor.execute("DELETE FROM trades")
-            conn.commit()
-            print("🧹 Dados de simulação anteriores limpos com sucesso.")
-        except Exception as e:
-            print(f"Erro ao limpar dados: {e}")
-        finally:
-            conn.close()
+            # Apaga todas as predições de ML anteriores
+            cursor.execute("DELETE FROM ml_predictions")
+            # Apaga o summary oficial anterior para forçar nova simulação
+            cursor.execute("DELETE FROM simulation_summary")
+        conn.commit()
+        logger.info("🧹 Dados de simulação anteriores limpos com sucesso (trades, positions, predictions, summary).")
+    except Exception as exc:
+        logger.error(f"Erro ao limpar dados: {exc}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 # ==================== SIMULATION SUMMARY ====================
