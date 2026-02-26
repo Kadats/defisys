@@ -45,6 +45,7 @@ class SimulationRunRequest(BaseModel):
     end_date: str | None = None
     initial_capital: float | None = None
     simulation_days: int | None = None
+    strategy_type: str = "accumulator"
 
 
 @app.on_event("startup")
@@ -394,6 +395,7 @@ async def run_simulation_endpoint(payload: SimulationRunRequest):
                 payload.end_date,
                 payload.initial_capital,
                 backtest_days=payload.simulation_days,
+                    strategy_type=payload.strategy_type,
             )
             logger.info("✓ Simulação concluída!")
         except Exception as e:

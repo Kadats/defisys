@@ -35,3 +35,17 @@ Siga estas regras estritamente ao propor ou analisar código:
 * **Fallback Obrigatório:** Sempre implemente fallback heurístico quando a API Gemini falhar. O projeto não pode depender exclusivamente de APIs externas.
 * **Logging de Erros:** Log erros da API com `logger.error()` incluindo o tipo de exceção completo e mensagem truncada (máximo 150 caracteres).
 * **Validação de Resposta:** Sempre valide a resposta JSON antes de usar (verificar tipo dict, estrutura esperada, ranges de valores numéricos).
+
+## 6. Seleção Dinâmica de Estratégias
+* O sistema suporta múltiplas estratégias de trading via Strategy Pattern.
+* **Estratégias Disponíveis:**
+	* `accumulator` (padrão): Estratégia de acumulação gradual com DCA.
+	* `btc_lite`: Estratégia simplificada baseada em condições de mercado.
+	* `swing_usd` (em desenvolvimento): Estratégia de swing trading em USD.
+* **API de Simulação:** O endpoint `POST /api/simulation/run` aceita o parâmetro `strategy_type` no corpo da requisição.
+* **Implementação:** A função `run_simulation()` em `backend/src/system_runner.py` implementa uma Strategy Factory que instancia a estratégia correta baseada no parâmetro `strategy_type`.
+* **Extensibilidade:** Para adicionar novas estratégias:
+	1. Crie uma nova classe que herde de `BaseStrategy` em `backend/src/strategies/`.
+	2. Implemente o método `execute()` com a lógica de trading.
+	3. Adicione a estratégia ao `__init__.py` do módulo strategies.
+	4. Atualize a Strategy Factory em `run_simulation()` para incluir o novo tipo.

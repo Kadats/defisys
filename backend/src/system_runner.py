@@ -126,6 +126,7 @@ def run_simulation(
     end_date: str = None,
     initial_capital: float = None,
     backtest_days: int | None = None,
+    strategy_type: str = "accumulator",
 ) -> dict:
     """
     Fase 3-4: Execução da Simulação de Trading (isolada).
@@ -269,8 +270,29 @@ def run_simulation(
     engine_initial_capital = float(initial_capital) if initial_capital is not None else 1050.0
     engine = TradingEngine(initial_capital_usd=engine_initial_capital)
     
-    # Instantiate the strategy
-    strategy = AccumulatorStrategy()
+    # Strategy Factory - Instantiate the strategy based on strategy_type
+    logger.info(f"Selecionando estratégia: {strategy_type}")
+    
+    if strategy_type == "accumulator":
+        strategy = AccumulatorStrategy()
+    elif strategy_type == "btc_lite":
+        strategy = BTCLiteStrategy()
+    elif strategy_type == "swing_usd":
+        logger.error("Estratégia 'swing_usd' ainda não foi implementada.")
+        return {
+            "backtest_report": {
+                "error": "Strategy 'swing_usd' is not implemented yet. Coming soon!"
+            }
+        }
+    else:
+        logger.error(f"Estratégia desconhecida: {strategy_type}")
+        return {
+            "backtest_report": {
+                "error": f"Unknown strategy type: {strategy_type}. Available: accumulator, btc_lite, swing_usd"
+            }
+        }
+    
+    logger.info(f"✓ Estratégia '{strategy_type}' carregada com sucesso")
     
     # Run backtest
     backtest_results = engine.run(simulation_df, strategy=strategy)
