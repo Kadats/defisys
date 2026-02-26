@@ -30,14 +30,23 @@
             class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
           />
         </div>
-        <div class="flex items-end">
+        <div class="flex items-end gap-2">
+          <button
+            @click="trainModel"
+            :disabled="isTraining || isSimulating"
+            class="flex-1 flex items-center justify-center rounded bg-gradient-to-r from-purple-600 to-purple-700 px-4 py-2 font-bold text-white hover:from-purple-700 hover:to-purple-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          >
+            <span v-if="isTraining" class="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+            <span v-if="isTraining">Treinando...</span>
+            <span v-else>🤖 Treinar Modelo</span>
+          </button>
           <button
             @click="runSimulation"
-            :disabled="isRunning"
-            class="w-full flex items-center justify-center rounded bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 font-bold text-white hover:from-blue-700 hover:to-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            :disabled="isSimulating || isTraining"
+            class="flex-1 flex items-center justify-center rounded bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 font-bold text-white hover:from-blue-700 hover:to-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
-            <span v-if="isRunning" class="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
-            <span v-if="isRunning">Processando...</span>
+            <span v-if="isSimulating" class="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+            <span v-if="isSimulating">Simulando...</span>
             <span v-else>▶ Simular</span>
           </button>
         </div>
@@ -169,7 +178,9 @@ import { ref, onMounted } from 'vue';
 import StatCard from '../components/StatCard.vue';
 import TradesTable from '../components/TradesTable.vue';
 
-const isRunning = ref(false);
+// Estados de carregamento independentes
+const isTraining = ref(false);
+const isSimulating = ref(false);
 const trades = ref([]);
 const showSuccessToast = ref(false);
 const successMessage = ref('');
@@ -307,11 +318,38 @@ const fetchData = async () => {
   }
 };
 
+const trainModel = async () => {
+  isTraining.value = true;
+  try {
+    console.log('🤖 Iniciando treinamento do modelo de ML...');
+    const response = await fetch('/api/model/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || `Erro ao treinar modelo: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('✅ Modelo treinado com sucesso:', data);
+    
+    showToast(`✅ ${data.message}`, 5000);
+    
+  } catch (error) {
+    console.error("❌ Erro ao treinar modelo:", error);
+    showToast(`❌ Erro no treinamento: ${error.message}`, 5000);
+  } finally {
+    isTraining.value = false;
+  }
+};
+
 const runSimulation = async () => {
-  isRunning.value = true;
+  isSimulating.value = true;
   try {
     // 1. Dispara a simulação no backend
-    console.log('🚀 Iniciando nova simulação com Gemini...');
+    console.log('🚀 Iniciando nova simulação...');
     const runRes = await fetch('/api/simulation/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -322,6 +360,11 @@ const runSimulation = async () => {
     });
     
     if (!runRes.ok) {
+      // Tratamento específico para erro 400 (modelo não treinado)
+      if (runRes.status === 400) {
+        const errorData = await runRes.json();
+        throw new Error(errorData.detail || 'Modelo não treinado. Por favor, execute o treinamento antes de simular.');
+      }
       throw new Error(`Erro ao iniciar simulação: ${runRes.statusText}`);
     }
     
@@ -329,7 +372,7 @@ const runSimulation = async () => {
     
     // Mostrar toast de sucesso imediatamente
     if (runData.status === 'started') {
-      showToast('✅ Simulação iniciada em background. O processo pode levar alguns minutos...');
+      showToast('✅ Simulação iniciada em background. Aguarde alguns segundos...');
     }
     
     // 2. Polling inteligente usando endpoint de status
@@ -359,7 +402,7 @@ const runSimulation = async () => {
             console.log(`✅ Simulação concluída com ${status.trades_count} trades!`);
             showToast(`✅ Simulação concluída! ${status.trades_count} trades executados.`);
             await fetchData();
-            isRunning.value = false;
+            isSimulating.value = false;
             return;
           }
         } catch (e) {
@@ -369,7 +412,7 @@ const runSimulation = async () => {
       
       console.warn('⚠️ Timeout: simulação não concluiu em 2+ minutos');
       showToast('⚠️ Simulação ainda em andamento. Recarregando dados...', 5000);
-      isRunning.value = false;
+      isSimulating.value = false;
       await fetchData(); // Recarrega mesmo assim
     };
     
@@ -378,8 +421,14 @@ const runSimulation = async () => {
     
   } catch (error) {
     console.error("❌ Erro ao rodar simulação:", error);
-    showToast(`❌ Erro: ${error.message}`, 5000);
-    isRunning.value = false;
+    
+    // Alerta específico para modelo não treinado
+    if (error.message.includes('Modelo não treinado') || error.message.includes('treinamento antes de simular')) {
+      showToast('⚠️ É necessário treinar o modelo antes de rodar a simulação! Clique em "Treinar Modelo" primeiro.', 7000);
+    } else {
+      showToast(`❌ Erro: ${error.message}`, 5000);
+    }
+    isSimulating.value = false;
   }
 };
 
