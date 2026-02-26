@@ -11,7 +11,7 @@
     <!-- GOD MODE: Painel de Controle Superior -->
     <div class="mb-8 rounded-lg border border-slate-700 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-6 shadow-xl">
       <h2 class="mb-4 text-lg font-bold text-white">🎛️ Controle de Simulação (God Mode)</h2>
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div>
           <label class="block text-sm font-medium text-slate-300 mb-2">Capital Inicial ($)</label>
           <input
@@ -29,6 +29,17 @@
             placeholder="30"
             class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
           />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-2">Estratégia</label>
+          <select
+            v-model="selectedStrategy"
+            class="w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+          >
+            <option value="accumulator">Acumular BTC (Accumulator)</option>
+            <option value="btc_lite">Reserva Inteligente (BTC Lite)</option>
+            <option value="swing_usd">Maximizar Dólar (Swing USD)</option>
+          </select>
         </div>
         <div class="flex items-end gap-2">
           <button
@@ -203,6 +214,8 @@ const controlParams = ref({
   simulationDays: 30,
 });
 
+const selectedStrategy = ref('accumulator');
+
 const treasuries = ref({
   spot: {
     label: "🏦 Bot Wallet (Spot)",
@@ -356,6 +369,7 @@ const runSimulation = async () => {
       body: JSON.stringify({
         initial_capital: controlParams.value.initialCapital,
         simulation_days: controlParams.value.simulationDays,
+        strategy_type: selectedStrategy.value,
       }),
     });
     
