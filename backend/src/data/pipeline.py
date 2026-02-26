@@ -41,6 +41,181 @@ PREDICTION_HORIZON_DAYS = 7
 PREDICTION_RISE_THRESHOLD = 0.015  # +1.5% rise for bullish signal (V12: Lower threshold to catch slow bull markets)
 
 
+def sync_market_data() -> None:
+    """
+    Phase 1: Data Fetching - Synchronizes market data from external APIs to the database.
+    
+    This function:
+    - Creates all necessary database tables
+    - Fetches missing klines from Binance
+    - Updates Fear & Greed Index
+    - Updates On-chain metrics (Blockchair)
+    - Updates Funding Rate (Binance Futures)
+    - Updates Open Interest (Binance Futures)
+    - Updates Implied Volatility (Deribit)
+    - Updates Uniswap Pool Data (TheGraph)
+    
+    This function does NOT:
+    - Calculate indicators
+    - Prepare ML features/targets
+    - Train models
+    - Run backtests
+    
+    Should be called on FastAPI startup to ensure fresh data.
+    """
+    logger.info("=" * 80)
+    logger.info("🔄 INICIANDO SINCRONIZAÇÃO DE DADOS DE MERCADO NO STARTUP...")
+    logger.info("=" * 80)
+    
+    # Define table names
+    klines_table_name = f"{DEFAULT_SYMBOL}_{DEFAULT_INTERVAL}_klines".lower()
+    fng_table_name = "fear_and_greed_index"
+    on_chain_table_name = "bitcoin_on_chain_metrics"
+    funding_rate_table_name = "binance_futures_funding_rate"
+    open_interest_table_name = "binance_futures_open_interest"
+    implied_vol_table_name = "implied_volatility"
+    uniswap_table_name = "uniswap_pool_data"
+
+    # Create all database tables
+    conn = storage.create_connection()
+    if conn:
+        try:
+            logger.info("📊 Verificando/criando tabelas no banco de dados...")
+            storage.create_klines_table(conn, klines_table_name)
+            storage.create_fng_table(conn, fng_table_name)
+            storage.create_on_chain_table(conn, on_chain_table_name)
+            storage.create_funding_rate_table(conn, funding_rate_table_name)
+            storage.create_open_interest_table(conn, open_interest_table_name)
+            storage.create_implied_volatility_table(conn, implied_vol_table_name)
+            storage.create_uniswap_pool_table(conn, uniswap_table_name)
+            storage.create_positions_log_table(conn)
+            storage.create_ml_predictions_table(conn)
+            logger.info("✓ Tabelas verificadas/criadas com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao criar tabelas: {e}")
+            return
+        finally:
+            conn.close()
+    else:
+        logger.error("Falha ao conectar ao banco de dados. Abortando sincronização.")
+        return
+    
+    # ===== PHASE 1: DATA COLLECTION =====
+    logger.info(f"📡 Coletando dados de mercado para {DEFAULT_SYMBOL} ({DEFAULT_INTERVAL})...")
+    
+    # 1. Collect Klines with pagination
+    start_ts_klines = storage.get_start_timestamp_for_collection(
+        storage.get_last_timestamp_from_db, klines_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    end_ts_klines = int(datetime.now().timestamp() * 1000)
+    
+    start_date = datetime.fromtimestamp(start_ts_klines / 1000)
+    end_date = datetime.fromtimestamp(end_ts_klines / 1000)
+    logger.info(f"  📈 Klines: {start_date.strftime('%Y-%m-%d %H:%M:%S')} até {end_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    if start_ts_klines < end_ts_klines:
+        klines_df = sources.fetch_all_klines(
+            DEFAULT_SYMBOL, DEFAULT_INTERVAL, start_ts_klines, end_ts_klines,
+            max_klines_per_request=DEFAULT_KLINES_LIMIT,
+            binance_api_base_url=BINANCE_API_BASE_URL
+        )
+        
+        if klines_df is None:
+            logger.warning("  ⚠️  API de klines retornou None - usando dados existentes do banco")
+        elif not klines_df.empty:
+            logger.info(f"  ✓ Coletadas {len(klines_df)} klines com sucesso")
+            storage.save_klines_to_db(klines_df, klines_table_name)
+            logger.info(f"  ✓ Klines salvas no banco de dados")
+        else:
+            logger.warning("  ⚠️  Nenhuma kline nova coletada - usando dados existentes")
+    else:
+        logger.info("  ✓ Klines já estão atualizadas")
+    
+    # 2. Collect Fear & Greed
+    logger.info("  😨 Coletando Fear & Greed Index...")
+    start_ts_fng_sec = storage.get_start_timestamp_for_collection(
+        storage.get_last_fng_timestamp_from_db, fng_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    fng_data = sources.get_fear_and_greed_index(
+        limit=DEFAULT_HISTORICAL_DAYS, start_date_unix_sec=start_ts_fng_sec, fng_api_url=FNG_API_URL
+    )
+    if fng_data:
+        storage.save_fng_to_db(fng_data, fng_table_name)
+        logger.info("  ✓ Fear & Greed Index atualizado")
+    else:
+        logger.warning("  ⚠️  Falha ao coletar Fear & Greed Index")
+    
+    # 3. Collect On-Chain (Blockchair)
+    logger.info("  ⛓️  Coletando métricas on-chain...")
+    on_chain_data = sources.get_bitcoin_network_fees(blockchair_api_url=BLOCKCHAIR_API_URL)
+    if on_chain_data:
+        storage.save_on_chain_to_db(on_chain_data, on_chain_table_name)
+        logger.info("  ✓ Métricas on-chain atualizadas")
+    else:
+        logger.warning("  ⚠️  Falha ao coletar métricas on-chain")
+    
+    # 4. Collect Funding Rate
+    logger.info("  💰 Coletando Funding Rate...")
+    start_ts_funding = storage.get_start_timestamp_for_collection(
+        storage.get_last_funding_rate_timestamp_from_db, funding_rate_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    end_ts_funding = int(datetime.now().timestamp() * 1000)
+    
+    funding_data = sources.get_funding_rate_history(
+        DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
+        binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
+    )
+    if funding_data:
+        storage.save_funding_rate_to_db(funding_data, funding_rate_table_name)
+        logger.info("  ✓ Funding Rate atualizado")
+    else:
+        logger.warning("  ⚠️  Falha ao coletar Funding Rate")
+    
+    # 5. Collect Open Interest
+    logger.info("  📊 Coletando Open Interest...")
+    oi_data = sources.get_open_interest(DEFAULT_SYMBOL, binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL)
+    if oi_data:
+        storage.save_open_interest_to_db(oi_data, open_interest_table_name)
+        logger.info("  ✓ Open Interest atualizado")
+    else:
+        logger.warning("  ⚠️  Falha ao coletar Open Interest")
+    
+    # 6. Collect Implied Volatility (Deribit)
+    logger.info("  📉 Coletando Implied Volatility...")
+    start_ts_iv = storage.get_start_timestamp_for_collection(
+        storage.get_last_implied_volatility_timestamp_from_db, implied_vol_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    iv_data = sources.get_implied_volatility_history(start_timestamp_ms=start_ts_iv, deribit_base_url=DERIBIT_API_BASE_URL)
+    if iv_data:
+        storage.save_implied_volatility_to_db(iv_data, implied_vol_table_name)
+        logger.info("  ✓ Implied Volatility atualizada")
+    else:
+        logger.warning("  ⚠️  Falha ao coletar Implied Volatility")
+    
+    # 7. Collect Uniswap Pool Data
+    logger.info("  🦄 Coletando dados do pool Uniswap...")
+    start_ts_uni = storage.get_start_timestamp_for_collection(
+        storage.get_last_uniswap_timestamp_from_db, uniswap_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    uni_data = sources.get_uniswap_pool_daily_data(
+        pool_id=DEFAULT_POLYGON_POOL_ID,
+        start_timestamp_ms=start_ts_uni,
+        thegraph_base_url=THEGRAPH_UNISWAP_V3_URL,
+        thegraph_api_key=THEGRAPH_API_KEY,
+        thegraph_subgraph_ids=THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS,
+        default_network=DEFAULT_NETWORK
+    )
+    if uni_data:
+        storage.save_uniswap_pool_data_to_db(uni_data, uniswap_table_name)
+        logger.info("  ✓ Dados do pool Uniswap atualizados")
+    else:
+        logger.warning("  ⚠️  Falha ao coletar dados do pool Uniswap")
+    
+    logger.info("=" * 80)
+    logger.info("✅ SINCRONIZAÇÃO DE DADOS DE MERCADO CONCLUÍDA COM SUCESSO!")
+    logger.info("=" * 80)
+
+
 def get_full_prepared_data() -> pd.DataFrame:
     """
     Orchestrates Phases 1-4: collection, persistence, indicator calculation,
