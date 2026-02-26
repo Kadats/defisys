@@ -24,8 +24,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Default model can be overridden via env (e.g., models/gemini-2.5-flash)
-DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-2.5-flash")
+# Default model can be overridden via env (e.g., models/gemini-2.0-flash)
+# Note: gemini-2.0-flash has ~1500 RPD (free tier) vs gemini-2.5-flash's 20 RPD
+DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-2.0-flash")
 
 # Delay between API calls to respect rate limits (15 RPM = 4s per request)
 # Default: 5s (conservative) - can be overridden via GEMINI_API_DELAY_SECONDS
@@ -63,10 +64,10 @@ if GEMINI_AVAILABLE:
             genai.configure(api_key=api_key, transport="rest")
             preferred_models = [
                 DEFAULT_GEMINI_MODEL,
-                "models/gemini-2.5-flash",
                 "models/gemini-2.0-flash",
-                "models/gemini-pro-latest",
                 "models/gemini-flash-latest",
+                "models/gemini-2.5-flash",
+                "models/gemini-pro-latest",
             ]
             model_name = _select_gemini_model(preferred_models)
             if not model_name:
@@ -134,23 +135,48 @@ CRITICAL RULES:
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """Extract a JSON object from model output text."""
+    """Extract a JSON object from model output text.
+    
+    Handles various markdown/HTML wrappers:
+    - ```json ... ```
+    - ``` ... ```
+    - <code> ... </code>
+    - Extra whitespace and newlines
+    """
     if not text:
         return None
 
     cleaned = text.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
+    
+    # Remove markdown code blocks (with or without language specifier)
+    # Handle: ```json\n{...}\n``` or ```\n{...}\n```
+    if cleaned.startswith("```"):
+        # Remove opening fence
+        cleaned = cleaned[3:]
+        # Remove language specifier if present (json, JSON, etc.)
+        if cleaned.startswith(("json", "JSON")):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.lstrip()
+    
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3]
+    
+    # Remove HTML code tags if present
+    if cleaned.startswith("<code>"):
+        cleaned = cleaned[6:]
+    if cleaned.endswith("</code>"):
+        cleaned = cleaned[:-7]
+    
     cleaned = cleaned.strip()
-
+    
+    # Try direct parsing first
     try:
         parsed = json.loads(cleaned)
         return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         pass
 
+    # Fallback: Extract first valid JSON object between { and }
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -177,6 +203,9 @@ def _consult_gemini(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         logger.debug("[GEMINI] API not available, using fallback")
         return None
     
+    # Flag to track if we made an actual API call (for unconditional rate limiting)
+    api_called = False
+    
     try:
         # Format context for the prompt
         context_str = f"""{SYSTEM_PROMPT}
@@ -199,9 +228,11 @@ Analyze this state and recommend the best action. Return ONLY valid JSON."""
             try:
                 logger.debug("[GEMINI] Calling API with context... (attempt %d/%d)", attempt + 1, max_retries)
                 response = MODEL.generate_content(context_str)
+                api_called = True  # Mark that we successfully called the API
                 api_call_successful = True
                 break  # Success, exit retry loop
             except Exception as e:
+                api_called = True  # We attempted an API call even if it failed
                 error_str = str(e)
                 # Check for rate limit error
                 if "429" in error_str or "TooManyRequests" in error_str or "quota" in error_str.lower():
@@ -243,12 +274,6 @@ Analyze this state and recommend the best action. Return ONLY valid JSON."""
             f"[GEMINI] Decision: {action} | Amount: {amount_pct:.0%} | {reason}"
         )
         
-        # Sleep to respect API rate limits (15 RPM = 4s between calls)
-        # Only sleep if API call was successful (not during retry delays)
-        if api_call_successful and GEMINI_API_DELAY > 0:
-            logger.debug("[GEMINI] Waiting %.1fs to respect rate limit (15 RPM)...", GEMINI_API_DELAY)
-            time.sleep(GEMINI_API_DELAY)
-        
         return {
             "action": action,
             "amount_pct": amount_pct,
@@ -262,6 +287,13 @@ Analyze this state and recommend the best action. Return ONLY valid JSON."""
             str(e)[:150],
         )
         return None
+    
+    finally:
+        # CRITICAL: Always sleep after API call to respect rate limits (15 RPM = 4s between calls)
+        # This prevents cascading 429 errors when JSON parsing fails or exceptions occur
+        if api_called and GEMINI_API_DELAY > 0:
+            logger.debug("[GEMINI] Waiting %.1fs to respect rate limit (15 RPM)...", GEMINI_API_DELAY)
+            time.sleep(GEMINI_API_DELAY)
 
 
 def _fallback_decision(context: Dict[str, Any]) -> Dict[str, Any]:

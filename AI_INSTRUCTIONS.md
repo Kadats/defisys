@@ -25,9 +25,10 @@ Siga estas regras estritamente ao propor ou analisar código:
 
 ## 5. Integração com Google Gemini API
 * **Versão da Biblioteca:** Use `google-generativeai >= 0.7.2` (versões antigas como 0.4.1 têm bugs e podem causar NotFound em modelos recentes).
-* **Modelo Recomendado:** Use `models/gemini-2.5-flash` (JSON estavel com `response_mime_type`).
-* **Fallback de Modelo:** Se `models/gemini-2.5-flash` nao estiver disponivel, use `models/gemini-flash-latest`.
-* **Override por Env:** Para trocar o modelo sem alterar codigo, defina `GEMINI_MODEL`.
+* **Modelo Recomendado:** Use `models/gemini-2.0-flash` (JSON estável com `response_mime_type` e ~1500 RPD no tier gratuito).
+* **Nota Arquitetural:** O modelo `gemini-2.5-flash` possui hard-limit de apenas 20 requisições/dia no tier gratuito, inviabilizando simulações de backtest de 30 dias (~180 requisições). O modelo `gemini-1.5-flash` foi descontinuado pela Google. O `gemini-2.0-flash` suporta ~1500 requisições/dia, tornando-o adequado para testes extensivos (até 250 dias de histórico ou 8+ backtests de 30 dias por dia).
+* **Fallback de Modelo:** Se `models/gemini-2.0-flash` não estiver disponível, o sistema tentará `models/gemini-flash-latest` e depois `models/gemini-2.5-flash`.
+* **Override por Env:** Para trocar o modelo sem alterar código, defina `GEMINI_MODEL=gemini-2.0-flash` no seu `.env`.
 * **Configuração:** Use `genai.configure(api_key=..., transport="rest")` para evitar truncamento em gRPC e configure `GenerationConfig` (temperature, max_output_tokens) durante a inicialização do modelo via `GenerativeModel()`.
 * **Rate Limiting:** A API gratuita do Gemini tem limite de 15 RPM (requests por minuto). SEMPRE implemente delay entre chamadas usando `GEMINI_API_DELAY_SECONDS` (padrão: 5s). Isso garante máximo de 12 RPM, abaixo do limite de 15 RPM. Para simulações de 30 dias (180 candles de 4h), o tempo total será ~15 minutos (180 × 5s).
 * **Retry com Backoff:** Implemente retry exponencial (2s, 4s, 8s) para erros 429 (TooManyRequests). Após 3 tentativas falhadas, caia para fallback heurístico.
