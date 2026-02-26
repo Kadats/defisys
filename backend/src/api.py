@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from backend.src.data import storage
 from backend.src.data.storage import get_data_from_db, get_latest_simulation_summary
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db, sync_market_data
-from backend.src.system_runner import run_trading_system
+from backend.src.system_runner import run_trading_system, train_model_pipeline, run_simulation
 from backend.src.services.analytics import get_simulation_results
 from backend.src.utils.analytics import calculate_yearly_metrics
 from backend.src.utils.log_handler import WebSocketHandler
@@ -294,28 +294,108 @@ def get_simulation():
 
 
 @app.post(
+    "/api/model/train",
+    tags=["Model"],
+    summary="Train ML Model",
+    description="Trains the XGBoost prediction model using historical data. Must be run before simulation."
+)
+async def train_model():
+    """
+    Fase 2: Treina o modelo de Machine Learning.
+    
+    Este endpoint:
+    - Carrega dados históricos do banco de dados
+    - Faz split temporal Walk-Forward (treino até 2023-12-31)
+    - Treina o modelo XGBClassifier
+    - Gera predições para todo o histórico
+    - Salva predições no banco de dados
+    
+    Retorna:
+        dict: Relatório do treinamento com métricas e número de predições geradas
+    """
+    logger.info("🤖 Endpoint /api/model/train chamado - iniciando treino do modelo...")
+    
+    def train_and_return():
+        try:
+            result = train_model_pipeline()
+            logger.info("✓ Treinamento de ML concluído!")
+            return result
+        except Exception as e:
+            logger.exception(f"❌ Erro no treinamento: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "predictions_generated": 0
+            }
+    
+    result = await run_in_threadpool(train_and_return)
+    
+    if result.get("success"):
+        return {
+            "status": "completed",
+            "message": f"Modelo treinado com sucesso! {result['predictions_generated']} predições geradas.",
+            "data": result
+        }
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Falha no treinamento do modelo: {result.get('error', 'Unknown error')}"
+        )
+
+
+@app.post(
     "/api/simulation/run",
     tags=["Simulation"],
     summary="Run Simulation",
     description="Triggers the trading system to run without blocking the API."
 )
-async def run_simulation(payload: SimulationRunRequest):
+async def run_simulation_endpoint(payload: SimulationRunRequest):
+    """
+    Fase 3-4: Executa a simulação de trading.
+    
+    Este endpoint:
+    - Valida que o modelo foi treinado (verifica existência de predições)
+    - Carrega predições de ML do banco
+    - Executa o TradingEngine com a estratégia escolhida
+    - Salva trades, positions e summary no banco
+    
+    IMPORTANTE: Execute /api/model/train antes de usar este endpoint!
+    
+    Args:
+        payload: Parâmetros da simulação (datas, capital inicial, dias)
+    
+    Retorna:
+        dict: Status da simulação iniciada em background
+    """
     global _SUMMARY_CACHE, _SIMULATION_RUNNING
+    
+    # VALIDAÇÃO: Verificar se há predições no banco de dados
+    logger.info("🔍 Validando existência de predições no banco de dados...")
+    predictions_df = get_predictions_from_db()
+    
+    if predictions_df is None or predictions_df.empty:
+        logger.error("❌ Nenhuma predição encontrada no banco de dados!")
+        raise HTTPException(
+            status_code=400,
+            detail="Modelo não treinado. Por favor, execute o treinamento antes de simular."
+        )
+    
+    logger.info(f"✓ Validação OK: {len(predictions_df):,} predições encontradas no banco")
     
     # 🧹 LIMPAR CACHE ANTIGO - força recompute dos resultados
     _SUMMARY_CACHE = {}
     _SIMULATION_RUNNING = True
-    logger.info("✓ Cache limpo e flag iniciado. Disparando simulação com Gemini...")
+    logger.info("✓ Cache limpo e flag iniciado. Disparando simulação...")
     
     def run_and_mark_done():
         try:
-            run_trading_system(
+            run_simulation(
                 payload.start_date,
                 payload.end_date,
                 payload.initial_capital,
                 backtest_days=payload.simulation_days,
             )
-            logger.info("✓ Simulação do Gemini concluída!")
+            logger.info("✓ Simulação concluída!")
         except Exception as e:
             logger.exception(f"❌ Erro na simulação: {e}")
         finally:
@@ -327,7 +407,7 @@ async def run_simulation(payload: SimulationRunRequest):
     )
     return {
         "status": "started",
-        "message": "Simulação iniciada em background. O processo pode levar alguns minutos devido à API da IA."
+        "message": "Simulação iniciada em background. Aguarde alguns segundos para ver os resultados."
     }
 
 @app.get(

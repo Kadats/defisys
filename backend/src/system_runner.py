@@ -39,6 +39,333 @@ def log_summary_report(results, latest_indicators=None):
     # No .txt file generation needed in V2 architecture
 
 
+def train_model_pipeline() -> dict:
+    """
+    Fase 2: Treinamento do Modelo de ML (isolado).
+    
+    Esta função:
+    - Carrega dados preparados do banco de dados (já com indicadores calculados)
+    - Faz Split Temporal Walk-Forward (treina até 2023-12-31, testa após)
+    - Treina o modelo XGBClassifier
+    - Gera predições para todo o histórico
+    - Limpa predições antigas do banco
+    - Salva novas predições no banco
+    
+    Esta função NÃO:
+    - Coleta dados de APIs externas (isso é feito no startup)
+    - Executa backtesting
+    - Calcula métricas de trading
+    
+    Returns:
+        dict: Relatório do treinamento com métricas e número de predições geradas
+    """
+    logger.info("=" * 80)
+    logger.info("🤖 FASE 2: INICIANDO TREINAMENTO DO MODELO DE ML")
+    logger.info("=" * 80)
+    
+    # 1. Carregar dados preparados (com indicadores e features)
+    logger.info("Carregando dados de mercado e indicadores do banco de dados...")
+    full_df = get_full_prepared_data()
+    
+    if full_df is None or full_df.empty:
+        logger.error("Não foi possível obter os dados preparados. Verifique se a Fase 1 foi executada.")
+        return {
+            "success": False,
+            "error": "Failed to load prepared data from database",
+            "predictions_generated": 0
+        }
+    
+    logger.info(f"✓ Dados carregados: {len(full_df):,} candles disponíveis")
+    
+    # 2. Treinar o Modelo com Split Temporal
+    logger.info(f"Treinando modelo com Split Temporal (split date: {ML_TRAIN_SPLIT_DATE})...")
+    model, scaler = train_prediction_model(full_df, train_test_split_date=ML_TRAIN_SPLIT_DATE)
+    
+    if model is None or scaler is None:
+        logger.error("Falha ao treinar o modelo.")
+        return {
+            "success": False,
+            "error": "Model training failed",
+            "predictions_generated": 0
+        }
+    
+    logger.info("✓ Modelo treinado com sucesso")
+    
+    # 3. Gerar predições para todo o histórico
+    logger.info("Gerando predições para todo o histórico...")
+    full_df_with_predictions = get_predictions(model, scaler, full_df)
+    
+    # 4. Limpar predições antigas e salvar novas
+    logger.info("Limpando predições antigas do banco de dados...")
+    storage.clear_predictions_data()
+    
+    logger.info("Salvando novas predições no banco de dados...")
+    save_predictions_to_db(full_df_with_predictions)
+    
+    # Contar predições geradas (sinais de compra com threshold)
+    predictions_count = int(full_df_with_predictions['Prediction'].sum()) if 'Prediction' in full_df_with_predictions.columns else 0
+    total_candles = len(full_df_with_predictions)
+    
+    logger.info("=" * 80)
+    logger.info("✅ TREINAMENTO DE ML CONCLUÍDO COM SUCESSO!")
+    logger.info(f"   Total de candles: {total_candles:,}")
+    logger.info(f"   Predições de compra geradas: {predictions_count:,} ({predictions_count/total_candles*100:.1f}%)")
+    logger.info("=" * 80)
+    
+    return {
+        "success": True,
+        "total_candles": total_candles,
+        "predictions_generated": predictions_count,
+        "split_date": ML_TRAIN_SPLIT_DATE,
+        "model_type": "XGBClassifier"
+    }
+
+
+def run_simulation(
+    start_date: str = None,
+    end_date: str = None,
+    initial_capital: float = None,
+    backtest_days: int | None = None,
+) -> dict:
+    """
+    Fase 3-4: Execução da Simulação de Trading (isolada).
+    
+    Esta função:
+    - Carrega predições de ML do banco de dados (devem existir!)
+    - Carrega dados de mercado do banco de dados
+    - Faz merge das predições com os dados de mercado
+    - Aplica janela temporal (filtro de dias)
+    - Executa o TradingEngine com a estratégia escolhida
+    - Salva trades, positions e summary no banco
+    
+    Esta função NÃO:
+    - Coleta dados de APIs externas (Fase 1 - feito no startup)
+    - Treina modelos de ML (Fase 2 - feito via endpoint separado)
+    - Apaga predições de ML do banco
+    
+    Args:
+        start_date: Data inicial da simulação (formato ISO)
+        end_date: Data final da simulação (formato ISO)
+        initial_capital: Capital inicial em USD
+        backtest_days: Número de dias para limitar o backtest
+    
+    Returns:
+        dict: Relatório completo da simulação com métricas de performance
+    """
+    # 🚀 LOG CLARO DE INÍCIO
+    logger.info("=" * 80)
+    logger.info("🎯 FASE 3-4: INICIANDO SIMULAÇÃO DE TRADING")
+    logger.info(
+        f"   Start: {start_date} | End: {end_date} | Capital: ${initial_capital} | "
+        f"Days: {backtest_days}"
+    )
+    logger.info("=" * 80)
+    
+    # 1. LIMPEZA DE DADOS DE SIMULAÇÃO (NÃO apaga predições de ML)
+    storage.clear_simulation_data()
+    logger.info("✓ Dados de simulação anteriores limpos (trades, positions, summary)")
+    
+    # 2. CARREGAR PREDIÇÕES DO BANCO DE DADOS
+    logger.info("Carregando predições de ML do banco de dados...")
+    from backend.src.data.pipeline import get_predictions_from_db
+    predictions_df = get_predictions_from_db()
+    
+    if predictions_df is None or predictions_df.empty:
+        logger.error("Nenhuma predição encontrada no banco de dados!")
+        logger.error("Execute o treinamento de ML primeiro via POST /api/model/train")
+        return {
+            "backtest_report": {
+                "error": "Modelo não treinado. Por favor, execute o treinamento antes de simular."
+            }
+        }
+    
+    logger.info(f"✓ Predições carregadas: {len(predictions_df):,} registros")
+    
+    # 3. CARREGAR DADOS DE MERCADO DO BANCO
+    logger.info("Carregando dados de mercado do banco de dados...")
+    from backend.src.data.pipeline import get_full_prepared_data
+    full_df = get_full_prepared_data()
+    
+    if full_df is None or full_df.empty:
+        logger.error("Não foi possível carregar dados de mercado do banco.")
+        return {
+            "backtest_report": {
+                "error": "Failed to load market data from database"
+            }
+        }
+    
+    logger.info(f"✓ Dados de mercado carregados: {len(full_df):,} candles")
+    
+    # 4. FAZER MERGE DAS PREDIÇÕES COM OS DADOS DE MERCADO
+    logger.info("Fazendo merge de predições com dados de mercado...")
+    
+    # Garantir que ambos DataFrames tenham Open_time como datetime
+    if not pd.api.types.is_datetime64_any_dtype(full_df['Open_time']):
+        full_df['Open_time'] = pd.to_datetime(full_df['Open_time'])
+    if not pd.api.types.is_datetime64_any_dtype(predictions_df['open_time']):
+        predictions_df['open_time'] = pd.to_datetime(predictions_df['open_time'])
+    
+    # Renomear coluna de predições para fazer merge
+    predictions_df = predictions_df.rename(columns={'open_time': 'Open_time'})
+    
+    # Merge usando Open_time como chave
+    full_df_with_predictions = pd.merge(
+        full_df,
+        predictions_df[['Open_time', 'prediction', 'prediction_proba']],
+        on='Open_time',
+        how='left'
+    )
+    
+    # Preencher NaN em prediction com 0 (sem sinal de compra)
+    full_df_with_predictions['Prediction'] = full_df_with_predictions['prediction'].fillna(0).astype(int)
+    full_df_with_predictions['Prediction_Proba'] = full_df_with_predictions['prediction_proba'].fillna(0.5)
+    
+    logger.info(f"✓ Merge concluído: {len(full_df_with_predictions):,} candles com predições")
+    
+    # 5. PREPARAR DATAFRAME PARA BACKTEST (Walk-Forward Test Set)
+    split_date = pd.Timestamp(ML_TRAIN_SPLIT_DATE)
+    simulation_df = full_df_with_predictions[full_df_with_predictions['Open_time'] >= split_date].copy()
+    
+    # Apply backtest window limit
+    effective_days = (
+        backtest_days
+        if backtest_days is not None
+        else (GEMINI_BACKTEST_DAYS if GEMINI_BACKTEST_DAYS > 0 else 30)
+    )
+    
+    if effective_days and effective_days > 0:
+        max_date = simulation_df['Open_time'].max()
+        min_date = max_date - pd.Timedelta(days=int(effective_days))
+        logger.info(
+            f"⚠️  BACKTEST_DAYS={int(effective_days)}: "
+            f"Limitando backtest aos últimos {int(effective_days)} dias "
+            f"({min_date.date()} até {max_date.date()})"
+        )
+        simulation_df = simulation_df[simulation_df['Open_time'] >= min_date].copy()
+    
+    # Apply user-defined date filters
+    if start_date:
+        start_ts = pd.Timestamp(start_date)
+        simulation_df = simulation_df[simulation_df['Open_time'] >= start_ts].copy()
+    if end_date:
+        end_ts = pd.Timestamp(end_date)
+        simulation_df = simulation_df[simulation_df['Open_time'] <= end_ts].copy()
+    
+    simulation_df = simulation_df.reset_index(drop=True)
+    
+    if simulation_df.empty:
+        logger.error("Janela de simulação não produziu dados. Verifique as datas.")
+        return {
+            "backtest_report": {
+                "error": "No data in simulation window"
+            }
+        }
+    
+    logger.info(f"✓ Janela de simulação definida: {len(simulation_df):,} candles")
+    logger.info(f"  Período: {simulation_df['Open_time'].min().strftime('%Y-%m-%d')} até {simulation_df['Open_time'].max().strftime('%Y-%m-%d')}")
+    
+    # 6. EXECUTAR O BACKTESTER
+    logger.info("Configurando e executando o Trading Engine...")
+    engine_initial_capital = float(initial_capital) if initial_capital is not None else 1050.0
+    engine = TradingEngine(initial_capital_usd=engine_initial_capital)
+    
+    # Instantiate the strategy
+    strategy = AccumulatorStrategy()
+    
+    # Run backtest
+    backtest_results = engine.run(simulation_df, strategy=strategy)
+    
+    # 7. SALVAR TRADES NO BANCO DE DADOS
+    logger.info("Salvando trades no banco de dados...")
+    price_final = float(simulation_df.iloc[-1]['Close'])
+    save_trades(engine.transaction_log, current_price=price_final)
+    
+    # 8. CALCULAR MÉTRICAS FINAIS
+    price_initial = float(simulation_df.iloc[0]['Close'])
+    btc_benchmark_profit_percentage = ((price_final - price_initial) / price_initial) * 100
+    
+    backtest_results['btc_benchmark_profit_percentage'] = btc_benchmark_profit_percentage
+    backtest_results['start_date'] = simulation_df.iloc[0]['Open_time'].isoformat()
+    backtest_results['end_date'] = simulation_df.iloc[-1]['Open_time'].isoformat()
+    
+    # Calculate total equity (Cash + BTC value)
+    btc_value = engine.btc_hodl_balance * price_final
+    total_equity = engine.usd_balance + btc_value
+    
+    backtest_results['final_usd_value'] = total_equity
+    backtest_results['cash_balance'] = engine.usd_balance
+    backtest_results['btc_amount'] = engine.btc_hodl_balance
+    backtest_results['btc_price_final'] = price_final
+    backtest_results['profit_usd'] = total_equity - engine.initial_capital
+    backtest_results['profit_percentage_usd'] = ((total_equity / engine.initial_capital) - 1) * 100
+    
+    # Token-based performance metrics
+    initial_token_balance = engine.initial_capital / price_initial
+    final_token_balance = total_equity / price_final
+    token_roi = ((final_token_balance - initial_token_balance) / initial_token_balance) * 100
+    alpha_vs_hold = backtest_results['profit_percentage_usd'] - btc_benchmark_profit_percentage
+    
+    logger.info(
+        f"✓ Equity Total: ${total_equity:.2f} "
+        f"(Cash: ${engine.usd_balance:.2f} + BTC: ${btc_value:.2f})"
+    )
+    logger.info(f"✓ Benchmark BTC: {btc_benchmark_profit_percentage:.2f}%")
+    logger.info(f"✓ ROI Estratégia: {backtest_results['profit_percentage_usd']:.2f}%")
+    logger.info(f"✓ Alpha vs HOLD: {alpha_vs_hold:.2f}%")
+    
+    # 9. SALVAR SUMMARY NO BANCO
+    logger.info("Salvando summary da simulação no banco de dados...")
+    num_trades = len(engine.transaction_log) if engine.transaction_log else 0
+    
+    # Calculate LP and Aave metrics
+    lp_total_value = 0.0
+    lp_fees_usd = 0.0
+    for lp in engine.active_lps:
+        asset_value, _, _ = engine._get_lp_value(lp, price_final)
+        asset_value = float(asset_value)
+        fees_value = lp.get('fees_accrued_usdt', 0.0) + (lp.get('fees_accrued_btc', 0.0) * price_final)
+        lp_total_value += asset_value + fees_value
+        lp_fees_usd += fees_value
+    
+    wallet_spot_total_usd = engine.usd_balance + (engine.btc_hodl_balance * price_final)
+    aave_collateral_usd = engine.btc_hodl_balance * price_final
+    aave_debt_usd = engine.total_debt_usd
+    aave_health_factor = engine.health_factor
+    
+    save_simulation_summary(
+        total_equity=total_equity,
+        roi_percent=backtest_results['profit_percentage_usd'],
+        benchmark_roi_percent=btc_benchmark_profit_percentage,
+        total_trades=num_trades,
+        initial_capital=engine.initial_capital,
+        cash_balance=engine.usd_balance,
+        btc_amount=engine.btc_hodl_balance,
+        btc_price_final=price_final,
+        wallet_spot_total_usd=wallet_spot_total_usd,
+        wallet_lp_value_usd=lp_total_value,
+        lp_active_count=len(engine.active_lps),
+        lp_fees_usd=lp_fees_usd,
+        aave_collateral_usd=aave_collateral_usd,
+        aave_debt_usd=aave_debt_usd,
+        aave_health_factor=aave_health_factor,
+        initial_token_balance=initial_token_balance,
+        final_token_balance=final_token_balance,
+        token_roi=token_roi,
+        alpha_vs_hold=alpha_vs_hold
+    )
+    
+    # 10. LOG FINAL
+    logger.info("=" * 80)
+    logger.info("✅ SIMULAÇÃO CONCLUÍDA COM SUCESSO!")
+    logger.info(f"   Trades: {num_trades} | ROI: {backtest_results['profit_percentage_usd']:.2f}%")
+    logger.info(f"   Equity: ${total_equity:.2f}")
+    logger.info("=" * 80)
+    
+    return {
+        "backtest_report": backtest_results
+    }
+
+
 def run_trading_system(
     start_date: str = None,
     end_date: str = None,
