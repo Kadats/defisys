@@ -12,15 +12,19 @@ from pydantic import BaseModel
 # Imports internos
 from backend.src.data import storage
 from backend.src.data.storage import get_data_from_db, get_latest_simulation_summary
-from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db
+from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db, sync_market_data
 from backend.src.system_runner import run_trading_system
 from backend.src.services.analytics import get_simulation_results
 from backend.src.utils.analytics import calculate_yearly_metrics
 from backend.src.utils.log_handler import WebSocketHandler
 from backend.src.utils.ws_manager import manager
-from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT
+from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT, LOG_LEVEL
+from .logging_config import setup_logging
 
+# Initialize logging BEFORE creating the FastAPI app
+setup_logging(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
+
 app = FastAPI(title="DefiSys API")
 
 app.add_middleware(
@@ -55,6 +59,39 @@ def setup_websocket_logging() -> None:
         logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
     )
     root_logger.addHandler(handler)
+
+
+@app.on_event("startup")
+async def startup_sync_market_data() -> None:
+    """
+    Sincroniza dados de mercado no startup do servidor.
+    
+    Esta função executa em background para não bloquear a inicialização do servidor.
+    Coleta dados de:
+    - Klines do Binance
+    - Fear & Greed Index
+    - Métricas On-chain
+    - Funding Rate
+    - Open Interest
+    - Implied Volatility
+    - Uniswap Pool Data
+    """
+    # Log direto para garantir que a função foi chamada
+    print("="*80)
+    print("🔄 STARTUP EVENT TRIGGERED - Iniciando sincronização de dados...")
+    print("="*80)
+    
+    try:
+        # Run in thread pool to avoid blocking server startup
+        await run_in_threadpool(sync_market_data)
+        print("="*80)
+        print("✅ Sincronização concluída - API pronta para uso")
+        print("="*80)
+    except Exception as e:
+        print(f"❌ ERRO na sincronização: {e}")
+        logger.error(f"Erro durante sincronização de dados no startup: {e}", exc_info=True)
+        logger.warning("Servidor iniciado, mas sincronização de dados falhou. Execute manualmente se necessário.")
+
 
 def sanitize_for_json(obj):
     """Converte Decimals e NaNs para formatos aceitos em JSON"""
