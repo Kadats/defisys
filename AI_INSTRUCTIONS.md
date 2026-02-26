@@ -35,6 +35,18 @@ Siga estas regras estritamente ao propor ou analisar código:
 * **Fallback Obrigatório:** Sempre implemente fallback heurístico quando a API Gemini falhar. O projeto não pode depender exclusivamente de APIs externas.
 * **Logging de Erros:** Log erros da API com `logger.error()` incluindo o tipo de exceção completo e mensagem truncada (máximo 150 caracteres).
 * **Validação de Resposta:** Sempre valide a resposta JSON antes de usar (verificar tipo dict, estrutura esperada, ranges de valores numéricos).
+* **🎯 Arquitetura de Gatilho (Trigger Architecture):** Para economizar quota da API Gemini, implemente sempre uma lógica de gatilho (trigger) antes de chamar a API. O Gemini só deve ser consultado quando houver uma oportunidade clara de trade. Os gatilhos recomendados são:
+	* `prediction_proba > 0.65` (Alta convicção do modelo de ML) OU
+	* `rsi < 35` (Sobrevendido extremo) OU
+	* `rsi > 75` (Sobrecomprado extremo)
+	* Se NENHUMA dessas condições for satisfeita, use um mock decision: `{'action': 'DO_NOTHING', 'amount_pct': 0.0, 'reason': 'Market sideways and ML confidence low. Saving API quota.'}`
+	* Isso reduz drasticamente o número de chamadas à API (de ~180 para ~30-50 em uma simulação de 30 dias), economizando quota e acelerando backtests.
+* **💰 Position Sizing Correto:** NUNCA use `max(MIN_POSITION_USD, ...)` para forçar ordens mínimas. Isso causa sangria de caixa ao tentar criar ordens maiores que o saldo disponível. A matemática correta é:
+	1. `safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)`
+	2. `target_amount = safe_balance * amount_pct` (use o `amount_pct` fornecido pelo agent)
+	3. Validar se `target_amount >= MIN_POSITION_USD`. Se não, retorne early com `logger.debug()` informando capital insuficiente.
+	4. `final_amount = min(target_amount, safe_balance)` (nunca exceda o saldo disponível)
+	5. NUNCA fure o `GAS_RESERVE_USD` exceto em liquidações de emergência (defense mode).
 
 ## 6. Seleção Dinâmica de Estratégias
 * O sistema suporta múltiplas estratégias de trading via Strategy Pattern.

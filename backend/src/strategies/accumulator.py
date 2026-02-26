@@ -188,17 +188,40 @@ class AccumulatorStrategy(BaseStrategy):
                 self._maintain_positions(engine, current_price, timestamp)
             return
         
-        # --- CONSULT RISK AGENT: LLM-based decision making ---
-        agent_context = {
-            'usd_balance': engine.usd_balance,
-            'btc_collateral': engine.btc_hodl_balance,
-            'aave_debt': engine.total_debt_usd,
-            'health_factor': engine.health_factor,
-            'ml_confidence': prediction_proba,
-            'rsi': rsi,
-        }
+        # --- CONSULT RISK AGENT: LLM-based decision making (with Trigger Architecture) ---
+        # Only call Gemini API if there's a clear opportunity (save API quota)
+        should_consult_gemini = (
+            prediction_proba > 0.65 or  # High ML confidence
+            rsi < 35 or                 # Extreme oversold
+            rsi > 75                    # Extreme overbought
+        )
         
-        agent_decision = consult_risk_agent(agent_context)
+        if should_consult_gemini:
+            logger.info(
+                f"[{timestamp.date()}] 🎯 TRIGGER ACTIVATED: Consulting Gemini API "
+                f"(ML={prediction_proba:.2%}, RSI={rsi:.1f})"
+            )
+            agent_context = {
+                'usd_balance': engine.usd_balance,
+                'btc_collateral': engine.btc_hodl_balance,
+                'aave_debt': engine.total_debt_usd,
+                'health_factor': engine.health_factor,
+                'ml_confidence': prediction_proba,
+                'rsi': rsi,
+            }
+            agent_decision = consult_risk_agent(agent_context)
+        else:
+            # No clear signal: Use mock decision (save API quota)
+            logger.debug(
+                f"[{timestamp.date()}] ⏸️  NO TRIGGER: Market sideways and ML confidence low. "
+                f"Saving API quota (ML={prediction_proba:.2%}, RSI={rsi:.1f})"
+            )
+            agent_decision = {
+                'action': 'DO_NOTHING',
+                'amount_pct': 0.0,
+                'reason': 'Market sideways and ML confidence low. Saving API quota.'
+            }
+        
         action = agent_decision.get('action', 'DO_NOTHING')
         amount_pct = agent_decision.get('amount_pct', 0.0)
         reason = agent_decision.get('reason', 'No reason provided')
@@ -212,20 +235,20 @@ class AccumulatorStrategy(BaseStrategy):
             # Full DeFi strategy: Borrow + LP + Spot leverage
             logger.info(f"[{timestamp.date()}] 🔥 EXECUTING BORROW_AND_LP strategy with {amount_pct:.0%} allocation")
             entry_signal = {'type': 'MOMENTUM', 'reason': reason}
-            self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal)
+            self._execute_bull_entry(engine, current_price, timestamp, row, entry_signal, amount_pct)
             self.last_trade_time = timestamp
         
         elif action == 'CONSERVATIVE_LP':
             # Conservative LP without aggressive borrowing
             logger.info(f"[{timestamp.date()}] 🌾 EXECUTING CONSERVATIVE_LP strategy with {amount_pct:.0%} allocation")
             entry_signal = {'type': 'DIP', 'reason': reason}
-            self._open_lp_conservative(engine, current_price, timestamp, entry_signal)
+            self._open_lp_conservative(engine, current_price, timestamp, entry_signal, amount_pct)
             self.last_trade_time = timestamp
         
         elif action == 'SPOT_ONLY':
             # Simple spot buy without leverage/LP
             logger.info(f"[{timestamp.date()}] 📍 EXECUTING SPOT_ONLY strategy with {amount_pct:.0%} allocation")
-            self._simple_spot_buy(engine, current_price, timestamp)
+            self._simple_spot_buy(engine, current_price, timestamp, amount_pct)
             self.last_trade_time = timestamp
         
         elif action == 'DEFENSE_MODE':
@@ -330,68 +353,97 @@ class AccumulatorStrategy(BaseStrategy):
         self,
         engine: 'TradingEngine',
         current_price: float,
-        timestamp: pd.Timestamp
+        timestamp: pd.Timestamp,
+        amount_pct: float = 0.15
     ) -> None:
         """
         Simple spot BTC buy for when DeFi conditions are not met.
         This is a fallback when we don't want to use leverage/LP.
+        
+        Args:
+            amount_pct: Percentage of safe balance to allocate (from agent or fallback default)
         """
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        if safe_balance > MIN_POSITION_USD:
-            # Allocate 15% of available USD for spot buy
-            spot_amount = safe_balance * 0.15
-            spot_amount = max(MIN_POSITION_USD, min(spot_amount, safe_balance * 0.50))
-            
-            logger.info(f"[{timestamp.date()}] SPOT BUY: Accumulating BTC with ${spot_amount:.2f} (no leverage)")
-            engine.buy_and_hodl(spot_amount, current_price, timestamp)
+        # Calculate target amount based on agent allocation
+        target_amount = safe_balance * amount_pct
+        
+        # Validate minimum position size
+        if target_amount < MIN_POSITION_USD:
+            logger.debug(
+                f"[{timestamp.date()}] Capital insuficiente para ordem mínima. "
+                f"Target: ${target_amount:.2f} < Min: ${MIN_POSITION_USD:.2f}. Ignorando entrada."
+            )
+            return
+        
+        # Never exceed safe balance (no forced buys)
+        spot_amount = min(target_amount, safe_balance)
+        
+        logger.info(
+            f"[{timestamp.date()}] SPOT BUY: Accumulating BTC with ${spot_amount:.2f} "
+            f"({amount_pct:.0%} allocation, no leverage)"
+        )
+        engine.buy_and_hodl(spot_amount, current_price, timestamp)
     
     def _open_lp_conservative(
         self,
         engine: 'TradingEngine',
         current_price: float,
         timestamp: pd.Timestamp,
-        entry_signal: dict
+        entry_signal: dict,
+        amount_pct: float = 0.15
     ) -> None:
         """
         Open LP position conservatively when we have medium confidence but want to farm yields.
         
         This is a middle ground: We allocate capital to an LP position instead of just holding,
         but without aggressive borrowing (which is risky).
+        
+        Args:
+            amount_pct: Percentage of safe balance to allocate (from agent or fallback default)
         """
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        if safe_balance > MIN_POSITION_USD:
-            # Use smaller allocation for LP (15-20% of available)
-            lp_capital = safe_balance * 0.15
-            lp_capital = max(MIN_POSITION_USD, min(lp_capital, safe_balance * 0.40))
-            
-            # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
-            range_lower = current_price * 0.95
-            range_upper = current_price * 1.25
-            
-            logger.info(
-                f"[{timestamp.date()}] 🌾 OPEN_LP (Conservative): ${lp_capital:.2f} "
-                f"Range: ${range_lower:.2f} - ${range_upper:.2f} (Yield Farming)"
+        # Calculate target LP capital based on agent allocation
+        lp_capital = safe_balance * amount_pct
+        
+        # Validate minimum position size
+        if lp_capital < MIN_POSITION_USD:
+            logger.debug(
+                f"[{timestamp.date()}] Capital insuficiente para LP mínimo. "
+                f"Target: ${lp_capital:.2f} < Min: ${MIN_POSITION_USD:.2f}. Ignorando entrada."
             )
-            
-            engine.open_lp(
-                lp_capital,
-                range_lower,
-                range_upper,
-                current_price,
-                timestamp,
-                strategy="ACCUMULATOR_CONSERVATIVE_LP"
-            )
-            
-            # Also buy some spot BTC to build position
-            remaining_safe = safe_balance - lp_capital
-            if remaining_safe > MIN_POSITION_USD * 2:
-                spot_buy = remaining_safe * 0.20  # 20% of what's left for spot
-                spot_buy = min(spot_buy, remaining_safe * 0.50)
-                if spot_buy > MIN_POSITION_USD:
-                    engine.buy_and_hodl(spot_buy, current_price, timestamp)
-                    logger.info(f"[{timestamp.date()}] Also bought BTC spot: ${spot_buy:.2f}")
+            return
+        
+        # Never exceed safe balance (no forced positions)
+        lp_capital = min(lp_capital, safe_balance)
+        
+        # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
+        range_lower = current_price * 0.95
+        range_upper = current_price * 1.25
+        
+        logger.info(
+            f"[{timestamp.date()}] 🌾 OPEN_LP (Conservative): ${lp_capital:.2f} "
+            f"({amount_pct:.0%} allocation) | Range: ${range_lower:.2f} - ${range_upper:.2f} (Yield Farming)"
+        )
+        
+        engine.open_lp(
+            lp_capital,
+            range_lower,
+            range_upper,
+            current_price,
+            timestamp,
+            strategy="ACCUMULATOR_CONSERVATIVE_LP"
+        )
+        
+        # Also buy some spot BTC to build position (with remaining capital)
+        remaining_safe = max(0.0, engine.usd_balance - GAS_RESERVE_USD - lp_capital)
+        if remaining_safe > MIN_POSITION_USD:
+            spot_buy = remaining_safe * 0.20  # 20% of what's left for spot
+            if spot_buy >= MIN_POSITION_USD:
+                spot_buy = min(spot_buy, remaining_safe)
+                engine.buy_and_hodl(spot_buy, current_price, timestamp)
+                logger.info(f"[{timestamp.date()}] Also bought BTC spot: ${spot_buy:.2f}")
     
     def _dip_buy(
         self, 
@@ -405,20 +457,25 @@ class AccumulatorStrategy(BaseStrategy):
         """
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        if safe_balance > MIN_POSITION_USD:
-            # Preserve a USD reserve to avoid draining capital in prolonged dips
-            available_for_trade = max(0.0, engine.usd_balance - MIN_RESERVE_USD)
-            if engine.usd_balance < MIN_RESERVE_USD:
-                dip_buy_amount = MIN_POSITION_USD
-            else:
-                dip_buy_amount = max(MIN_POSITION_USD, available_for_trade * 0.20)
-            dip_buy_amount = min(dip_buy_amount, safe_balance)
-            
-            logger.info(
-                f"[{timestamp.date()}] DIP BUY: RSI oversold. "
-                f"Buying BTC with ${dip_buy_amount:.2f} (20% of available)"
+        # Calculate target amount (20% of safe balance)
+        target_amount = safe_balance * 0.20
+        
+        # Validate minimum position size
+        if target_amount < MIN_POSITION_USD:
+            logger.debug(
+                f"[{timestamp.date()}] Capital insuficiente para dip buy. "
+                f"Target: ${target_amount:.2f} < Min: ${MIN_POSITION_USD:.2f}. Ignorando entrada."
             )
-            engine.buy_and_hodl(dip_buy_amount, current_price, timestamp)
+            return
+        
+        # Never exceed safe balance (no forced buys)
+        dip_buy_amount = min(target_amount, safe_balance)
+        
+        logger.info(
+            f"[{timestamp.date()}] DIP BUY: RSI oversold. "
+            f"Buying BTC with ${dip_buy_amount:.2f} (20% of available)"
+        )
+        engine.buy_and_hodl(dip_buy_amount, current_price, timestamp)
     
     def _execute_bull_entry(
         self, 
@@ -426,7 +483,8 @@ class AccumulatorStrategy(BaseStrategy):
         current_price: float, 
         timestamp: pd.Timestamp,
         row: pd.Series,
-        entry_signal: dict
+        entry_signal: dict,
+        amount_pct: float = 0.40
     ) -> None:
         """
         Bull Mode Entry: Leverage aggressively to accumulate more BTC and farm yields.
@@ -440,33 +498,48 @@ class AccumulatorStrategy(BaseStrategy):
         
         Args:
             entry_signal: Dict with 'type' (MOMENTUM/DIP) and 'reason'
+            amount_pct: Percentage of safe balance to allocate (from agent or fallback default)
         """
         entry_type = entry_signal.get('type', 'UNKNOWN')
         entry_reason = entry_signal.get('reason', 'No reason provided')
         
         logger.info(
             f"[{timestamp.date()}] 🚀 BULL ENTRY ({entry_type}): {entry_reason}. "
-            f"Unleashing DeFi Power! Opening LPs and Borrowing..."
+            f"Unleashing DeFi Power with {amount_pct:.0%} allocation! Opening LPs and Borrowing..."
         )
         
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        # Step 1: Build spot BTC position first (always allocate some to HODL)
-        spot_allocation = safe_balance * 0.20  # 20% for spot buying
-        spot_allocation = max(MIN_POSITION_USD, min(spot_allocation, safe_balance * 0.40))
+        # Calculate allocations based on agent recommendation
+        total_allocation = safe_balance * amount_pct
         
-        if spot_allocation > MIN_POSITION_USD:
+        # Validate minimum capital
+        if total_allocation < MIN_POSITION_USD:
+            logger.debug(
+                f"[{timestamp.date()}] Capital insuficiente para bull entry. "
+                f"Target: ${total_allocation:.2f} < Min: ${MIN_POSITION_USD:.2f}. Ignorando entrada."
+            )
+            return
+        
+        # Never exceed safe balance (no forced positions)
+        total_allocation = min(total_allocation, safe_balance)
+        
+        # Step 1: Build spot BTC position first (always allocate some to HODL)
+        spot_allocation = total_allocation * 0.30  # 30% of allocated for spot buying
+        
+        if spot_allocation >= MIN_POSITION_USD:
+            spot_allocation = min(spot_allocation, engine.usd_balance - GAS_RESERVE_USD)
             engine.buy_and_hodl(spot_allocation, current_price, timestamp)
             logger.info(
                 f"[{timestamp.date()}] Spot Entry: Bought BTC with ${spot_allocation:.2f}. "
-                f"Remaining USD: ${safe_balance - spot_allocation:.2f}"
+                f"Remaining USD: ${engine.usd_balance:.2f}"
             )
         
         # Step 2: OPEN LIQUIDITY POOL (Yield Farming)
         # Even WITHOUT borrowing, we should open LPs if we have capital
-        lp_allocation = safe_balance * 0.40  # 40% for LP (larger allocation for yield farming)
-        lp_allocation = max(MIN_POSITION_USD, min(lp_allocation, safe_balance * 0.60))
-        lp_allocation = min(lp_allocation, engine.usd_balance - GAS_RESERVE_USD)
+        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+        lp_allocation = total_allocation * 0.50  # 50% of allocated for LP
+        lp_allocation = min(lp_allocation, safe_balance)
         
         if lp_allocation > 10:
             # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
