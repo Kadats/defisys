@@ -1016,8 +1016,31 @@ def save_predictions_to_db(df: pd.DataFrame):
 
 
 # ==================== SIMULATION ====================
+def clear_predictions_data():
+    """Limpa apenas a tabela de predições de ML."""
+    conn = create_connection()
+    if not conn:
+        logger.error("Não foi possível conectar ao banco para limpar predições")
+        return
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM ml_predictions")
+        conn.commit()
+        logger.info("🧹 Predições de ML anteriores limpas com sucesso.")
+    except Exception as exc:
+        logger.error(f"Erro ao limpar predições: {exc}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
 def clear_simulation_data():
-    """Limpa as tabelas de simulação para evitar dados duplicados."""
+    """
+    Limpa as tabelas de simulação (trades, positions, summary) para evitar dados duplicados.
+    
+    IMPORTANTE: Esta função NÃO apaga as predições de ML (ml_predictions table).
+    As predições são gerenciadas separadamente pelo endpoint de treino.
+    """
     conn = create_connection()
     if not conn:
         logger.error("Não foi possível conectar ao banco para limpar dados")
@@ -1028,12 +1051,11 @@ def clear_simulation_data():
             cursor.execute("DELETE FROM positions_log")
             # Apaga todos os registros de trades
             cursor.execute("DELETE FROM trades")
-            # Apaga todas as predições de ML anteriores
-            cursor.execute("DELETE FROM ml_predictions")
             # Apaga o summary oficial anterior para forçar nova simulação
             cursor.execute("DELETE FROM simulation_summary")
+            # NÃO apaga ml_predictions - isso é feito apenas no treino
         conn.commit()
-        logger.info("🧹 Dados de simulação anteriores limpos com sucesso (trades, positions, predictions, summary).")
+        logger.info("🧹 Dados de simulação anteriores limpos com sucesso (trades, positions, summary).")
     except Exception as exc:
         logger.error(f"Erro ao limpar dados: {exc}")
         conn.rollback()
