@@ -424,11 +424,33 @@ const runSimulation = async () => {
           });
           
           // Se não está mais rodando E tem resultados
-          if (!status.running && status.has_results && status.trades_count > 0) {
+          if (!status.running && status.has_results) {
+            // CRITICAL FIX: Handle zero trades case
+            if (status.trades_count === 0) {
+              console.log('⚠️ Simulação concluída mas nenhuma operação foi realizada!');
+              showToast('⚠️ Simulação concluída: Nenhuma operação foi realizada no período. Market conditions não atingiram os critérios de entrada.', 7000);
+              try {
+                await fetchData();
+              } catch (e) {
+                console.error('Erro ao recarregar dados:', e);
+              } finally {
+                isSimulating.value = false;
+              }
+              return;
+            }
+            
             console.log(`✅ Simulação concluída com ${status.trades_count} trades!`);
             showToast(`✅ Simulação concluída! ${status.trades_count} trades executados.`);
-            await fetchData();
-            isSimulating.value = false;
+            
+            // Wrap fetchData in try/catch/finally to ensure isSimulating is always reset
+            try {
+              await fetchData();
+            } catch (e) {
+              console.error('Erro ao recarregar dados após simulação:', e);
+              showToast('⚠️ Erro ao carregar resultados. Tente recarregar a página.', 5000);
+            } finally {
+              isSimulating.value = false;
+            }
             return;
           }
         } catch (e) {

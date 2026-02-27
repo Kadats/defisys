@@ -9,5 +9,6 @@ from BaseStrategy and implements the execute() method.
 from .base import BaseStrategy
 from .btc_lite import BTCLiteStrategy, DAYS_OUT_OF_RANGE_THRESHOLD
 from .accumulator import AccumulatorStrategy
+from .swing_usd import SwingUSDStrategy
 
-__all__ = ['BaseStrategy', 'BTCLiteStrategy', 'AccumulatorStrategy', 'DAYS_OUT_OF_RANGE_THRESHOLD']
+__all__ = ['BaseStrategy', 'BTCLiteStrategy', 'AccumulatorStrategy', 'SwingUSDStrategy', 'DAYS_OUT_OF_RANGE_THRESHOLD']

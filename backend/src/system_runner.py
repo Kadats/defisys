@@ -4,7 +4,7 @@ import os
 
 from backend.src.data.pipeline import get_full_prepared_data
 from .core import TradingEngine
-from .strategies import BTCLiteStrategy, AccumulatorStrategy
+from .strategies import BTCLiteStrategy, AccumulatorStrategy, SwingUSDStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE, GEMINI_BACKTEST_DAYS
 from .ai import train_prediction_model, get_predictions
 from backend.src.data.storage import save_predictions_to_db, save_trades, save_simulation_summary
@@ -279,12 +279,7 @@ def run_simulation(
     elif strategy_type == "btc_lite":
         strategy = BTCLiteStrategy()
     elif strategy_type == "swing_usd":
-        logger.error("Estratégia 'swing_usd' ainda não foi implementada.")
-        return {
-            "backtest_report": {
-                "error": "Strategy 'swing_usd' is not implemented yet. Coming soon!"
-            }
-        }
+        strategy = SwingUSDStrategy(use_llm=use_llm)
     else:
         logger.error(f"Estratégia desconhecida: {strategy_type}")
         return {

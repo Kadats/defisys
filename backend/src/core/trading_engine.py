@@ -212,6 +212,67 @@ class TradingEngine:
         
         self.decision_history.append(f"HODL BUY: {btc_bought:.6f} BTC @ ${effective_price}")
 
+    def sell_btc(self, btc_amount: float, current_btc_price: float, timestamp: pd.Timestamp = None) -> float:
+        """
+        Vende BTC da carteira HODL para USD (Swing Trading).
+        
+        Args:
+            btc_amount: Quantidade de BTC a vender
+            current_btc_price: Preço atual do BTC em USD
+            timestamp: Timestamp da transação (opcional)
+        
+        Returns:
+            Valor em USD recebido pela venda (após taxas e slippage)
+        """
+        if timestamp is None:
+            timestamp = pd.Timestamp.now()
+        
+        # 1. BLINDAGEM: Verifica se há saldo suficiente em BTC
+        if self.btc_hodl_balance < btc_amount:
+            logger.warning(
+                f"[{timestamp.date()}] Saldo insuficiente de BTC para venda. "
+                f"Solicitado: {btc_amount:.8f} BTC, Disponível: {self.btc_hodl_balance:.8f} BTC"
+            )
+            return 0.0
+        
+        # 2. BLINDAGEM: Verifica se há saldo para cobrir a taxa de gas
+        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            logger.warning(
+                f"[{timestamp.date()}] Saldo insuficiente em USD para cobrir taxa de gas. "
+                f"Necessário: ${SIMULATED_GAS_FEE_USD:.2f}, Disponível: ${self.usd_balance:.2f}"
+            )
+            return 0.0
+        
+        if btc_amount <= 0:
+            return 0.0
+        
+        # 3. Cobra a taxa de gas do caixa
+        self.usd_balance -= SIMULATED_GAS_FEE_USD
+        
+        # 4. Calcula o preço efetivo com slippage (venda é desfavorável)
+        effective_price = current_btc_price * (1 - SLIPPAGE_PCT)
+        usd_received = btc_amount * effective_price
+        
+        # 5. Executa a venda
+        self.btc_hodl_balance -= btc_amount
+        self.usd_balance += usd_received
+        
+        # 6. Registra a transação
+        self._log_transaction(
+            timestamp=timestamp,
+            action_type="SELL_BTC",
+            btc_price=effective_price,
+            usd_amount=usd_received,
+            btc_amount=btc_amount,
+            fee_usd=SIMULATED_GAS_FEE_USD,
+            pnl_usd=0.0,  # PnL será calculado pela estratégia
+            details=""
+        )
+        
+        self.decision_history.append(f"SELL BTC: {btc_amount:.6f} BTC @ ${effective_price:.2f} → ${usd_received:.2f} USD")
+        
+        return usd_received
+
     def add_collateral(self, btc_amount: float) -> None:
         """Move BTC da carteira Spot para a carteira de colateral da AAVE."""
         if btc_amount <= 0:
