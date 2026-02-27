@@ -201,7 +201,7 @@ class AccumulatorStrategy(BaseStrategy):
             logger.debug(f"[{timestamp.date()}] Skipping entry due to active cool-down period.")
             # Still maintain existing positions even during cool-down
             if len(engine.active_lps) > 0:
-                self._maintain_positions(engine, current_price, timestamp)
+                self._maintain_positions(engine, current_price, timestamp, prediction_proba=prediction_proba)
             return
         
         # --- CONSULT RISK AGENT: LLM-based decision making (with Trigger Architecture) ---
@@ -234,14 +234,29 @@ class AccumulatorStrategy(BaseStrategy):
                     f"[{timestamp.date()}] 🔄 [FALLBACK] IA Desligada. Usando decisão heurística instantânea. "
                     f"(ML={prediction_proba:.2%}, RSI={rsi:.1f})"
                 )
-                # Heuristic decision logic
-                if rsi < 35:
-                    # Extreme oversold: Conservative spot buy
-                    agent_decision = {
-                        'action': 'SPOT_ONLY',
-                        'amount_pct': 0.25,
-                        'reason': 'Heurística: Sobrevendido extremo (RSI<35). Compra spot conservadora.'
-                    }
+                # Heuristic decision logic with anti-falling-knife filter
+                if rsi < 40:
+                    # RSI is low: Check ML confirmation to avoid catching falling knife
+                    if prediction_proba >= 0.60:
+                        # RSI low WITH ML confirmation of reversal: Safe to buy spot
+                        agent_decision = {
+                            'action': 'SPOT_ONLY',
+                            'amount_pct': 0.25,
+                            'reason': 'Heurística: RSI baixo (< 40) com confirmação de reversão do ML (>= 60%). Compra spot segura.'
+                        }
+                        logger.info(
+                            f"[{timestamp.date()}] ✅ Anti-Falling-Knife Check PASSED: RSI={rsi:.1f} + ML={prediction_proba:.2%} → SPOT_ONLY"
+                        )
+                    else:
+                        # RSI low but NO ML confirmation: Avoid falling knife trap
+                        agent_decision = {
+                            'action': 'DO_NOTHING',
+                            'amount_pct': 0.0,
+                            'reason': 'Faca caindo: RSI baixo (< 40) mas sem confirmação de reversão (ML < 60%). Evitar armadilha.'
+                        }
+                        logger.warning(
+                            f"[{timestamp.date()}] ⚠️  Anti-Falling-Knife Check TRIGGERED: RSI={rsi:.1f} but ML={prediction_proba:.2%} → DO_NOTHING (falling knife)"
+                        )
                 elif prediction_proba > 0.65:
                     # High ML confidence: Conservative LP
                     agent_decision = {
@@ -314,13 +329,13 @@ class AccumulatorStrategy(BaseStrategy):
             # No clear signal, maintain existing positions
             logger.debug(f"[{timestamp.date()}] ⏸️  DO_NOTHING: {reason}")
             if len(engine.active_lps) > 0:
-                self._maintain_positions(engine, current_price, timestamp)
+                self._maintain_positions(engine, current_price, timestamp, prediction_proba=prediction_proba)
         
         else:
             # Unknown action, log warning and maintain positions
             logger.warning(f"[{timestamp.date()}] ⚠️  Unknown agent action: {action}. Maintaining positions.")
             if len(engine.active_lps) > 0:
-                self._maintain_positions(engine, current_price, timestamp)
+                self._maintain_positions(engine, current_price, timestamp, prediction_proba=prediction_proba)
     
     def _execute_defense_mode(
         self, 
@@ -719,19 +734,58 @@ class AccumulatorStrategy(BaseStrategy):
         self, 
         engine: 'TradingEngine', 
         current_price: float, 
-        timestamp: pd.Timestamp
+        timestamp: pd.Timestamp,
+        prediction_proba: float = 0.5
     ) -> None:
         """
-        Maintain existing LP positions: ONLY close if EMERGENCY (HF < HF_CRITICAL).
+        Maintain existing LP positions: Close on Smart Stop Loss OR EMERGENCY (HF < HF_CRITICAL).
         
         Protection of Capital:
-        - OUT-OF-RANGE LPs are NOT closed automatically
+        - Smart Stop Loss: Close LP if price below range AND ML predicts further downside (proba < 0.45)
+        - OUT-OF-RANGE LPs are NOT closed automatically (unless stop loss triggered)
         - Only close if Health Factor drops below HF_CRITICAL (1.3)
         - This prevents losses and allows LPs to recover when price re-enters range
+        
+        Args:
+            prediction_proba: ML probability of upside (used for stop loss trigger)
         """
         lps_to_close = []
         
-        # EMERGENCY CHECK: Only close LPs if Health Factor is critically low
+        # ========== SMART STOP LOSS: Downside protection with ML confirmation ==========
+        # Close LPs if price drops below range AND ML predicts further decline
+        if len(engine.active_lps) > 0:
+            lps_to_check = list(engine.active_lps)  # Copy to avoid modification during iteration
+            for lp in lps_to_check:
+                price_below_range = current_price < lp['range_lower']
+                ml_predicts_downside = prediction_proba < 0.45
+                
+                if price_below_range and ml_predicts_downside:
+                    logger.warning(
+                        f"[{timestamp.date()}] 🛑 Smart Stop Loss acionado na LP {lp['id']}: "
+                        f"Preço ${current_price:.2f} abaixo do range ${lp['range_lower']:.2f} "
+                        f"E ML:{prediction_proba:.2%} < 45% (tendência de baixa confirmada). "
+                        f"Fechando LP para limitar perdas."
+                    )
+                    # Close the LP immediately
+                    closed = engine.close_lp(lp['id'], current_price, timestamp, is_emergency=False)
+                    
+                    if closed:
+                        # Try to pay down debt with freed USD balance
+                        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+                        if safe_balance > 0 and engine.total_debt_usd > 0:
+                            repay_amount = min(safe_balance, engine.total_debt_usd)
+                            if repay_amount >= SIMULATED_GAS_FEE_USD:
+                                engine.usd_balance -= SIMULATED_GAS_FEE_USD
+                                engine.total_debt_usd -= repay_amount
+                                engine.usd_balance -= repay_amount
+                                logger.info(
+                                    f"[{timestamp.date()}] Debt repayment após Stop Loss: "
+                                    f"Pagou ${repay_amount:.2f} de dívida. "
+                                    f"Dívida restante: ${engine.total_debt_usd:.2f}"
+                                )
+        
+        # ========== EMERGENCY CHECK: Close LPs if Health Factor is critically low ==========
+        # Only close LPs if Health Factor is critically low
         if engine.health_factor < HF_CRITICAL:
             logger.warning(
                 f"[{timestamp.date()}] 🚨 HEALTH FACTOR CRITICAL: {engine.health_factor:.2f} < {HF_CRITICAL}. "
