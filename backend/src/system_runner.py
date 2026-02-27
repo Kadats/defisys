@@ -127,6 +127,7 @@ def run_simulation(
     initial_capital: float = None,
     backtest_days: int | None = None,
     strategy_type: str = "accumulator",
+    use_llm: bool = False,
 ) -> dict:
     """
     Fase 3-4: Execução da Simulação de Trading (isolada).
@@ -271,10 +272,10 @@ def run_simulation(
     engine = TradingEngine(initial_capital_usd=engine_initial_capital)
     
     # Strategy Factory - Instantiate the strategy based on strategy_type
-    logger.info(f"Selecionando estratégia: {strategy_type}")
+    logger.info(f"Selecionando estratégia: {strategy_type} (LLM: {'ON' if use_llm else 'OFF'})")
     
     if strategy_type == "accumulator":
-        strategy = AccumulatorStrategy()
+        strategy = AccumulatorStrategy(use_llm=use_llm)
     elif strategy_type == "btc_lite":
         strategy = BTCLiteStrategy()
     elif strategy_type == "swing_usd":

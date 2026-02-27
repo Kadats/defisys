@@ -58,10 +58,15 @@ class AccumulatorStrategy(BaseStrategy):
     - Cool-Down: 24h minimum between trades to prevent over-trading
     """
     
-    def __init__(self):
-        """Initialize strategy with cool-down tracking."""
+    def __init__(self, use_llm: bool = False):
+        """Initialize strategy with cool-down tracking and LLM toggle.
+        
+        Args:
+            use_llm: If True, consult Gemini API for decisions. If False, use heuristic fallback (default).
+        """
         super().__init__()
         self.last_trade_time = None  # Track last trade timestamp for cool-down
+        self.use_llm = use_llm  # LLM Toggle: False by default for fast backtests
     
     def _is_cooldown_passed(self, current_time: pd.Timestamp) -> bool:
         """
@@ -196,7 +201,8 @@ class AccumulatorStrategy(BaseStrategy):
             rsi > 75                    # Extreme overbought
         )
         
-        if should_consult_gemini:
+        if self.use_llm and should_consult_gemini:
+            # LLM is enabled: Consult Gemini API for decision
             logger.info(
                 f"[{timestamp.date()}] 🎯 TRIGGER ACTIVATED: Consulting Gemini API "
                 f"(ML={prediction_proba:.2%}, RSI={rsi:.1f})"
@@ -211,16 +217,52 @@ class AccumulatorStrategy(BaseStrategy):
             }
             agent_decision = consult_risk_agent(agent_context)
         else:
-            # No clear signal: Use mock decision (save API quota)
-            logger.debug(
-                f"[{timestamp.date()}] ⏸️  NO TRIGGER: Market sideways and ML confidence low. "
-                f"Saving API quota (ML={prediction_proba:.2%}, RSI={rsi:.1f})"
-            )
-            agent_decision = {
-                'action': 'DO_NOTHING',
-                'amount_pct': 0.0,
-                'reason': 'Market sideways and ML confidence low. Saving API quota.'
-            }
+            # LLM is disabled OR no clear signal: Use heuristic fallback
+            if not self.use_llm and should_consult_gemini:
+                logger.info(
+                    f"[{timestamp.date()}] 🔄 [FALLBACK] IA Desligada. Usando decisão heurística instantânea. "
+                    f"(ML={prediction_proba:.2%}, RSI={rsi:.1f})"
+                )
+                # Heuristic decision logic
+                if rsi < 35:
+                    # Extreme oversold: Conservative spot buy
+                    agent_decision = {
+                        'action': 'SPOT_ONLY',
+                        'amount_pct': 0.25,
+                        'reason': 'Heurística: Sobrevendido extremo (RSI<35). Compra spot conservadora.'
+                    }
+                elif prediction_proba > 0.65:
+                    # High ML confidence: Conservative LP
+                    agent_decision = {
+                        'action': 'CONSERVATIVE_LP',
+                        'amount_pct': 0.35,
+                        'reason': 'Heurística: Alta convicção ML (>65%). LP conservadora sem alavancagem.'
+                    }
+                elif rsi > 75:
+                    # Extreme overbought: Do nothing
+                    agent_decision = {
+                        'action': 'DO_NOTHING',
+                        'amount_pct': 0.0,
+                        'reason': 'Heurística: Sobrecomprado extremo (RSI>75). Evitar entrada.'
+                    }
+                else:
+                    # No clear edge
+                    agent_decision = {
+                        'action': 'DO_NOTHING',
+                        'amount_pct': 0.0,
+                        'reason': 'Heurística: Sem edge claro. Aguardar melhor oportunidade.'
+                    }
+            else:
+                # No trigger activated
+                logger.debug(
+                    f"[{timestamp.date()}] ⏸️  NO TRIGGER: Market sideways and ML confidence low. "
+                    f"(ML={prediction_proba:.2%}, RSI={rsi:.1f})"
+                )
+                agent_decision = {
+                    'action': 'DO_NOTHING',
+                    'amount_pct': 0.0,
+                    'reason': 'Market sideways and ML confidence low. Saving API quota.'
+                }
         
         action = agent_decision.get('action', 'DO_NOTHING')
         amount_pct = agent_decision.get('amount_pct', 0.0)

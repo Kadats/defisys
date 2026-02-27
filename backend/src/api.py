@@ -46,6 +46,7 @@ class SimulationRunRequest(BaseModel):
     initial_capital: float | None = None
     simulation_days: int | None = None
     strategy_type: str = "accumulator"
+    use_llm: bool = False  # LLM Toggle: False by default for fast backtests
 
 
 @app.on_event("startup")
@@ -395,7 +396,8 @@ async def run_simulation_endpoint(payload: SimulationRunRequest):
                 payload.end_date,
                 payload.initial_capital,
                 backtest_days=payload.simulation_days,
-                    strategy_type=payload.strategy_type,
+                strategy_type=payload.strategy_type,
+                use_llm=payload.use_llm,
             )
             logger.info("✓ Simulação concluída!")
         except Exception as e:

@@ -41,6 +41,16 @@
             <option value="swing_usd">Maximizar Dólar (Swing USD)</option>
           </select>
         </div>
+        <div class="flex items-end">
+          <label class="flex items-center gap-3 cursor-pointer px-4 py-2 rounded border border-slate-600 bg-slate-900 hover:bg-slate-800 transition">
+            <input
+              v-model="useLlm"
+              type="checkbox"
+              class="w-4 h-4 rounded border-slate-500 bg-slate-900 cursor-pointer accent-blue-500"
+            />
+            <span class="text-sm font-medium text-slate-300">Usar IA (Gemini)</span>
+          </label>
+        </div>
         <div class="flex items-end gap-2">
           <button
             @click="trainModel"
@@ -215,6 +225,7 @@ const controlParams = ref({
 });
 
 const selectedStrategy = ref('accumulator');
+const useLlm = ref(false);
 
 const treasuries = ref({
   spot: {
@@ -370,6 +381,7 @@ const runSimulation = async () => {
         initial_capital: controlParams.value.initialCapital,
         simulation_days: controlParams.value.simulationDays,
         strategy_type: selectedStrategy.value,
+        use_llm: useLlm.value,
       }),
     });
     
