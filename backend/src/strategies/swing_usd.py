@@ -1,13 +1,14 @@
 """
-Swing USD Strategy (V1 - Bear Market Capital Protector).
+Swing USD Strategy (V2 - DeFi-Enhanced Liquidity Pool Integration).
 
-Strategy designed for traders who want to maximize USD holdings through swing trades:
-- BUY LOW: Enter positions when market is oversold with ML confirmation
+Strategy designed for traders who want to maximize USD holdings through swing trades with DeFi mechanics:
+- BUY LOW: Enter Directional LP positions when market is oversold with ML confirmation
+- IDLE YIELD: Farm fees with Wide Range LP when out of the market (40% capital)
 - SELL HIGH: Take profit at +10% or cut losses (Hard Stop: -8%, Smart Stop: ML<25%)
 - Capital Preservation: Focus on protecting USD during bear markets
-- No DeFi/Leverage: Pure spot trading only (no AAVE, no LPs)
+- DeFi Integration: Uses Liquidity Pools to earn fees + capture price moves
 
-Key Principle: Buy the dip, sell the rip. Maximize USD balance, not BTC holdings.
+Key Principle: Buy the dip with directional LPs, farm yield when idle, close LPs on exit signals.
 """
 import pandas as pd
 import logging
@@ -38,7 +39,8 @@ STOP_LOSS_CONFIDENCE = 0.25           # Smart stop loss: ML predicts severe drop
 HARD_STOP_LOSS_PCT = -0.08            # Hard stop loss: -8% from entry (protection against severe drawdown)
 
 # Position Sizing
-POSITION_SIZE_PERCENT = 0.80          # Use 80% of safe balance per entry (maximize returns on detected opportunities)
+POSITION_SIZE_PERCENT = 0.80          # Use 80% of safe balance per directional LP entry
+IDLE_YIELD_PERCENT = 0.40             # Use 40% of safe balance for idle yield LP (wide range)
 MIN_POSITION_USD = 10.0               # Minimum USD per position (exchange minimum)
 
 # Cool-Down (Anti Over-Trading)
@@ -50,14 +52,15 @@ MIN_RESERVE_USD = 50.0                # Minimum USD to keep as reserve
 
 class SwingUSDStrategy(BaseStrategy):
     """
-    Swing USD Strategy (V1 - Bear Market Capital Protector).
+    Swing USD Strategy (V2 - DeFi-Enhanced Liquidity Pool Integration).
     
-    Designed for traders who want to maximize USD holdings:
-    - Entry: Buy when (RSI < 40 AND ML confidence > 60%) OR (ML confidence > 75%)
-    - Take Profit: Sell when price is +10% above average entry
-    - Smart Stop Loss: Sell when ML confidence drops below 25% (severe downtrend prediction)
-    - Hard Stop Loss: Sell when price drops -8% from entry (capital preservation)
-    - No leverage, no DeFi, pure spot trading
+    Designed for traders who want to maximize USD holdings with DeFi mechanics:
+    - Entry: Open Directional LP when (RSI < 40 AND ML confidence > 60%) OR (ML confidence > 75%)
+    - Idle Yield: Open Wide Range LP (40% capital) when out of market to farm fees
+    - Take Profit: Close LPs + sell BTC when price is +10% above average entry
+    - Smart Stop Loss: Close LPs when ML confidence drops below 25% (severe downtrend prediction)
+    - Hard Stop Loss: Close LPs when price drops -8% from entry (capital preservation)
+    - DeFi Integration: Uses Liquidity Pools for fee farming + directional exposure
     """
     
     def __init__(self, use_llm: bool = False):
@@ -226,40 +229,57 @@ class SwingUSDStrategy(BaseStrategy):
         rsi_value = row.get('RSI', 50)
         rsi = float(rsi_value) if not pd.isna(rsi_value) else 50
         
-        # ==================== PART 1: EXIT LOGIC (Sell BTC if holding) ====================
-        if engine.btc_hodl_balance > 0:
+        # ==================== PART 1: EXIT LOGIC (Close LPs + Sell BTC if holding) ====================
+        # Check if we have any position (LPs or HODL BTC)
+        has_position = (len(engine.active_lps) > 0) or (engine.btc_hodl_balance > 0)
+        
+        if has_position and self.average_entry_price > 0:
             exit_signal = self._check_exit_conditions(current_price, prediction_proba, timestamp)
             
             if exit_signal:
-                # SELL 100% of BTC position
-                btc_to_sell = engine.btc_hodl_balance
-                usd_received = engine.sell_btc(btc_to_sell, current_price, timestamp)
-                
-                if usd_received > 0:
-                    # Calculate realized P&L
-                    cost_basis = self.average_entry_price * btc_to_sell
-                    realized_pnl = usd_received - cost_basis
-                    realized_pnl_pct = (realized_pnl / cost_basis) if cost_basis > 0 else 0.0
-                    
+                # STEP 1: Close all active LPs first
+                if len(engine.active_lps) > 0:
                     logger.info(
-                        f"[{timestamp.date()}] ✅ {exit_signal['type']}: Sold {btc_to_sell:.8f} BTC @ ${current_price:.2f}. "
-                        f"Received ${usd_received:.2f}. Realized P&L: ${realized_pnl:.2f} ({realized_pnl_pct:.2%})"
+                        f"[{timestamp.date()}] 🔄 Closing {len(engine.active_lps)} active LP(s) before exit..."
                     )
-                    logger.info(f"[{timestamp.date()}] 📝 Reason: {exit_signal['reason']}")
-                    
-                    # Reset average entry price (now 100% cash)
-                    self.average_entry_price = 0.0
-                    self.last_trade_time = timestamp
-                else:
-                    logger.error(
-                        f"[{timestamp.date()}] ❌ Failed to sell BTC. Check engine.sell_btc() logs."
-                    )
+                    # Make a copy of the list to avoid modification during iteration
+                    lps_to_close = list(engine.active_lps)
+                    for lp in lps_to_close:
+                        engine.close_lp(lp['id'], current_price, timestamp)
+                        logger.info(
+                            f"[{timestamp.date()}] 🔓 Closed LP #{lp['id']} (Strategy: {lp.get('strategy', 'UNKNOWN')})"
+                        )
                 
-                return  # Exit after selling
+                # STEP 2: Sell remaining BTC from LP dismantling (if any)
+                if engine.btc_hodl_balance > 0.0001:
+                    btc_to_sell = engine.btc_hodl_balance
+                    usd_received = engine.sell_btc(btc_to_sell, current_price, timestamp)
+                    
+                    if usd_received > 0:
+                        # Calculate realized P&L
+                        cost_basis = self.average_entry_price * btc_to_sell
+                        realized_pnl = usd_received - cost_basis
+                        realized_pnl_pct = (realized_pnl / cost_basis) if cost_basis > 0 else 0.0
+                        
+                        logger.info(
+                            f"[{timestamp.date()}] ✅ {exit_signal['type']}: Sold {btc_to_sell:.8f} BTC @ ${current_price:.2f}. "
+                            f"Received ${usd_received:.2f}. Realized P&L: ${realized_pnl:.2f} ({realized_pnl_pct:.2%})"
+                        )
+                        logger.info(f"[{timestamp.date()}] 📝 Reason: {exit_signal['reason']}")
+                    else:
+                        logger.warning(
+                            f"[{timestamp.date()}] ⚠️ Failed to sell remaining BTC after LP closure."
+                        )
+                
+                # STEP 3: Reset average entry price (now 100% cash)
+                self.average_entry_price = 0.0
+                self.last_trade_time = timestamp
+                
+                return  # Exit after closing positions
         
-        # ==================== PART 2: ENTRY LOGIC (Buy BTC if 100% cash) ====================
-        # Only consider entry if we're 100% in cash
-        if engine.btc_hodl_balance == 0:
+        # ==================== PART 2: ENTRY LOGIC (Open Directional LP if conditions met) ====================
+        # Only consider entry if we don't have directional positions
+        if len(engine.active_lps) == 0 and engine.btc_hodl_balance == 0:
             # Check cool-down before entering new position
             if not self._is_cooldown_passed(timestamp):
                 logger.debug(
@@ -271,7 +291,8 @@ class SwingUSDStrategy(BaseStrategy):
             entry_signal = self._check_entry_conditions(rsi, prediction_proba, timestamp)
             
             if entry_signal:
-                # Calculate position size (80% of safe balance to maximize returns on detected opportunities)
+                # ==================== DIRECTIONAL LP ENTRY ====================
+                # Calculate position size (80% of safe balance for directional LP)
                 safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD - MIN_RESERVE_USD)
                 target_amount = safe_balance * POSITION_SIZE_PERCENT
                 
@@ -287,22 +308,72 @@ class SwingUSDStrategy(BaseStrategy):
                 # Ensure we don't exceed available balance
                 final_amount = min(target_amount, safe_balance)
                 
-                # Execute buy
-                initial_btc = engine.btc_hodl_balance
-                engine.buy_and_hodl(final_amount, current_price, timestamp)
-                btc_bought = engine.btc_hodl_balance - initial_btc
+                # Configure DIRECTIONAL LP range (asymmetric bullish bias)
+                range_lower = current_price * 0.95  # Short protection at bottom (5% below)
+                range_upper = current_price * 1.15  # Target beyond Take Profit (15% above)
                 
-                if btc_bought > 0:
+                # Execute directional LP opening
+                lp_id = engine.open_lp(
+                    capital_usd=final_amount,
+                    range_lower=range_lower,
+                    range_upper=range_upper,
+                    current_btc_price=current_price,
+                    timestamp=timestamp,
+                    strategy="SWING_DIRECTIONAL"
+                )
+                
+                if lp_id is not None:
                     # Update average entry price
                     self.average_entry_price = current_price
                     self.last_trade_time = timestamp
                     
                     logger.info(
-                        f"[{timestamp.date()}] ✅ {entry_signal['type']}: Bought {btc_bought:.8f} BTC @ ${current_price:.2f}. "
-                        f"Spent ${final_amount:.2f}. Entry Price=${self.average_entry_price:.2f}"
+                        f"[{timestamp.date()}] ✅ {entry_signal['type']} - DIRECTIONAL LP: "
+                        f"Opened LP #{lp_id} with ${final_amount:.2f} @ ${current_price:.2f}. "
+                        f"Range: [${range_lower:.2f} - ${range_upper:.2f}]"
                     )
                     logger.info(f"[{timestamp.date()}] 📝 Reason: {entry_signal['reason']}")
                 else:
                     logger.error(
-                        f"[{timestamp.date()}] ❌ Failed to buy BTC. Check engine.buy_and_hodl() logs."
+                        f"[{timestamp.date()}] ❌ Failed to open directional LP. Check engine.open_lp() logs."
+                    )
+            
+            else:
+                # ==================== IDLE YIELD LP (No Entry Signal) ====================
+                # If no entry signal and no active positions, allocate to idle yield LP
+                safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD - MIN_RESERVE_USD)
+                idle_amount = safe_balance * IDLE_YIELD_PERCENT
+                
+                # Only open idle yield LP if we have enough capital and no existing LPs
+                if idle_amount >= MIN_POSITION_USD:
+                    # Configure WIDE RANGE LP (neutral, low IL)
+                    range_lower = current_price * 0.60  # Very wide range bottom (40% below)
+                    range_upper = current_price * 1.60  # Very wide range top (60% above)
+                    
+                    # Execute idle yield LP opening
+                    lp_id = engine.open_lp(
+                        capital_usd=idle_amount,
+                        range_lower=range_lower,
+                        range_upper=range_upper,
+                        current_btc_price=current_price,
+                        timestamp=timestamp,
+                        strategy="SWING_IDLE_YIELD"
+                    )
+                    
+                    if lp_id is not None:
+                        # Set entry price for stop loss protection
+                        self.average_entry_price = current_price
+                        
+                        logger.info(
+                            f"[{timestamp.date()}] 🌾 IDLE YIELD LP: Opened LP #{lp_id} with ${idle_amount:.2f} "
+                            f"@ ${current_price:.2f}. Range: [${range_lower:.2f} - ${range_upper:.2f}] (Wide range for low IL)"
+                        )
+                    else:
+                        logger.debug(
+                            f"[{timestamp.date()}] ⚠️ Failed to open idle yield LP."
+                        )
+                else:
+                    logger.debug(
+                        f"[{timestamp.date()}] 💤 Idle (No entry signal). Capital=${safe_balance:.2f}, "
+                        f"Idle Target=${idle_amount:.2f}, Min=${MIN_POSITION_USD:.2f}"
                     )
