@@ -341,7 +341,7 @@ def run_simulation(
         lp_fees_usd += fees_value
     
     wallet_spot_total_usd = engine.usd_balance + (engine.btc_hodl_balance * price_final)
-    aave_collateral_usd = engine.btc_hodl_balance * price_final
+    aave_collateral_usd = engine.btc_collateral_balance * price_final
     aave_debt_usd = engine.total_debt_usd
     aave_health_factor = engine.health_factor
     
@@ -530,7 +530,7 @@ def run_trading_system(
         lp_fees_usd += fees_value
 
     wallet_spot_total_usd = engine.usd_balance + (engine.btc_hodl_balance * price_final)
-    aave_collateral_usd = engine.btc_hodl_balance * price_final
+    aave_collateral_usd = engine.btc_collateral_balance * price_final
     aave_debt_usd = engine.total_debt_usd
     aave_health_factor = engine.health_factor
 

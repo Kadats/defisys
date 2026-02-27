@@ -220,7 +220,7 @@ class AccumulatorStrategy(BaseStrategy):
             )
             agent_context = {
                 'usd_balance': engine.usd_balance,
-                'btc_collateral': engine.btc_hodl_balance,
+                'btc_collateral': engine.btc_collateral_balance,
                 'aave_debt': engine.total_debt_usd,
                 'health_factor': engine.health_factor,
                 'ml_confidence': prediction_proba,
@@ -389,6 +389,14 @@ class AccumulatorStrategy(BaseStrategy):
         
         # Step 4: Convert some USD to BTC if we're fully de-leveraged
         if engine.total_debt_usd == 0 and engine.usd_balance > 50:
+            if engine.btc_collateral_balance > 0:
+                collateral_to_withdraw = engine.btc_collateral_balance
+                engine.remove_collateral(collateral_to_withdraw)
+                logger.info(
+                    f"[{timestamp.date()}] COLLATERAL WITHDRAW: Removed {collateral_to_withdraw:.6f} BTC "
+                    f"from AAVE back to Spot after debt reached zero"
+                )
+
             remaining_usd = engine.usd_balance - GAS_RESERVE_USD
             if remaining_usd > MIN_POSITION_USD:
                 # Only convert a portion to preserve capital for future entries
@@ -484,14 +492,16 @@ class AccumulatorStrategy(BaseStrategy):
         
         # STEP 2: Add the newly bought BTC as collateral to AAVE
         if engine.btc_hodl_balance > 0:
-            engine.add_collateral(engine.btc_hodl_balance)
+            btc_to_collateralize = engine.btc_hodl_balance
+            engine.add_collateral(btc_to_collateralize)
             logger.info(
-                f"[{timestamp.date()}] STEP 2 - ADD COLLATERAL: Sent {engine.btc_hodl_balance:.6f} BTC "
-                f"(${engine.btc_hodl_balance * current_price:.2f}) to AAVE as collateral"
+                f"[{timestamp.date()}] STEP 2 - ADD COLLATERAL: Sent {btc_to_collateralize:.6f} BTC "
+                f"(${btc_to_collateralize * current_price:.2f}) to AAVE as collateral. "
+                f"AAVE balance: {engine.btc_collateral_balance:.6f} BTC"
             )
         
         # STEP 3: Calculate safe borrow amount respecting HF_SAFE_TARGET
-        collateral_value = engine.btc_hodl_balance * current_price
+        collateral_value = engine.btc_collateral_balance * current_price
         current_debt = engine.total_debt_usd
         
         if collateral_value > 0:
@@ -629,14 +639,16 @@ class AccumulatorStrategy(BaseStrategy):
         
         # ===== STEP 2: Add BTC as collateral to AAVE =====
         if engine.btc_hodl_balance > 0:
-            engine.add_collateral(engine.btc_hodl_balance)
+            btc_to_collateralize = engine.btc_hodl_balance
+            engine.add_collateral(btc_to_collateralize)
             logger.info(
-                f"[{timestamp.date()}] STEP 2 - ADD COLLATERAL: Sent {engine.btc_hodl_balance:.6f} BTC "
-                f"(${engine.btc_hodl_balance * current_price:.2f}) to AAVE as collateral"
+                f"[{timestamp.date()}] STEP 2 - ADD COLLATERAL: Sent {btc_to_collateralize:.6f} BTC "
+                f"(${btc_to_collateralize * current_price:.2f}) to AAVE as collateral. "
+                f"AAVE balance: {engine.btc_collateral_balance:.6f} BTC"
             )
         
         # ===== STEP 3: Calculate and execute safe borrow respecting HF_SAFE_TARGET =====
-        collateral_value = engine.btc_hodl_balance * current_price
+        collateral_value = engine.btc_collateral_balance * current_price
         current_debt = engine.total_debt_usd
         
         if collateral_value > 0 and engine.health_factor >= HF_SAFE_TARGET:

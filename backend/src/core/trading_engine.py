@@ -22,7 +22,8 @@ class TradingEngine:
     def __init__(self, initial_capital_usd: float = 1000.0):
         self.initial_capital = initial_capital_usd
         self.usd_balance = initial_capital_usd 
-        self.btc_hodl_balance = 0.0           
+        self.btc_hodl_balance = 0.0
+        self.btc_collateral_balance = 0.0
         self.total_debt_usd = 0.0             
         self.loan_apy = DEBT_INTEREST_RATE
         
@@ -69,7 +70,7 @@ class TradingEngine:
             pnl_usd: Profit/Loss for this transaction (mainly for CLOSE_LP)
             details: Additional context
         """
-        collateral_value = self.btc_hodl_balance * btc_price
+        collateral_value = self.btc_collateral_balance * btc_price
         net_worth = self._calculate_portfolio_value(btc_price)
         if self.total_debt_usd > 0:
             health_factor = self.risk_manager.calculate_health_factor(collateral_value, self.total_debt_usd)
@@ -134,8 +135,6 @@ class TradingEngine:
         )
 
     def _calculate_portfolio_value(self, current_btc_price: float) -> float:
-        if self.is_liquidated:
-            return 0.0
 
         lp_total_value = 0.0
         for lp in self.active_lps:
@@ -145,7 +144,8 @@ class TradingEngine:
             fees_value = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_btc_price)
             lp_total_value += asset_value + fees_value
             
-        hodl_value = self.btc_hodl_balance * current_btc_price
+        total_btc_balance = self.btc_hodl_balance + self.btc_collateral_balance
+        hodl_value = total_btc_balance * current_btc_price
         cash_value = self.usd_balance
         debt_value = self.total_debt_usd
         
@@ -212,14 +212,47 @@ class TradingEngine:
         
         self.decision_history.append(f"HODL BUY: {btc_bought:.6f} BTC @ ${effective_price}")
 
-    def add_collateral(self, btc_amount: float):
-        """Adiciona BTC ao balanço de colateral HODL."""
-        # Charge gas for on-chain add_collateral operation
+    def add_collateral(self, btc_amount: float) -> None:
+        """Move BTC da carteira Spot para a carteira de colateral da AAVE."""
+        if btc_amount <= 0:
+            return
+
+        if self.btc_hodl_balance < btc_amount:
+            logger.error(
+                "Insufficient Spot BTC to add collateral. Requested: %.8f BTC, Available: %.8f BTC",
+                btc_amount,
+                self.btc_hodl_balance,
+            )
+            return
+
         if self.usd_balance < SIMULATED_GAS_FEE_USD:
             logger.error("Insufficient USD to pay gas for add_collateral. Aborting operation.")
             return
+
+        self.btc_hodl_balance -= btc_amount
+        self.btc_collateral_balance += btc_amount
         self.usd_balance -= SIMULATED_GAS_FEE_USD
+
+    def remove_collateral(self, btc_amount: float) -> None:
+        """Move BTC da carteira de colateral da AAVE para a carteira Spot."""
+        if btc_amount <= 0:
+            return
+
+        if self.btc_collateral_balance < btc_amount:
+            logger.error(
+                "Insufficient AAVE collateral BTC to remove. Requested: %.8f BTC, Available: %.8f BTC",
+                btc_amount,
+                self.btc_collateral_balance,
+            )
+            return
+
+        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            logger.error("Insufficient USD to pay gas for remove_collateral. Aborting operation.")
+            return
+
+        self.btc_collateral_balance -= btc_amount
         self.btc_hodl_balance += btc_amount
+        self.usd_balance -= SIMULATED_GAS_FEE_USD
 
     def open_lp(self, capital_usd: float, range_lower: float, range_upper: float, current_btc_price: float, timestamp, strategy: str = "UNKNOWN"):
         """Abre uma nova posição de LP com matemática da Uniswap v3.
@@ -371,19 +404,17 @@ class TradingEngine:
         return True
 
     def _handle_liquidation(self, timestamp):
-        """Zera o portfólio em caso de liquidação."""
+        """Processa liquidação da AAVE: perde apenas o colateral travado."""
         logger.error(
             f"[{timestamp.date()}] !!! LIQUIDAÇÃO !!! "
             f"Health Factor <= 1.0. Dívida: ${self.total_debt_usd:.2f}. "
-            f"Colateral: {self.btc_hodl_balance:.6f} BTC. "
-            "Todo o colateral foi perdido."
+            f"Colateral AAVE: {self.btc_collateral_balance:.6f} BTC. "
+            "Apenas o colateral travado foi perdido; carteira Spot preservada."
         )
-        self.is_liquidated = True
-        self.btc_hodl_balance = 0.0
+        self.btc_collateral_balance = 0.0
         self.total_debt_usd = 0.0 
-        self.usd_balance = 0.0
-        self.active_lps.clear()
-        self.decision_history.append(f"[{timestamp.date()}] !!! LIQUIDAÇÃO TOTAL !!!")
+        self.health_factor = 999.0
+        self.decision_history.append(f"[{timestamp.date()}] !!! LIQUIDAÇÃO AAVE (COLATERAL) !!!")
 
     def _check_and_rebalance_health(self, current_price: float):
         """Checks health factor and attempts to defend the position using RiskManager.
@@ -397,7 +428,7 @@ class TradingEngine:
         if self.total_debt_usd <= 0:
             return
 
-        collateral_value = self.btc_hodl_balance * current_price
+        collateral_value = self.btc_collateral_balance * current_price
         health_status, hf = self.risk_manager.check_health_status(collateral_value, self.total_debt_usd)
 
         # Safe zone - no action needed
@@ -482,7 +513,7 @@ class TradingEngine:
                 )
 
                 # Recompute HF to check if rebalance succeeded
-                collateral_value = self.btc_hodl_balance * current_price
+                collateral_value = self.btc_collateral_balance * current_price
                 new_status, new_hf = self.risk_manager.check_health_status(collateral_value, self.total_debt_usd)
                 
                 if new_status == 'SAFE':
@@ -591,6 +622,7 @@ class TradingEngine:
                 # HEALTHY MODE: Auto-compound strategy (existing logic)
                 # Route BTC fees to collateral
                 if lp['fees_accrued_btc'] > 0:
+                    self.btc_hodl_balance += lp['fees_accrued_btc']
                     self.add_collateral(lp['fees_accrued_btc'])
                 
                 # Route USD fees to cash balance
@@ -657,7 +689,7 @@ class TradingEngine:
             
             # 1. Calcular HF e checar Liquidação (se houver dívida)
             if self.total_debt_usd > 0:
-                collateral_value = self.btc_hodl_balance * current_price
+                collateral_value = self.btc_collateral_balance * current_price
                 self.health_factor = self.risk_manager.calculate_health_factor(collateral_value, self.total_debt_usd)
                 
                 if self.risk_manager.is_liquidated(self.health_factor):
