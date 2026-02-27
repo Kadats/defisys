@@ -17,7 +17,6 @@ from ..core import LOAN_TO_VALUE_RATIO
 from ..config import (
     GAS_RESERVE_USD,
     SIMULATED_GAS_FEE_USD,
-    SAFE_HF_AFTER_BORROW,
     ML_CONFIDENCE_THRESHOLD,
     MAX_DEBT_RATIO
 )
@@ -27,6 +26,12 @@ if TYPE_CHECKING:
     from ..core import TradingEngine
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# HEALTH FACTOR (HF) CONSTANTS - Critical for DeFi Risk Management
+# ============================================================================
+HF_SAFE_TARGET = 2.0                  # Target HF to maintain (never borrow below this)
+HF_CRITICAL = 1.3                     # Emergency threshold: Close LPs if HF drops below this
 
 # Strategy-specific constants
 MOMENTUM_CONFIDENCE_THRESHOLD = 0.65  # High confidence: Buy regardless of RSI (lowered from 0.70)
@@ -436,56 +441,93 @@ class AccumulatorStrategy(BaseStrategy):
         amount_pct: float = 0.15
     ) -> None:
         """
-        Open LP position conservatively when we have medium confidence but want to farm yields.
+        Open LP position conservatively with correct DeFi flow:
+        1. Buy Spot BTC using safe balance
+        2. Add BTC as collateral to AAVE
+        3. Borrow USD respecting HF_SAFE_TARGET (max 2.0)
+        4. Open LP using ONLY borrowed USD (never use Spot cash for LP)
         
-        This is a middle ground: We allocate capital to an LP position instead of just holding,
-        but without aggressive borrowing (which is risky).
+        This protects capital by never draining the Spot wallet for LPs.
         
         Args:
-            amount_pct: Percentage of safe balance to allocate (from agent or fallback default)
+            amount_pct: Percentage of safe balance to allocate for buying BTC
         """
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
         
-        # Calculate target LP capital based on agent allocation
-        lp_capital = safe_balance * amount_pct
+        # STEP 1: Buy Spot BTC with designated allocation
+        spot_allocation = safe_balance * amount_pct
         
         # Validate minimum position size
-        if lp_capital < MIN_POSITION_USD:
+        if spot_allocation < MIN_POSITION_USD:
             logger.debug(
-                f"[{timestamp.date()}] Capital insuficiente para LP mínimo. "
-                f"Target: ${lp_capital:.2f} < Min: ${MIN_POSITION_USD:.2f}. Ignorando entrada."
+                f"[{timestamp.date()}] Capital insuficiente para compra spot. "
+                f"Target: ${spot_allocation:.2f} < Min: ${MIN_POSITION_USD:.2f}. Ignorando entrada."
             )
             return
         
-        # Never exceed safe balance (no forced positions)
-        lp_capital = min(lp_capital, safe_balance)
-        
-        # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
-        range_lower = current_price * 0.95
-        range_upper = current_price * 1.25
+        # Never exceed safe balance
+        spot_allocation = min(spot_allocation, safe_balance)
         
         logger.info(
-            f"[{timestamp.date()}] 🌾 OPEN_LP (Conservative): ${lp_capital:.2f} "
-            f"({amount_pct:.0%} allocation) | Range: ${range_lower:.2f} - ${range_upper:.2f} (Yield Farming)"
+            f"[{timestamp.date()}] 🌾 CONSERVATIVE_LP FLOW: Initiating DeFi strategy with ${spot_allocation:.2f}"
         )
         
-        engine.open_lp(
-            lp_capital,
-            range_lower,
-            range_upper,
-            current_price,
-            timestamp,
-            strategy="ACCUMULATOR_CONSERVATIVE_LP"
-        )
+        # STEP 1: Buy and add BTC to HODL
+        engine.buy_and_hodl(spot_allocation, current_price, timestamp)
+        logger.info(f"[{timestamp.date()}] STEP 1 - SPOT BUY: Bought BTC with ${spot_allocation:.2f}")
         
-        # Also buy some spot BTC to build position (with remaining capital)
-        remaining_safe = max(0.0, engine.usd_balance - GAS_RESERVE_USD - lp_capital)
-        if remaining_safe > MIN_POSITION_USD:
-            spot_buy = remaining_safe * 0.20  # 20% of what's left for spot
-            if spot_buy >= MIN_POSITION_USD:
-                spot_buy = min(spot_buy, remaining_safe)
-                engine.buy_and_hodl(spot_buy, current_price, timestamp)
-                logger.info(f"[{timestamp.date()}] Also bought BTC spot: ${spot_buy:.2f}")
+        # STEP 2: Add the newly bought BTC as collateral to AAVE
+        if engine.btc_hodl_balance > 0:
+            engine.add_collateral(engine.btc_hodl_balance)
+            logger.info(
+                f"[{timestamp.date()}] STEP 2 - ADD COLLATERAL: Sent {engine.btc_hodl_balance:.6f} BTC "
+                f"(${engine.btc_hodl_balance * current_price:.2f}) to AAVE as collateral"
+            )
+        
+        # STEP 3: Calculate safe borrow amount respecting HF_SAFE_TARGET
+        collateral_value = engine.btc_hodl_balance * current_price
+        current_debt = engine.total_debt_usd
+        
+        if collateral_value > 0:
+            # Max borrow = (collateral * 0.80 / HF_SAFE_TARGET) - current_debt
+            # This ensures: HF = (collateral * 0.80) / (current_debt + borrow) >= HF_SAFE_TARGET
+            max_safe_debt = (collateral_value * 0.80) / HF_SAFE_TARGET
+            available_borrow = max(0.0, max_safe_debt - current_debt)
+            
+            if available_borrow > MIN_POSITION_USD and engine.health_factor >= HF_SAFE_TARGET:
+                # Only borrow if current HF is already >= HF_SAFE_TARGET
+                borrowed_amount = engine.borrow_funds(available_borrow, current_price)
+                logger.info(
+                    f"[{timestamp.date()}] STEP 3 - BORROW: Borrowed ${borrowed_amount:.2f} USD "
+                    f"(Target HF: {HF_SAFE_TARGET}, Current HF: {engine.health_factor:.2f})"
+                )
+                
+                # STEP 4: Open LP using ONLY the borrowed USD
+                if borrowed_amount > MIN_POSITION_USD:
+                    # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
+                    range_lower = current_price * 0.95
+                    range_upper = current_price * 1.25
+                    
+                    lp_capital = min(borrowed_amount * 0.90, engine.usd_balance - GAS_RESERVE_USD)
+                    
+                    if lp_capital >= MIN_POSITION_USD:
+                        engine.open_lp(
+                            lp_capital,
+                            range_lower,
+                            range_upper,
+                            current_price,
+                            timestamp,
+                            strategy="ACCUMULATOR_CONSERVATIVE_LP"
+                        )
+                        logger.info(
+                            f"[{timestamp.date()}] STEP 4 - OPEN LP: Opened LP with ${lp_capital:.2f} "
+                            f"(from borrowed funds) | Range: ${range_lower:.2f} - ${range_upper:.2f}"
+                        )
+            else:
+                logger.warning(
+                    f"[{timestamp.date()}] Cannot borrow safely. Current HF: {engine.health_factor:.2f} "
+                    f"(need >= {HF_SAFE_TARGET}). Skipping borrow step. Only holding BTC collateral."
+                )
     
     def _dip_buy(
         self, 
@@ -529,25 +571,26 @@ class AccumulatorStrategy(BaseStrategy):
         amount_pct: float = 0.40
     ) -> None:
         """
-        Bull Mode Entry: Leverage aggressively to accumulate more BTC and farm yields.
+        Bull Mode Entry: Aggressive DeFi strategy to accumulate BTC and farm yields.
         
-        CRITICAL: This function is now the main path for DeFi operations.
-        It should maximize:
-        1. OPEN_LP for yield farming
-        2. BORROW_USDT for leverage
+        CRITICAL DeFi FLOW:
+        1. Buy Spot BTC using safe balance
+        2. Add BTC as collateral to AAVE
+        3. Borrow USD respecting HF_SAFE_TARGET (max 2.0)
+        4. Open multiple LPs using ONLY borrowed USD (never use Spot cash for LP)
         
-        Risk management is strict: Never exceed safe Health Factor.
+        This maximizes leverage while protecting the core BTC position.
         
         Args:
             entry_signal: Dict with 'type' (MOMENTUM/DIP) and 'reason'
-            amount_pct: Percentage of safe balance to allocate (from agent or fallback default)
+            amount_pct: Percentage of safe balance to allocate for buying BTC
         """
         entry_type = entry_signal.get('type', 'UNKNOWN')
         entry_reason = entry_signal.get('reason', 'No reason provided')
         
         logger.info(
             f"[{timestamp.date()}] 🚀 BULL ENTRY ({entry_type}): {entry_reason}. "
-            f"Unleashing DeFi Power with {amount_pct:.0%} allocation! Opening LPs and Borrowing..."
+            f"Unleashing DeFi Power with {amount_pct:.0%} allocation! Spot → Collateral → Borrow → LP"
         )
         
         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
@@ -566,98 +609,89 @@ class AccumulatorStrategy(BaseStrategy):
         # Never exceed safe balance (no forced positions)
         total_allocation = min(total_allocation, safe_balance)
         
-        # Step 1: Build spot BTC position first (always allocate some to HODL)
-        spot_allocation = total_allocation * 0.30  # 30% of allocated for spot buying
+        # ===== STEP 1: Build Spot BTC position =====
+        spot_allocation = total_allocation * 0.40  # 40% of allocated for spot buying
         
         if spot_allocation >= MIN_POSITION_USD:
             spot_allocation = min(spot_allocation, engine.usd_balance - GAS_RESERVE_USD)
             engine.buy_and_hodl(spot_allocation, current_price, timestamp)
             logger.info(
-                f"[{timestamp.date()}] Spot Entry: Bought BTC with ${spot_allocation:.2f}. "
-                f"Remaining USD: ${engine.usd_balance:.2f}"
+                f"[{timestamp.date()}] STEP 1 - SPOT BUY: Bought BTC with ${spot_allocation:.2f}. "
+                f"New BTC position: {engine.btc_hodl_balance:.6f} BTC"
             )
         
-        # Step 2: OPEN LIQUIDITY POOL (Yield Farming)
-        # Even WITHOUT borrowing, we should open LPs if we have capital
-        safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
-        lp_allocation = total_allocation * 0.50  # 50% of allocated for LP
-        lp_allocation = min(lp_allocation, safe_balance)
-        
-        if lp_allocation > 10:
-            # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
-            range_lower = current_price * 0.95
-            range_upper = current_price * 1.25
-            
-            engine.open_lp(
-                lp_allocation,
-                range_lower,
-                range_upper,
-                current_price,
-                timestamp,
-                strategy="ACCUMULATOR_BULL"
-            )
-            logger.info(
-                f"[{timestamp.date()}] 💰 OPEN LP (Bull): ${lp_allocation:.2f} "
-                f"| Range: ${range_lower:.2f} - ${range_upper:.2f} (YIELD FARMING!)"
-            )
-        
-        # Step 3: BORROW USDT for aggressive leverage (only if conditions are safe)
+        # ===== STEP 2: Add BTC as collateral to AAVE =====
         if engine.btc_hodl_balance > 0:
-            collateral_value = engine.btc_hodl_balance * current_price
-            max_borrow = collateral_value * 0.40  # 40% LTV
+            engine.add_collateral(engine.btc_hodl_balance)
+            logger.info(
+                f"[{timestamp.date()}] STEP 2 - ADD COLLATERAL: Sent {engine.btc_hodl_balance:.6f} BTC "
+                f"(${engine.btc_hodl_balance * current_price:.2f}) to AAVE as collateral"
+            )
+        
+        # ===== STEP 3: Calculate and execute safe borrow respecting HF_SAFE_TARGET =====
+        collateral_value = engine.btc_hodl_balance * current_price
+        current_debt = engine.total_debt_usd
+        
+        if collateral_value > 0 and engine.health_factor >= HF_SAFE_TARGET:
+            # Max borrow = (collateral * 0.80 / HF_SAFE_TARGET) - current_debt
+            max_safe_debt = (collateral_value * 0.80) / HF_SAFE_TARGET
+            available_borrow = max(0.0, max_safe_debt - current_debt)
             
-            # Check safe HF before borrowing
-            projected_debt = engine.total_debt_usd + max_borrow
-            projected_hf = (collateral_value * 0.80) / projected_debt if projected_debt > 0 else 999.0
-            
-            if projected_hf >= SAFE_HF_AFTER_BORROW and max_borrow > MIN_POSITION_USD:
-                borrowed_amount = engine.borrow_funds(max_borrow, current_price)
+            if available_borrow > MIN_POSITION_USD:
+                borrowed_amount = engine.borrow_funds(available_borrow, current_price)
+                logger.info(
+                    f"[{timestamp.date()}] STEP 3 - BORROW: Borrowed ${borrowed_amount:.2f} USD "
+                    f"(Max safe debt: ${max_safe_debt:.2f}, Target HF: {HF_SAFE_TARGET})"
+                )
                 
-                if borrowed_amount > 0:
-                    logger.info(
-                        f"[{timestamp.date()}] 🏦 BORROW: ${borrowed_amount:.2f} USDT "
-                        f"(Projected HF: {projected_hf:.2f}, Safe Threshold: {SAFE_HF_AFTER_BORROW})"
-                    )
+                # ===== STEP 4: Open LPs using ONLY the borrowed USD =====
+                if borrowed_amount > MIN_POSITION_USD:
+                    # Allocate borrowed funds across multiple LPs for diversification
+                    lp1_capital = borrowed_amount * 0.50  # 50% into first LP
+                    lp2_capital = borrowed_amount * 0.40  # 40% into second LP (staggered range)
                     
-                    # Step 4: Use borrowed USDT for more OPEN_LP (leverage LP yield farming)
-                    borrowed_lp_allocation = borrowed_amount * 0.60  # 60% of borrowed → another LP
-                    borrowed_lp_allocation = min(borrowed_lp_allocation, engine.usd_balance - GAS_RESERVE_USD)
+                    # First LP: tight floor, wide ceiling (-5% to +25%)
+                    range_lower_1 = current_price * 0.95
+                    range_upper_1 = current_price * 1.25
                     
-                    if borrowed_lp_allocation > 10:
-                        # Asymmetric LP range: tight floor, wide ceiling (-5% to +25%)
-                        range_lower_lever = current_price * 0.95
-                        range_upper_lever = current_price * 1.25
-                        
+                    lp1_capital = min(lp1_capital, engine.usd_balance - GAS_RESERVE_USD)
+                    if lp1_capital >= MIN_POSITION_USD:
                         engine.open_lp(
-                            borrowed_lp_allocation,
-                            range_lower_lever,
-                            range_upper_lever,
+                            lp1_capital,
+                            range_lower_1,
+                            range_upper_1,
                             current_price,
                             timestamp,
-                            strategy="ACCUMULATOR_LEVERAGED_LP"
+                            strategy="ACCUMULATOR_BULL_LP_1"
                         )
                         logger.info(
-                            f"[{timestamp.date()}] 🚀 LEVERAGED LP: ${borrowed_lp_allocation:.2f} "
-                            f"(from borrowed funds) | Range: ${range_lower_lever:.2f} - ${range_upper_lever:.2f}"
+                            f"[{timestamp.date()}] STEP 4a - OPEN LP #1: ${lp1_capital:.2f} "
+                            f"| Range: ${range_lower_1:.2f} - ${range_upper_1:.2f}"
                         )
                     
-                    # Step 5: Use remaining borrowed for spot BTC (leverage spot accumulation)
-                    remaining_borrowed = max(0.0, borrowed_amount - borrowed_lp_allocation)
-                    borrowed_spot = remaining_borrowed * 0.70
-                    borrowed_spot = min(borrowed_spot, engine.usd_balance - GAS_RESERVE_USD)
+                    # Second LP: more aggressive range (-2% to +35%)
+                    range_lower_2 = current_price * 0.98
+                    range_upper_2 = current_price * 1.35
                     
-                    if borrowed_spot > MIN_POSITION_USD:
-                        engine.buy_and_hodl(borrowed_spot, current_price, timestamp)
+                    lp2_capital = min(lp2_capital, engine.usd_balance - GAS_RESERVE_USD)
+                    if lp2_capital >= MIN_POSITION_USD:
+                        engine.open_lp(
+                            lp2_capital,
+                            range_lower_2,
+                            range_upper_2,
+                            current_price,
+                            timestamp,
+                            strategy="ACCUMULATOR_BULL_LP_2"
+                        )
                         logger.info(
-                            f"[{timestamp.date()}] 📈 LEVERAGED BTC BUY: ${borrowed_spot:.2f} "
-                            f"(from borrowed USDT)"
+                            f"[{timestamp.date()}] STEP 4b - OPEN LP #2: ${lp2_capital:.2f} "
+                            f"| Range: ${range_lower_2:.2f} - ${range_upper_2:.2f}"
                         )
-            else:
-                logger.warning(
-                    f"[{timestamp.date()}] Cannot borrow safely. "
-                    f"Projected HF ({projected_hf:.2f}) < Safe Threshold ({SAFE_HF_AFTER_BORROW}). "
-                    f"Sticking with spot + LP only."
-                )
+        else:
+            logger.warning(
+                f"[{timestamp.date()}] Cannot borrow safely. Current HF: {engine.health_factor:.2f} "
+                f"(need >= {HF_SAFE_TARGET}). Skipping borrow step. Holding BTC collateral only."
+            )
     
     def _maintain_positions(
         self, 
@@ -666,27 +700,44 @@ class AccumulatorStrategy(BaseStrategy):
         timestamp: pd.Timestamp
     ) -> None:
         """
-        Maintain existing LP positions: Track out-of-range duration and avoid panic closes.
+        Maintain existing LP positions: ONLY close if EMERGENCY (HF < HF_CRITICAL).
+        
+        Protection of Capital:
+        - OUT-OF-RANGE LPs are NOT closed automatically
+        - Only close if Health Factor drops below HF_CRITICAL (1.3)
+        - This prevents losses and allows LPs to recover when price re-enters range
         """
         lps_to_close = []
         
-        for lp in engine.active_lps:
-            is_out_of_range = current_price > lp['range_upper'] or current_price < lp['range_lower']
-            if is_out_of_range:
-                last_date = lp.get('last_out_of_range_date')
-                if last_date != timestamp.date():
-                    lp['days_out_of_range'] = lp.get('days_out_of_range', 0) + 1
-                    lp['last_out_of_range_date'] = timestamp.date()
-                if lp.get('days_out_of_range', 0) > 10:
-                    logger.info(
-                        f"[{timestamp.date()}] LP {lp['id']} out of range for {lp['days_out_of_range']} days. "
-                        f"Closing to recycle capital."
+        # EMERGENCY CHECK: Only close LPs if Health Factor is critically low
+        if engine.health_factor < HF_CRITICAL:
+            logger.warning(
+                f"[{timestamp.date()}] 🚨 HEALTH FACTOR CRITICAL: {engine.health_factor:.2f} < {HF_CRITICAL}. "
+                f"Closing LPs to reduce debt and improve HF."
+            )
+            # Mark ALL LPs for emergency closure
+            for lp in engine.active_lps:
+                lps_to_close.append(lp['id'])
+        else:
+            # Normal mode: Track out-of-range duration (informational only, do NOT close)
+            for lp in engine.active_lps:
+                is_out_of_range = current_price > lp['range_upper'] or current_price < lp['range_lower']
+                if is_out_of_range:
+                    last_date = lp.get('last_out_of_range_date')
+                    if last_date != timestamp.date():
+                        lp['days_out_of_range'] = lp.get('days_out_of_range', 0) + 1
+                        lp['last_out_of_range_date'] = timestamp.date()
+                    
+                    logger.debug(
+                        f"[{timestamp.date()}] LP {lp['id']} out of range for {lp.get('days_out_of_range', 0)} days. "
+                        f"Price ${current_price:.2f} vs Range [${lp['range_lower']:.2f}, ${lp['range_upper']:.2f}]. "
+                        f"Monitoring (NOT closing - protection against forced losses)"
                     )
-                    lps_to_close.append(lp['id'])
-            else:
-                lp['days_out_of_range'] = 0
-                lp['last_out_of_range_date'] = None
+                else:
+                    lp['days_out_of_range'] = 0
+                    lp['last_out_of_range_date'] = None
         
-        # Close marked LPs
+        # Close marked LPs only in emergency
         for lp_id in lps_to_close:
-            engine.close_lp(lp_id, current_price, timestamp, is_emergency=False)
+            logger.warning(f"[{timestamp.date()}] Emergency closing LP {lp_id} to restore health factor.")
+            engine.close_lp(lp_id, current_price, timestamp, is_emergency=True)

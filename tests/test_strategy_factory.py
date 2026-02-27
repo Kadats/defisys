@@ -47,11 +47,13 @@ class DummyEngine:
 
 
 class DummyAccumulatorStrategy:
-    pass
+    def __init__(self, use_llm: bool = False):
+        self.use_llm = use_llm
 
 
 class DummyBTCLiteStrategy:
-    pass
+    def __init__(self, use_llm: bool = False):
+        self.use_llm = use_llm
 
 
 @pytest.fixture
