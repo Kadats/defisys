@@ -222,11 +222,24 @@ class TradingEngine:
         self.btc_hodl_balance += btc_amount
 
     def open_lp(self, capital_usd: float, range_lower: float, range_upper: float, current_btc_price: float, timestamp, strategy: str = "UNKNOWN"):
-        """Abre uma nova posição de LP com matemática da Uniswap v3."""
+        """Abre uma nova posição de LP com matemática da Uniswap v3.
+        
+        CRITICAL REFACTOR: Internalizes USD balance management.
+        - Validates sufficient balance before opening
+        - Deducts capital immediately from USD balance
+        """
+        # CRITICAL FIX: Validate sufficient funds BEFORE any operation
+        required_funds = capital_usd + SIMULATED_GAS_FEE_USD
+        if self.usd_balance < required_funds:
+            logger.error(
+                f"[{timestamp.date()}] Insufficient USD balance to open LP. "
+                f"Required: ${required_funds:.2f}, Available: ${self.usd_balance:.2f}. Aborting."
+            )
+            raise ValueError(
+                f"Insufficient USD balance to open LP: need ${required_funds:.2f}, have ${self.usd_balance:.2f}"
+            )
+        
         # Charge gas for opening an LP
-        if self.usd_balance < SIMULATED_GAS_FEE_USD:
-            logger.error(f"[{timestamp.date()}] Insufficient USD to pay gas for opening LP. Aborting.")
-            return
         self.usd_balance -= SIMULATED_GAS_FEE_USD
 
         if range_lower >= range_upper:
@@ -246,6 +259,9 @@ class TradingEngine:
         # Check for invalid liquidity calculation
         if L == Decimal('0'):
             return
+        
+        # CRITICAL FIX: Deduct capital from USD balance immediately after successful liquidity calc
+        self.usd_balance -= capital_usd
 
         new_lp = {
             "L": float(L), "range_lower": float(range_lower),

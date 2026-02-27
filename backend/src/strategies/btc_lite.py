@@ -369,8 +369,9 @@ class BTCLiteStrategy(BaseStrategy):
                 amount_to_borrow = 0.0
         
         if amount_to_borrow > 0:
-            engine.total_debt_usd += amount_to_borrow
-            engine.usd_balance += amount_to_borrow
+            # REFACTOR: Call engine.borrow_funds() instead of manual state updates
+            # This internalizes debt and balance management
+            engine.borrow_funds(amount_to_borrow, engine.btc_price if hasattr(engine, 'btc_price') else 0)
             logger.info(f"[{timestamp.date()}] Empréstimo refinanciado: ${amount_to_borrow:.2f} (Projected HF: {projected_hf:.2f})")
         else:
             logger.info(f"[{timestamp.date()}] Empréstimo negado por guardrail de HF (Projected HF: {projected_hf:.2f} < {SAFE_HF_AFTER_BORROW})")
@@ -427,7 +428,6 @@ class BTCLiteStrategy(BaseStrategy):
             )
             
             engine.open_lp(capital_for_lp_usd, range_lower, range_upper, current_price, timestamp, strategy="BULLISH_ML_DIRECTIONAL_V7")
-            engine.usd_balance -= capital_for_lp_usd
         else:
             logger.debug(f"[{timestamp.date()}] Loop: Insuficiente para LP após buffer líquido.")
     
@@ -490,7 +490,6 @@ class BTCLiteStrategy(BaseStrategy):
                     f"(Range: ${range_lower:.2f}-${range_upper:.2f}). Reserve: ${engine.usd_balance:.2f}"
                 )
                 engine.open_lp(safe_balance_after, range_lower, range_upper, current_price, timestamp, strategy="NEUTRAL_V13_HEAVY_BTC")
-                engine.usd_balance -= safe_balance_after
         else:
             # Reserve is below target - don't make any trades
             logger.debug(
@@ -594,7 +593,6 @@ class BTCLiteStrategy(BaseStrategy):
         # Open LP
         if capital_to_allocate > 0 and len(engine.active_lps) < MAX_ACTIVE_LPS:
             engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy=strategy_name)
-            engine.usd_balance -= capital_to_allocate
     
     def _execute_post_leverage_neutral(
         self,
@@ -669,4 +667,3 @@ class BTCLiteStrategy(BaseStrategy):
         # Open LP
         if capital_to_allocate > 0 and len(engine.active_lps) < MAX_ACTIVE_LPS:
             engine.open_lp(capital_to_allocate, range_lower, range_upper, current_price, timestamp, strategy=strategy_name)
-            engine.usd_balance -= capital_to_allocate

@@ -297,6 +297,8 @@ def run_simulation(
     
     # Run backtest
     backtest_results = engine.run(simulation_df, strategy=strategy)
+    final_equity = float(backtest_results['final_usd_value'])
+    roi_percentage = float(backtest_results['profit_percentage_usd'])
     
     # 7. SALVAR TRADES NO BANCO DE DADOS
     logger.info("Salvando trades no banco de dados...")
@@ -311,29 +313,17 @@ def run_simulation(
     backtest_results['start_date'] = simulation_df.iloc[0]['Open_time'].isoformat()
     backtest_results['end_date'] = simulation_df.iloc[-1]['Open_time'].isoformat()
     
-    # Calculate total equity (Cash + BTC value)
-    btc_value = engine.btc_hodl_balance * price_final
-    total_equity = engine.usd_balance + btc_value
-    
-    backtest_results['final_usd_value'] = total_equity
-    backtest_results['cash_balance'] = engine.usd_balance
-    backtest_results['btc_amount'] = engine.btc_hodl_balance
-    backtest_results['btc_price_final'] = price_final
-    backtest_results['profit_usd'] = total_equity - engine.initial_capital
-    backtest_results['profit_percentage_usd'] = ((total_equity / engine.initial_capital) - 1) * 100
-    
     # Token-based performance metrics
     initial_token_balance = engine.initial_capital / price_initial
-    final_token_balance = total_equity / price_final
+    final_token_balance = final_equity / price_final
     token_roi = ((final_token_balance - initial_token_balance) / initial_token_balance) * 100
-    alpha_vs_hold = backtest_results['profit_percentage_usd'] - btc_benchmark_profit_percentage
+    alpha_vs_hold = roi_percentage - btc_benchmark_profit_percentage
     
     logger.info(
-        f"✓ Equity Total: ${total_equity:.2f} "
-        f"(Cash: ${engine.usd_balance:.2f} + BTC: ${btc_value:.2f})"
+        f"✓ Equity Total (engine): ${final_equity:.2f}"
     )
     logger.info(f"✓ Benchmark BTC: {btc_benchmark_profit_percentage:.2f}%")
-    logger.info(f"✓ ROI Estratégia: {backtest_results['profit_percentage_usd']:.2f}%")
+    logger.info(f"✓ ROI Estratégia: {roi_percentage:.2f}%")
     logger.info(f"✓ Alpha vs HOLD: {alpha_vs_hold:.2f}%")
     
     # 9. SALVAR SUMMARY NO BANCO
@@ -356,8 +346,8 @@ def run_simulation(
     aave_health_factor = engine.health_factor
     
     save_simulation_summary(
-        total_equity=total_equity,
-        roi_percent=backtest_results['profit_percentage_usd'],
+        total_equity=final_equity,
+        roi_percent=roi_percentage,
         benchmark_roi_percent=btc_benchmark_profit_percentage,
         total_trades=num_trades,
         initial_capital=engine.initial_capital,
@@ -380,8 +370,8 @@ def run_simulation(
     # 10. LOG FINAL
     logger.info("=" * 80)
     logger.info("✅ SIMULAÇÃO CONCLUÍDA COM SUCESSO!")
-    logger.info(f"   Trades: {num_trades} | ROI: {backtest_results['profit_percentage_usd']:.2f}%")
-    logger.info(f"   Equity: ${total_equity:.2f}")
+    logger.info(f"   Trades: {num_trades} | ROI: {roi_percentage:.2f}%")
+    logger.info(f"   Equity: ${final_equity:.2f}")
     logger.info("=" * 80)
     
     return {
@@ -483,7 +473,9 @@ def run_trading_system(
     strategy = AccumulatorStrategy()
     
     # O backtester roda APENAS no DataFrame de teste (post-split)
-    backtest_results = engine.run(simulation_df, strategy=strategy) 
+    backtest_results = engine.run(simulation_df, strategy=strategy)
+    final_equity = float(backtest_results['final_usd_value'])
+    roi_percentage = float(backtest_results['profit_percentage_usd'])
     
     # Salvar os trades no banco de dados
     logger.info("Fase 4b: Salvando trades no banco de dados...")
@@ -502,38 +494,21 @@ def run_trading_system(
     backtest_results['start_date'] = simulation_df.iloc[0]['Open_time'].isoformat()
     backtest_results['end_date'] = simulation_df.iloc[-1]['Open_time'].isoformat()
     
-    # ========== PROBLEMA 2 FIX: Calcular total_equity ==========
-    # O Dashboard deve mostrar o valor total dos ativos (Cash + BTC), não apenas o saldo em dólar
-    btc_value = engine.btc_hodl_balance * price_final
-    total_equity = engine.usd_balance + btc_value
-    
-    # Atualizar os resultados com o total equity
-    # final_usd_value agora reflete o valor TOTAL da carteira (cash + BTC)
-    backtest_results['final_usd_value'] = total_equity
-    backtest_results['cash_balance'] = engine.usd_balance  # Saldo em dólar puro
-    backtest_results['btc_amount'] = engine.btc_hodl_balance  # Quantidade de BTC
-    backtest_results['btc_price_final'] = price_final  # Preço final do BTC
-    
-    # Recalcular ROI usando o total_equity para refletir corretamente a performance
-    backtest_results['profit_usd'] = total_equity - engine.initial_capital
-    backtest_results['profit_percentage_usd'] = ((total_equity / engine.initial_capital) - 1) * 100
-    
     # ========== NOVAS MÉTRICAS: Token-Based Performance ==========
     # Calcular saldo inicial em tokens (BTC): quanto BTC teríamos se comprássemos tudo no início
     initial_token_balance = engine.initial_capital / price_initial
     
     # Calcular saldo final em tokens (BTC): quanto vale nosso patrimônio hoje em BTC
-    final_token_balance = total_equity / price_final
+    final_token_balance = final_equity / price_final
     
     # Calcular ROI em tokens: variação percentual do saldo em tokens
     token_roi = ((final_token_balance - initial_token_balance) / initial_token_balance) * 100
     
     # Calcular Alpha vs HOLD: diferença entre ROI da estratégia e ROI do benchmark
-    alpha_vs_hold = backtest_results['profit_percentage_usd'] - btc_benchmark_profit_percentage
+    alpha_vs_hold = roi_percentage - btc_benchmark_profit_percentage
     
     logger.info(
-        f"✓ Total Equity Calculado: ${total_equity:.2f} "
-        f"(Cash: ${engine.usd_balance:.2f} + BTC Value: ${btc_value:.2f})"
+        f"✓ Total Equity (engine): ${final_equity:.2f}"
     )
     logger.info(f"✓ Benchmark BTC recalculado: {btc_benchmark_profit_percentage:.2f}% (Preço: ${price_initial:.2f} → ${price_final:.2f})")
     logger.info(
@@ -560,8 +535,8 @@ def run_trading_system(
     aave_health_factor = engine.health_factor
 
     save_simulation_summary(
-        total_equity=total_equity,
-        roi_percent=backtest_results['profit_percentage_usd'],
+        total_equity=final_equity,
+        roi_percent=roi_percentage,
         benchmark_roi_percent=btc_benchmark_profit_percentage,
         total_trades=num_trades,
         initial_capital=engine.initial_capital,

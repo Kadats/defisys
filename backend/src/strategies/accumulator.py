@@ -179,9 +179,15 @@ class AccumulatorStrategy(BaseStrategy):
             timestamp: Current timestamp
         """
         current_price = row['Close']
-        prediction = int(row.get('prediction', 0))
-        prediction_proba = float(row.get('prediction_proba', 0.0))
-        rsi = float(row.get('RSI', 50))
+        # CRITICAL FIX: Handle NaN values in predictions (from missing data in early timeseries)
+        pred_value = row.get('prediction', 0)
+        prediction = int(pred_value) if not pd.isna(pred_value) else 0
+        
+        proba_value = row.get('prediction_proba', 0.0)
+        prediction_proba = float(proba_value) if not pd.isna(proba_value) else 0.0
+        
+        rsi_value = row.get('RSI', 50)
+        rsi = float(rsi_value) if not pd.isna(rsi_value) else 50
         
         # --- DEFENSE MODE: De-leverage only on real liquidation risk ---
         has_leverage = (len(engine.active_lps) > 0 or engine.total_debt_usd > 0)
@@ -492,11 +498,11 @@ class AccumulatorStrategy(BaseStrategy):
             # Max borrow = (collateral * 0.80 / HF_SAFE_TARGET) - current_debt
             # This ensures: HF = (collateral * 0.80) / (current_debt + borrow) >= HF_SAFE_TARGET
             max_safe_debt = (collateral_value * 0.80) / HF_SAFE_TARGET
-            available_borrow = max(0.0, max_safe_debt - current_debt)
+            borrow_amount = max(0.0, max_safe_debt - current_debt)
             
-            if available_borrow > MIN_POSITION_USD and engine.health_factor >= HF_SAFE_TARGET:
+            if borrow_amount > MIN_POSITION_USD and engine.health_factor >= HF_SAFE_TARGET:
                 # Only borrow if current HF is already >= HF_SAFE_TARGET
-                borrowed_amount = engine.borrow_funds(available_borrow, current_price)
+                borrowed_amount = engine.borrow_funds(borrow_amount, current_price)
                 logger.info(
                     f"[{timestamp.date()}] STEP 3 - BORROW: Borrowed ${borrowed_amount:.2f} USD "
                     f"(Target HF: {HF_SAFE_TARGET}, Current HF: {engine.health_factor:.2f})"
@@ -521,7 +527,8 @@ class AccumulatorStrategy(BaseStrategy):
                         )
                         logger.info(
                             f"[{timestamp.date()}] STEP 4 - OPEN LP: Opened LP with ${lp_capital:.2f} "
-                            f"(from borrowed funds) | Range: ${range_lower:.2f} - ${range_upper:.2f}"
+                            f"(from borrowed funds) | Range: ${range_lower:.2f} - ${range_upper:.2f}. "
+                            f"Remaining balance: ${engine.usd_balance:.2f}"
                         )
             else:
                 logger.warning(
@@ -634,14 +641,15 @@ class AccumulatorStrategy(BaseStrategy):
         
         if collateral_value > 0 and engine.health_factor >= HF_SAFE_TARGET:
             # Max borrow = (collateral * 0.80 / HF_SAFE_TARGET) - current_debt
+            # CRITICAL FIX: Calculate borrow respecting existing debt to avoid HF breakage
             max_safe_debt = (collateral_value * 0.80) / HF_SAFE_TARGET
-            available_borrow = max(0.0, max_safe_debt - current_debt)
+            borrow_amount = max(0.0, max_safe_debt - current_debt)
             
-            if available_borrow > MIN_POSITION_USD:
-                borrowed_amount = engine.borrow_funds(available_borrow, current_price)
+            if borrow_amount > MIN_POSITION_USD:
+                borrowed_amount = engine.borrow_funds(borrow_amount, current_price)
                 logger.info(
                     f"[{timestamp.date()}] STEP 3 - BORROW: Borrowed ${borrowed_amount:.2f} USD "
-                    f"(Max safe debt: ${max_safe_debt:.2f}, Target HF: {HF_SAFE_TARGET})"
+                    f"(Max safe debt: ${max_safe_debt:.2f}, Existing debt: ${current_debt:.2f}, Target HF: {HF_SAFE_TARGET})"
                 )
                 
                 # ===== STEP 4: Open LPs using ONLY the borrowed USD =====
@@ -666,7 +674,8 @@ class AccumulatorStrategy(BaseStrategy):
                         )
                         logger.info(
                             f"[{timestamp.date()}] STEP 4a - OPEN LP #1: ${lp1_capital:.2f} "
-                            f"| Range: ${range_lower_1:.2f} - ${range_upper_1:.2f}"
+                            f"| Range: ${range_lower_1:.2f} - ${range_upper_1:.2f}. "
+                            f"Remaining balance: ${engine.usd_balance:.2f}"
                         )
                     
                     # Second LP: more aggressive range (-2% to +35%)
@@ -685,7 +694,8 @@ class AccumulatorStrategy(BaseStrategy):
                         )
                         logger.info(
                             f"[{timestamp.date()}] STEP 4b - OPEN LP #2: ${lp2_capital:.2f} "
-                            f"| Range: ${range_lower_2:.2f} - ${range_upper_2:.2f}"
+                            f"| Range: ${range_lower_2:.2f} - ${range_upper_2:.2f}. "
+                            f"Remaining balance: ${engine.usd_balance:.2f}"
                         )
         else:
             logger.warning(
