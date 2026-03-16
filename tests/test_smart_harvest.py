@@ -8,8 +8,8 @@ from backend.src.config import SIMULATED_GAS_FEE_USD
 
 @pytest.fixture
 def fresh_trading_engine():
-    """Retorna uma instância nova do TradingEngine com $1000."""
-    return TradingEngine(initial_capital_usd=1000.0)
+    """Retorna uma instância nova do TradingEngine com $2000."""
+    return TradingEngine(initial_capital_usd=2000.0)
 
 
 @pytest.fixture
@@ -56,16 +56,17 @@ def test_harvest_when_fees_exceed_threshold(lp_with_fees):
     
     # Call harvest
     bt._check_and_harvest(current_price=225.0, timestamp=pd.Timestamp('2025-01-02'))
-    
+
     # Gas fee should be deducted (SIMULATED_GAS_FEE_USD = 0.10)
-    # Note: LP opening also deducted gas, so we calculate from actual balance
+    # Since initial_usd > 50, it uses AUTO-COMPOUND mode
+    # BTC fees go to collateral, USD fees go to balance
     expected_usd = initial_usd + usdt_fees - SIMULATED_GAS_FEE_USD
     assert bt.usd_balance == pytest.approx(expected_usd, abs=0.11)
-    
-    # BTC fees should go to collateral
-    expected_collateral = initial_collateral + btc_fees
-    assert bt.btc_hodl_balance == pytest.approx(expected_collateral, rel=1e-6)
-    
+
+    # BTC fees should go to collateral (btc_collateral_balance)
+    # In AUTO-COMPOUND mode: self.btc_hodl_balance += fees; self.add_collateral(fees)
+    # add_collateral moves it from btc_hodl_balance to btc_collateral_balance
+    assert bt.btc_collateral_balance == pytest.approx(btc_fees, rel=1e-6)
     # Fees should be reset
     assert lp['fees_accrued_usdt'] == 0.0
     assert lp['fees_accrued_btc'] == 0.0
@@ -105,9 +106,10 @@ def test_harvest_btc_fees_to_collateral(lp_with_fees):
     # Call harvest
     bt._check_and_harvest(current_price=225.0, timestamp=pd.Timestamp('2025-01-02'))
     
-    # BTC fees should increase collateral
-    expected_collateral = initial_collateral + btc_fees
-    assert bt.btc_hodl_balance == pytest.approx(expected_collateral, rel=1e-6)
+    # BTC fees should increase collateral balance
+    # In AUTO-COMPOUND: self.btc_hodl_balance += fees; self.add_collateral(fees)
+    # add_collateral moves it from btc_hodl_balance to btc_collateral_balance
+    assert bt.btc_collateral_balance == pytest.approx(initial_collateral + btc_fees, rel=1e-6)
 
 
 def test_harvest_usd_fees_to_balance(lp_with_fees):
@@ -213,7 +215,7 @@ def test_harvest_multiple_lps(fresh_trading_engine):
     
     # Collateral should increase from LP1 BTC fees only
     expected_collateral = initial_collateral + 0.01
-    assert bt.btc_hodl_balance == pytest.approx(expected_collateral, rel=1e-6)
+    assert bt.btc_collateral_balance == pytest.approx(expected_collateral, rel=1e-6)
 
 
 def test_harvest_no_lps(fresh_trading_engine):
@@ -268,7 +270,7 @@ def test_harvest_zero_usd_fees(lp_with_fees):
     bt._check_and_harvest(current_price=225.0, timestamp=pd.Timestamp('2025-01-02'))
     
     # BTC should go to collateral
-    assert bt.btc_hodl_balance == pytest.approx(initial_collateral + btc_fees, rel=1e-6)
+    assert bt.btc_collateral_balance == pytest.approx(initial_collateral + btc_fees, rel=1e-6)
     
     # USD should be: initial + usdt_fees - gas_fee = initial + 3.25 - 0.10
     expected_usd = initial_usd + 3.25 - SIMULATED_GAS_FEE_USD

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 FEATURES = [
     'RSI',
     'dist_from_ema_50',
+    'dist_from_sma_200', # V14: Long-term trend feature
     'BB_Width',
     'FundingRate',
     'OpenInterest',

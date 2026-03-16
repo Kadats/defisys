@@ -32,6 +32,7 @@ class DummyEngine:
         self.initial_capital = initial_capital_usd
         self.usd_balance = initial_capital_usd
         self.btc_hodl_balance = 0.0
+        self.btc_collateral_balance = 0.0 # V15: Aave Collateral
         self.total_debt_usd = 0.0
         self.health_factor = 999.0
         self.active_lps = []
@@ -40,7 +41,18 @@ class DummyEngine:
 
     def run(self, df: pd.DataFrame, strategy) -> dict:
         self.last_strategy = strategy
-        return {}
+        return {
+            'final_usd_value': self.usd_balance,
+            'initial_capital_usd': self.initial_capital,
+            'profit_usd': 0.0,
+            'profit_percentage_usd': 0.0,
+            'btc_benchmark_final_value': 1000.0,
+            'btc_benchmark_profit_percentage': 0.0,
+            'backtest_start_date': '2024-01-01',
+            'backtest_end_date': '2024-01-02',
+            'decision_history': [],
+            'transaction_log': []
+        }
 
     def _get_lp_value(self, lp, price: float):
         return 0.0, 0.0, 0.0
@@ -56,11 +68,17 @@ class DummyBTCLiteStrategy:
         self.use_llm = use_llm
 
 
+class DummySwingUSDStrategy:
+    def __init__(self, use_llm: bool = False):
+        self.use_llm = use_llm
+
+
 @pytest.fixture
 def patch_simulation_dependencies(monkeypatch):
     monkeypatch.setattr(system_runner, "TradingEngine", DummyEngine)
     monkeypatch.setattr(system_runner, "AccumulatorStrategy", DummyAccumulatorStrategy)
     monkeypatch.setattr(system_runner, "BTCLiteStrategy", DummyBTCLiteStrategy)
+    monkeypatch.setattr(system_runner, "SwingUSDStrategy", DummySwingUSDStrategy)
     monkeypatch.setattr(system_runner.storage, "clear_simulation_data", lambda: None)
     monkeypatch.setattr(system_runner, "save_trades", lambda *args, **kwargs: None)
     monkeypatch.setattr(system_runner, "save_simulation_summary", lambda *args, **kwargs: None)
@@ -85,11 +103,11 @@ def test_strategy_factory_btc_lite():
 
 
 @pytest.mark.usefixtures("patch_simulation_dependencies")
-def test_strategy_factory_swing_usd_not_implemented():
+def test_strategy_factory_swing_usd():
     result = system_runner.run_simulation(strategy_type="swing_usd")
 
     assert "backtest_report" in result
-    assert "not implemented" in result["backtest_report"]["error"].lower()
+    assert isinstance(DummyEngine.last_instance.last_strategy, DummySwingUSDStrategy)
 
 
 @pytest.mark.usefixtures("patch_simulation_dependencies")
