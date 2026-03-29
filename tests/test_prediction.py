@@ -11,6 +11,7 @@ def dummy_data():
         'Open_time': pd.date_range(start='2023-01-01', periods=100, freq='4h'),
         'RSI': np.random.uniform(20, 80, 100),
         'dist_from_ema_50': np.random.uniform(-1000, 1000, 100),
+        'dist_from_sma_200': np.random.uniform(-1000, 1000, 100),
         'BB_Width': np.random.uniform(0.01, 0.1, 100),
         'FundingRate': np.random.uniform(-0.01, 0.01, 100),
         'OpenInterest': np.random.uniform(1e8, 1e9, 100),

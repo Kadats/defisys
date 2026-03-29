@@ -6,9 +6,9 @@ Documento de controle de auditoria de risco e arquitetura para implantação em 
 
 ## Nível 1: Auditoria Quantitativa (Risco do Algoritmo)
 
-- [ ] **1.1 Zero Look-ahead Bias**: Garantir que o pipeline de ML e cálculo de indicadores (ex: ATR, RSI) utilize estritamente dados de candles já fechados (shift(1) ou equivalente).
+- [x] **1.1 Zero Look-ahead Bias**: Garantir que o pipeline de ML e cálculo de indicadores (ex: ATR, RSI) utilize estritamente dados de candles já fechados (shift(1) ou equivalente).
 
-- [ ] **1.2 Teste de Estresse de Gas/Slippage**: Parametrizar o TradingEngine para simular picos de taxa na rede Ethereum (ex: Gas a $150) e slippage de 2% durante flash crashes.
+- [x] **1.2 Teste de Estresse de Gas/Slippage**: Parametrizar o TradingEngine para simular picos de taxa na rede Ethereum (ex: Gas a $150) e slippage de 2% durante flash crashes.
 
 ---
 
@@ -34,6 +34,7 @@ Documento de controle de auditoria de risco e arquitetura para implantação em 
 
 | Data | Evento | Status |
 |------|--------|--------|
+| 2026-03-27 | Aplicado shift(1) em todas as colunas de features no pipeline de dados para eliminar Look-ahead Bias. Incluída SMA_200. | ✓ Concluído |
 | 2026-02-27 | Documento criado. Foco inicial no Nível 1. | ✓ Iniciado |
 
 ---

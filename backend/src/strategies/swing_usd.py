@@ -16,8 +16,7 @@ from typing import TYPE_CHECKING
 
 from .base import BaseStrategy
 from ..config import (
-    GAS_RESERVE_USD,
-    SIMULATED_GAS_FEE_USD,
+    GAS_RESERVE_USD
 )
 
 if TYPE_CHECKING:
@@ -29,13 +28,13 @@ logger = logging.getLogger(__name__)
 # SWING STRATEGY CONSTANTS
 # ============================================================================
 # Entry Signals
-ENTRY_RSI_MAX = 40                    # Only buy when RSI < 40 (oversold)
-ENTRY_CONFIDENCE_THRESHOLD = 0.60     # ML must confirm reversal (>= 60%)
-MOMENTUM_CONFIDENCE_THRESHOLD = 0.75  # High confidence: Buy regardless of RSI
+ENTRY_RSI_MAX = 45                    # V15: Relaxed RSI filter (from 40 to 45)
+ENTRY_CONFIDENCE_THRESHOLD = 0.51     # V15: Lower threshold for ML + RSI (from 0.60 to 0.51)
+MOMENTUM_CONFIDENCE_THRESHOLD = 0.53  # V15: Lower threshold for momentum (from 0.75 to 0.53)
 
 # Exit Signals (Take Profit / Stop Loss)
-TAKE_PROFIT_PCT = 0.10                # Take profit at +10% from entry
-STOP_LOSS_CONFIDENCE = 0.25           # Smart stop loss: ML predicts severe drop (lowered from 0.40)
+TAKE_PROFIT_PCT = 0.06                # V15: Take profit at +6% (from +10%)
+STOP_LOSS_CONFIDENCE = 0.47           # V15: Smart stop loss: ML < 47% (from 0.25)
 HARD_STOP_LOSS_PCT = -0.08            # Hard stop loss: -8% from entry (protection against severe drawdown)
 
 # Position Sizing

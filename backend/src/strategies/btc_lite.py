@@ -18,7 +18,7 @@ from .base import BaseStrategy
 from ..core import LOAN_TO_VALUE_RATIO
 from ..ai import analyze_market_regime
 from ..config import (
-    GAS_RESERVE_USD, MIN_LIQUID_BUFFER, SIMULATED_GAS_FEE_USD,
+    GAS_RESERVE_USD, MIN_LIQUID_BUFFER,
     HF_REFINANCE_THRESHOLD, SAFE_HF_AFTER_BORROW, MAX_ACTIVE_LPS, ENTRY_SIZE_PCT,
     ATR_MULTIPLIER_BULLISH_LOWER, ATR_MULTIPLIER_BULLISH_UPPER, ATR_MULTIPLIER_NEUTRAL,
     TARGET_RESERVE_RATIO, MIN_HARVEST_USD, MAX_DEBT_RATIO,
@@ -163,7 +163,7 @@ class BTCLiteStrategy(BaseStrategy):
             old_debt = engine.total_debt_usd
             old_hf = hf
             engine.total_debt_usd = max(0.0, engine.total_debt_usd - payment_amount)
-            engine.usd_balance -= (payment_amount + SIMULATED_GAS_FEE_USD)
+            engine.usd_balance -= (payment_amount + engine.gas_fee_usd)
             
             # Recalculate improved HF
             new_hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
@@ -187,7 +187,7 @@ class BTCLiteStrategy(BaseStrategy):
                     returned_capital = engine.close_lp(lp_id=lp['id'], current_btc_price=current_price, timestamp=timestamp)
                     
                     # Use returned capital to pay down debt
-                    if engine.total_debt_usd > 0 and engine.usd_balance > SIMULATED_GAS_FEE_USD:
+                    if engine.total_debt_usd > 0 and engine.usd_balance > engine.gas_fee_usd:
                         # Calculate available cash for repayment (keep gas reserve)
                         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
                         buffer_needed = safe_balance * MIN_LIQUID_BUFFER
@@ -196,7 +196,7 @@ class BTCLiteStrategy(BaseStrategy):
                         if available_for_repay > 20.0:
                             payment_amount = min(available_for_repay, engine.total_debt_usd)
                             engine.total_debt_usd = max(0.0, engine.total_debt_usd - payment_amount)
-                            engine.usd_balance -= (payment_amount + SIMULATED_GAS_FEE_USD)
+                            engine.usd_balance -= (payment_amount + engine.gas_fee_usd)
                             logger.info(
                                 f"[{timestamp.date()}] TAKE PROFIT REPAY: Paid ${payment_amount:.2f} debt. "
                                 f"Remaining Debt: ${engine.total_debt_usd:.2f}"
@@ -274,7 +274,7 @@ class BTCLiteStrategy(BaseStrategy):
         capital_to_allocate = min(capital_to_allocate, max(0.0, engine.usd_balance - target_reserve))
         
         # Subtract estimated gas costs for this entry (buy + open LP)
-        estimated_gas_costs = SIMULATED_GAS_FEE_USD * 2
+        estimated_gas_costs = engine.gas_fee_usd * 2
         capital_to_allocate = max(0.0, capital_to_allocate - estimated_gas_costs)
         
         if capital_to_allocate < 10:
@@ -526,7 +526,7 @@ class BTCLiteStrategy(BaseStrategy):
         
         # Also ensure we keep minimum liquid buffer and gas for txs
         liquid_minimum = engine.usd_balance * MIN_LIQUID_BUFFER
-        estimated_gas_costs = SIMULATED_GAS_FEE_USD * 2
+        estimated_gas_costs = engine.gas_fee_usd * 2
         max_allowable = max(0.0, engine.usd_balance - liquid_minimum - estimated_gas_costs - GAS_RESERVE_USD)
         capital_to_allocate = min(capital_to_allocate, max_allowable)
         
@@ -614,11 +614,11 @@ class BTCLiteStrategy(BaseStrategy):
         excess_cash = max(0.0, safe_balance - buffer_needed)
         
         if excess_cash > 20.0 and engine.total_debt_usd > 0:
-            if engine.usd_balance > SIMULATED_GAS_FEE_USD:
+            if engine.usd_balance > engine.gas_fee_usd:
                 # Pay down up to the excess_cash, but never more than outstanding debt
                 payment_amount = min(excess_cash, engine.total_debt_usd)
                 engine.total_debt_usd = max(0.0, engine.total_debt_usd - payment_amount)
-                engine.usd_balance -= (payment_amount + SIMULATED_GAS_FEE_USD)
+                engine.usd_balance -= (payment_amount + engine.gas_fee_usd)
                 logger.info(
                     f"[{timestamp.date()}] SMART REPAY: Using excess cash to pay down debt. "
                     f"Paid: ${payment_amount:.2f}, New Debt: ${engine.total_debt_usd:.2f}."
@@ -627,7 +627,7 @@ class BTCLiteStrategy(BaseStrategy):
                 safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
                 capital_to_allocate = safe_balance * ENTRY_SIZE_PCT
                 liquid_minimum = engine.usd_balance * MIN_LIQUID_BUFFER
-                estimated_gas_costs = SIMULATED_GAS_FEE_USD * 2
+                estimated_gas_costs = engine.gas_fee_usd * 2
                 max_allowable = max(0.0, engine.usd_balance - liquid_minimum - estimated_gas_costs - GAS_RESERVE_USD)
                 capital_to_allocate = min(capital_to_allocate, max_allowable)
 

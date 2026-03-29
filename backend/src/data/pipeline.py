@@ -361,6 +361,7 @@ def get_full_prepared_data() -> pd.DataFrame:
 
         # 2. Trend (EMA50 distance)
         all_klines_df['EMA_50'] = indicators.calculate_ema(all_klines_df, column='Close', window=50)
+        all_klines_df['SMA_200'] = indicators.calculate_sma(all_klines_df, column='Close', window=200)
 
         # 3. Volatility (Bollinger Band Width)
         bb_df = indicators.calculate_bollinger_bands(all_klines_df, column='Close', window=20)
@@ -499,6 +500,19 @@ def get_full_prepared_data() -> pd.DataFrame:
     try:
         # 1. Feature Engineering
         all_klines_df['dist_from_ema_50'] = (all_klines_df['Close'] - all_klines_df['EMA_50']) / all_klines_df['EMA_50']
+        all_klines_df['dist_from_sma_200'] = (all_klines_df['Close'] - all_klines_df['SMA_200']) / all_klines_df['SMA_200']
+
+        # --- APLICAR SHIFT(1) NAS FEATURES (ZERO LOOK-AHEAD BIAS) ---
+        # Definir as colunas que são features para o modelo
+        feature_cols = [
+            'RSI', 'dist_from_ema_50', 'dist_from_sma_200', 'BB_Width',
+            'FundingRate', 'OpenInterest', 'VolumeUSD'
+        ]
+        
+        # Aplicar o shift(1) apenas nas features existentes no DataFrame
+        cols_to_shift = [col for col in feature_cols if col in all_klines_df.columns]
+        logger.info(f"Aplicando shift(1) em {len(cols_to_shift)} colunas de features para evitar Look-ahead Bias.")
+        all_klines_df[cols_to_shift] = all_klines_df[cols_to_shift].shift(1)
 
         # 2. Create Target (trend over next 12 candles / 48h)
         future_close = all_klines_df['Close'].shift(-12)
@@ -506,11 +520,7 @@ def get_full_prepared_data() -> pd.DataFrame:
         all_klines_df['Target_Trend'] = (log_return > 0.02).astype(int)
 
         # 3. Clean data
-        REQUIRED_COLUMNS = [
-            'RSI', 'dist_from_ema_50', 'BB_Width',
-            'FundingRate', 'OpenInterest', 'VolumeUSD',
-            'Target_Trend'
-        ]
+        REQUIRED_COLUMNS = feature_cols + ['Target_Trend']
         
         # Only keep columns that exist
         existing_required = [col for col in REQUIRED_COLUMNS if col in all_klines_df.columns]

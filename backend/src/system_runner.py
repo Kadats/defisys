@@ -4,8 +4,9 @@ import os
 
 from backend.src.data.pipeline import get_full_prepared_data
 from .core import TradingEngine
-from .strategies import BTCLiteStrategy, AccumulatorStrategy, SwingUSDStrategy
+from .strategies import BTCLiteStrategy, AccumulatorStrategy, SwingUSDStrategy, PureSpotStrategy, SmartDCAStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE, GEMINI_BACKTEST_DAYS
+
 from .ai import train_prediction_model, get_predictions
 from backend.src.data.storage import save_predictions_to_db, save_trades, save_simulation_summary
 from backend.src.data import storage
@@ -103,7 +104,7 @@ def train_model_pipeline() -> dict:
     save_predictions_to_db(full_df_with_predictions)
     
     # Contar predições geradas (sinais de compra com threshold)
-    predictions_count = int(full_df_with_predictions['Prediction'].sum()) if 'Prediction' in full_df_with_predictions.columns else 0
+    predictions_count = int(full_df_with_predictions['prediction'].sum()) if 'prediction' in full_df_with_predictions.columns else 0
     total_candles = len(full_df_with_predictions)
     
     logger.info("=" * 80)
@@ -280,11 +281,15 @@ def run_simulation(
         strategy = BTCLiteStrategy()
     elif strategy_type == "swing_usd":
         strategy = SwingUSDStrategy(use_llm=use_llm)
+    elif strategy_type == "pure_spot":
+        strategy = PureSpotStrategy()
+    elif strategy_type == "smart_dca":
+        strategy = SmartDCAStrategy()
     else:
         logger.error(f"Estratégia desconhecida: {strategy_type}")
         return {
             "backtest_report": {
-                "error": f"Unknown strategy type: {strategy_type}. Available: accumulator, btc_lite, swing_usd"
+                "error": f"Unknown strategy type: {strategy_type}. Available: accumulator, btc_lite, swing_usd, pure_spot, smart_dca"
             }
         }
     

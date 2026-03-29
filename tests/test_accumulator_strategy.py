@@ -16,6 +16,8 @@ def mock_engine():
     engine.total_debt_usd = 0.0
     engine.health_factor = 999.0
     engine.active_lps = []
+    engine.gas_fee_usd = 0.10
+    engine.slippage_pct = 0.001
     return engine
 
 @pytest.fixture

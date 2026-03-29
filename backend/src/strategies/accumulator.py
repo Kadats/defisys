@@ -16,7 +16,6 @@ from .base import BaseStrategy
 from ..core import LOAN_TO_VALUE_RATIO
 from ..config import (
     GAS_RESERVE_USD,
-    SIMULATED_GAS_FEE_USD,
     ML_CONFIDENCE_THRESHOLD,
     MAX_DEBT_RATIO
 )
@@ -361,10 +360,10 @@ class AccumulatorStrategy(BaseStrategy):
             # Use all available USD (minus gas reserve) to repay debt
             safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
             
-            if safe_balance >= SIMULATED_GAS_FEE_USD:
+            if safe_balance >= engine.gas_fee_usd:
                 # Pay gas for repayment transaction
-                engine.usd_balance -= SIMULATED_GAS_FEE_USD
-                safe_balance -= SIMULATED_GAS_FEE_USD
+                engine.usd_balance -= engine.gas_fee_usd
+                safe_balance -= engine.gas_fee_usd
                 
                 # Repay as much debt as possible
                 # CRITICAL FIX: Validate repay_amount never exceeds available balance
@@ -774,8 +773,8 @@ class AccumulatorStrategy(BaseStrategy):
                         safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
                         if safe_balance > 0 and engine.total_debt_usd > 0:
                             repay_amount = min(safe_balance, engine.total_debt_usd)
-                            if repay_amount >= SIMULATED_GAS_FEE_USD:
-                                engine.usd_balance -= SIMULATED_GAS_FEE_USD
+                            if repay_amount >= engine.gas_fee_usd:
+                                engine.usd_balance -= engine.gas_fee_usd
                                 engine.total_debt_usd -= repay_amount
                                 engine.usd_balance -= repay_amount
                                 logger.info(

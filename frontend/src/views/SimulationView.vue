@@ -39,6 +39,8 @@
             <option value="accumulator">Acumular BTC (Accumulator)</option>
             <option value="btc_lite">Reserva Inteligente (BTC Lite)</option>
             <option value="swing_usd">Maximizar Dólar (Swing USD)</option>
+            <option value="pure_spot">Compra/Venda Direta (Pure Spot)</option>
+            <option value="smart_dca">Preço Médio Inteligente (Smart DCA)</option>
           </select>
         </div>
         <div class="flex items-end">

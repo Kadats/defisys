@@ -19,13 +19,17 @@ DEBT_INTEREST_RATE = 0.075
 
 class TradingEngine:
     
-    def __init__(self, initial_capital_usd: float = 1000.0):
+    def __init__(self, initial_capital_usd: float = 1000.0, gas_fee_usd: float = SIMULATED_GAS_FEE_USD, slippage_pct: float = SLIPPAGE_PCT):
         self.initial_capital = initial_capital_usd
         self.usd_balance = initial_capital_usd 
         self.btc_hodl_balance = 0.0
         self.btc_collateral_balance = 0.0
         self.total_debt_usd = 0.0             
         self.loan_apy = DEBT_INTEREST_RATE
+        
+        # Stress Parameters
+        self.gas_fee_usd = gas_fee_usd
+        self.slippage_pct = slippage_pct
         
         self.health_factor = 999.0
         self.is_liquidated = False
@@ -49,10 +53,10 @@ class TradingEngine:
         # Initialize Risk Manager
         self.risk_manager = RiskManager(
             gas_reserve_usd=GAS_RESERVE_USD,
-            simulated_gas_fee_usd=SIMULATED_GAS_FEE_USD
+            simulated_gas_fee_usd=self.gas_fee_usd
         )
         
-        logger.info(f"TradingEngine v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD.")
+        logger.info(f"TradingEngine v2 (Market Timing Loop) inicializado com ${initial_capital_usd} USD. (Gas: ${self.gas_fee_usd}, Slippage: {self.slippage_pct*100}%)")
 
     def _log_transaction(self, timestamp: pd.Timestamp, action_type: str, btc_price: float, 
                         usd_amount: float = 0.0, btc_amount: float = 0.0, fee_usd: float = 0.0, 
@@ -174,13 +178,13 @@ class TradingEngine:
             
         # 1. BLINDAGEM: Nunca gastar mais do que tem
         # Se o saldo for menor que a taxa, aborta.
-        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+        if self.usd_balance < self.gas_fee_usd:
             # logger.warning("Saldo insuficiente para cobrir Gas. Operação cancelada.")
             return
 
         # 2. BLINDAGEM: Ajusta o valor da compra ao saldo real disponível
         # Se a estratégia pediu $1 milhão, mas só tem $10, gasta só $10 (menos a taxa)
-        actual_available = self.usd_balance - SIMULATED_GAS_FEE_USD
+        actual_available = self.usd_balance - self.gas_fee_usd
         if amount_usd > actual_available:
             # Opcional: Logar que houve corte no pedido
             amount_usd = actual_available
@@ -189,10 +193,10 @@ class TradingEngine:
             return
 
         # Cobra a taxa
-        self.usd_balance -= SIMULATED_GAS_FEE_USD
+        self.usd_balance -= self.gas_fee_usd
 
         # Executa a compra
-        effective_price = current_btc_price * (1 + SLIPPAGE_PCT)
+        effective_price = current_btc_price * (1 + self.slippage_pct)
         btc_bought = amount_usd / effective_price
         
         # Deduz do saldo (que agora garantimos ser positivo)
@@ -206,7 +210,7 @@ class TradingEngine:
             btc_price=effective_price,
             usd_amount=amount_usd,
             btc_amount=btc_bought,
-            fee_usd=SIMULATED_GAS_FEE_USD,
+            fee_usd=self.gas_fee_usd,
             details=""
         )
         
@@ -236,10 +240,10 @@ class TradingEngine:
             return 0.0
         
         # 2. BLINDAGEM: Verifica se há saldo para cobrir a taxa de gas
-        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+        if self.usd_balance < self.gas_fee_usd:
             logger.warning(
                 f"[{timestamp.date()}] Saldo insuficiente em USD para cobrir taxa de gas. "
-                f"Necessário: ${SIMULATED_GAS_FEE_USD:.2f}, Disponível: ${self.usd_balance:.2f}"
+                f"Necessário: ${self.gas_fee_usd:.2f}, Disponível: ${self.usd_balance:.2f}"
             )
             return 0.0
         
@@ -247,10 +251,10 @@ class TradingEngine:
             return 0.0
         
         # 3. Cobra a taxa de gas do caixa
-        self.usd_balance -= SIMULATED_GAS_FEE_USD
+        self.usd_balance -= self.gas_fee_usd
         
         # 4. Calcula o preço efetivo com slippage (venda é desfavorável)
-        effective_price = current_btc_price * (1 - SLIPPAGE_PCT)
+        effective_price = current_btc_price * (1 - self.slippage_pct)
         usd_received = btc_amount * effective_price
         
         # 5. Executa a venda
@@ -264,7 +268,7 @@ class TradingEngine:
             btc_price=effective_price,
             usd_amount=usd_received,
             btc_amount=btc_amount,
-            fee_usd=SIMULATED_GAS_FEE_USD,
+            fee_usd=self.gas_fee_usd,
             pnl_usd=0.0,  # PnL será calculado pela estratégia
             details=""
         )
@@ -286,13 +290,13 @@ class TradingEngine:
             )
             return
 
-        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+        if self.usd_balance < self.gas_fee_usd:
             logger.error("Insufficient USD to pay gas for add_collateral. Aborting operation.")
             return
 
         self.btc_hodl_balance -= btc_amount
         self.btc_collateral_balance += btc_amount
-        self.usd_balance -= SIMULATED_GAS_FEE_USD
+        self.usd_balance -= self.gas_fee_usd
 
     def remove_collateral(self, btc_amount: float) -> None:
         """Move BTC da carteira de colateral da AAVE para a carteira Spot."""
@@ -307,13 +311,13 @@ class TradingEngine:
             )
             return
 
-        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+        if self.usd_balance < self.gas_fee_usd:
             logger.error("Insufficient USD to pay gas for remove_collateral. Aborting operation.")
             return
 
         self.btc_collateral_balance -= btc_amount
         self.btc_hodl_balance += btc_amount
-        self.usd_balance -= SIMULATED_GAS_FEE_USD
+        self.usd_balance -= self.gas_fee_usd
 
     def open_lp(self, capital_usd: float, range_lower: float, range_upper: float, current_btc_price: float, timestamp, strategy: str = "UNKNOWN"):
         """Abre uma nova posição de LP com matemática da Uniswap v3.
@@ -323,7 +327,7 @@ class TradingEngine:
         - Deducts capital immediately from USD balance
         """
         # CRITICAL FIX: Validate sufficient funds BEFORE any operation
-        required_funds = capital_usd + SIMULATED_GAS_FEE_USD
+        required_funds = capital_usd + self.gas_fee_usd
         if self.usd_balance < required_funds:
             logger.error(
                 f"[{timestamp.date()}] Insufficient USD balance to open LP. "
@@ -334,7 +338,7 @@ class TradingEngine:
             )
         
         # Charge gas for opening an LP
-        self.usd_balance -= SIMULATED_GAS_FEE_USD
+        self.usd_balance -= self.gas_fee_usd
 
         if range_lower >= range_upper:
             logger.warning(f"[{timestamp.date()}] Range inválido: Preço mínimo ${range_lower:.2f} é maior ou igual ao máximo ${range_upper:.2f}")
@@ -342,7 +346,7 @@ class TradingEngine:
 
         # Calculate liquidity L and initial amounts using Uniswap V3 math
         # Convert all inputs to Decimal for precision
-        effective_price = current_btc_price * (1 + SLIPPAGE_PCT)
+        effective_price = current_btc_price * (1 + self.slippage_pct)
         L, amount_btc, amount_usdt = calculate_liquidity_l(
             capital_usd=Decimal(str(capital_usd)),
             range_lower=Decimal(str(range_lower)),
@@ -391,7 +395,7 @@ class TradingEngine:
             btc_price=effective_price,
             usd_amount=capital_usd,
             btc_amount=float(amount_btc),
-            fee_usd=SIMULATED_GAS_FEE_USD,
+            fee_usd=self.gas_fee_usd,
             details=f"Range: ${range_lower:.2f}-${range_upper:.2f} | Strategy: {strategy} | LP_ID: {position_id}"
         )
         
@@ -413,7 +417,7 @@ class TradingEngine:
             return False
 
         # Physical gas requirement: must have at least the gas fee available
-        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+        if self.usd_balance < self.gas_fee_usd:
             # First time we hit this state, escalate to CRITICAL and set a long cooldown
             logger.critical(
                 f"[{timestamp.date()}] Insufficient USD to pay gas for closing LP {lp_id}. Aborting and entering long cooldown."
@@ -425,9 +429,9 @@ class TradingEngine:
         # If emergency, allow spending below GAS_RESERVE_USD to execute the close
         # (we still enforce the physical gas fee above). For non-emergency closes
         # normal reserve semantics are enforced elsewhere in the engine.
-        self.usd_balance -= SIMULATED_GAS_FEE_USD
+        self.usd_balance -= self.gas_fee_usd
 
-        effective_price = current_btc_price * (1 - SLIPPAGE_PCT)
+        effective_price = current_btc_price * (1 - self.slippage_pct)
         asset_value, _, _ = self._get_lp_value(lp_to_close, effective_price)
         # Convert Decimal results to float for compatibility
         asset_value = float(asset_value)
@@ -453,7 +457,7 @@ class TradingEngine:
             btc_price=effective_price,
             usd_amount=final_value,
             btc_amount=0.0,
-            fee_usd=SIMULATED_GAS_FEE_USD,
+            fee_usd=self.gas_fee_usd,
             pnl_usd=final_profit,
             details=f"LP_ID: {lp_id} | Initial: ${lp_to_close['initial_capital_usd']:.2f}"
         )
@@ -515,7 +519,7 @@ class TradingEngine:
             # Must have at least one gas payment available to execute a close
             if not self.risk_manager.can_afford_gas(self.usd_balance):
                 logger.critical(
-                    f"USD balance ${self.usd_balance:.2f} < required gas ${SIMULATED_GAS_FEE_USD:.2f}; cannot perform emergency close. Entering long cooldown."
+                    f"USD balance ${self.usd_balance:.2f} < required gas ${self.gas_fee_usd:.2f}; cannot perform emergency close. Entering long cooldown."
                 )
                 # Suppress repeated critical spam for a long window (e.g., 2 years)
                 self._emergency_cooldown_until = now + timedelta(days=365*2)
@@ -564,7 +568,7 @@ class TradingEngine:
                     btc_price=current_price,
                     usd_amount=available_cash,
                     btc_amount=btc_bought,
-                    fee_usd=SIMULATED_GAS_FEE_USD,
+                    fee_usd=self.gas_fee_usd,
                     details="Emergency collateral boost to improve HF"
                 )
                 
@@ -614,13 +618,13 @@ class TradingEngine:
            - Keep existing auto-compound logic (BTC -> Collateral, USD -> Balance)
            - Use standard threshold (GAS * 10)
            - Log "HARVEST (AUTO-COMPOUND MODE)"
-        5. Deduct SIMULATED_GAS_FEE_USD from usd_balance
+        5. Deduct self.gas_fee_usd from usd_balance
         """
         if not self.active_lps:
             return
 
         # Early exit if we don't have enough USD for gas
-        if self.usd_balance < SIMULATED_GAS_FEE_USD:
+        if self.usd_balance < self.gas_fee_usd:
             return
 
         # Check if gas reserve needs refilling
@@ -634,19 +638,19 @@ class TradingEngine:
             # Determine harvest threshold based on reserve health
             if needs_refill:
                 # Emergency mode: Accept lower margins to refill reserve
-                harvest_threshold = SIMULATED_GAS_FEE_USD * 2
+                harvest_threshold = self.gas_fee_usd * 2
             else:
                 # Normal mode: Only harvest if fees justify the cost
-                harvest_threshold = SIMULATED_GAS_FEE_USD * 10
+                harvest_threshold = self.gas_fee_usd * 25
             
             if total_fees_usd <= harvest_threshold:
                 continue
             
             # Deduct gas fee from USD balance
-            if self.usd_balance < SIMULATED_GAS_FEE_USD:
+            if self.usd_balance < self.gas_fee_usd:
                 continue
             
-            self.usd_balance -= SIMULATED_GAS_FEE_USD
+            self.usd_balance -= self.gas_fee_usd
             
             # Route fees based on reserve health
             if needs_refill:
@@ -667,7 +671,7 @@ class TradingEngine:
                     btc_price=current_price,
                     usd_amount=total_fees_usd_value,
                     btc_amount=lp['fees_accrued_btc'],
-                    fee_usd=SIMULATED_GAS_FEE_USD,
+                    fee_usd=self.gas_fee_usd,
                     details=f"LP_ID: {lp['id']} | Mode: REFILL | BTC->USD conversion"
                 )
                 
@@ -676,7 +680,7 @@ class TradingEngine:
                     f"[{timestamp.date()}] HARVEST (REFILL MODE) LP {lp['id']}: "
                     f"+{lp['fees_accrued_btc']:.6f} BTC (${btc_fees_in_usd:.2f}) converted to USD, "
                     f"+${lp['fees_accrued_usdt']:.2f} to USD, "
-                    f"-${SIMULATED_GAS_FEE_USD:.2f} Gas. "
+                    f"-${self.gas_fee_usd:.2f} Gas. "
                     f"Reserve refill in progress (Current: ${self.usd_balance:.2f})"
                 )
             else:
@@ -698,7 +702,7 @@ class TradingEngine:
                     btc_price=current_price,
                     usd_amount=total_fees_usd_value,
                     btc_amount=lp['fees_accrued_btc'],
-                    fee_usd=SIMULATED_GAS_FEE_USD,
+                    fee_usd=self.gas_fee_usd,
                     details=f"LP_ID: {lp['id']} | Mode: AUTO_COMPOUND | BTC->Collateral"
                 )
                 
@@ -707,7 +711,7 @@ class TradingEngine:
                     f"[{timestamp.date()}] HARVEST (AUTO-COMPOUND) LP {lp['id']}: "
                     f"+{lp['fees_accrued_btc']:.6f} BTC to Collateral, "
                     f"+${lp['fees_accrued_usdt']:.2f} to USD, "
-                    f"-${SIMULATED_GAS_FEE_USD:.2f} Gas"
+                    f"-${self.gas_fee_usd:.2f} Gas"
                 )
             
             # Reset accrued fees after harvest

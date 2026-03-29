@@ -1,0 +1,20 @@
+# Ignorar logs de simulação e sistema
+*.log
+logs/
+backend/logs/
+
+# Ignorar bancos de dados (isso evita estouro de tokens)
+*.db
+*.sqlite3
+backend/data/*.db
+postgres_data/
+
+# Ignorar caches e ambientes virtuais
+__pycache__/
+.pytest_cache/
+venv/
+node_modules/
+.git/
+
+# Ignorar arquivos de predição temporários
+ml_predictions.csv
