@@ -94,5 +94,5 @@ npm run dev
 ## Gemini CLI Rules & Skills
 
 - **Regra 1 (TDD First):** Ao receber uma tarefa de nova feature ou refatoração, seu primeiro passo deve ser planejar e escrever os testes. O ciclo obrigatório é: 1. Escrever o Teste -> 2. Falhar no Docker -> 3. Implementar -> 4. Passar. Só prossiga para o código de produção após os testes existirem.
-- **Regra 2 (Ambiente Docker):** Use sempre `docker compose exec backend` para qualquer comando. Nunca tente instalar dependências no host local.
+- **Regra 2 (Ambiente Docker):** Use sempre `docker compose exec backend` para comandos de execução e teste. Nunca tente instalar dependências no host local.
 - **Regra 3 (Gestão de Contexto):** Respeite o arquivo `.gemini-ignore` para não ler logs (`*.log`) ou bases de dados (`*.db`), economizando tokens e mantendo o foco no código.
