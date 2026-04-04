@@ -105,6 +105,12 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Useful for testing Gemini API integration without hitting free tier rate limits
 	GEMINI_BACKTEST_DAYS: int = int(os.environ.get("GEMINI_BACKTEST_DAYS", 0))  # 0 = use full window
 
+	# Grok (xAI) API Settings
+	GROK_API_KEY: str = os.environ.get("GROK_API_KEY", "")
+	GROK_MODEL: str = os.environ.get("GROK_MODEL", "grok-beta")
+	GROK_API_BASE_URL: str = os.environ.get("GROK_API_BASE_URL", "https://api.x.ai/v1/")
+	GROK_API_DELAY_SECONDS: float = float(os.environ.get("GROK_API_DELAY_SECONDS", 2.0))
+
 	# Multi-pool and entry sizing
 	# Maximum number of concurrently active LPs
 	MAX_ACTIVE_LPS: int = 4
@@ -174,6 +180,11 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.ML_PREDICTION_HORIZON = int(os.environ.get('ML_PREDICTION_HORIZON', 30))
 			self.GEMINI_BACKTEST_DAYS = int(os.environ.get('GEMINI_BACKTEST_DAYS', 0))
 
+			# Grok (xAI) API Settings
+			self.GROK_API_KEY = os.environ.get("GROK_API_KEY", "")
+			self.GROK_MODEL = os.environ.get("GROK_MODEL", "grok-beta")
+			self.GROK_API_BASE_URL = os.environ.get("GROK_API_BASE_URL", "https://api.x.ai/v1/")
+			self.GROK_API_DELAY_SECONDS = float(os.environ.get("GROK_API_DELAY_SECONDS", 2.0))
 
 # Instantiate settings for module-level import
 _settings = Settings()
@@ -217,6 +228,12 @@ ML_TARGET_MIN_CHANGE = _settings.ML_TARGET_MIN_CHANGE
 ML_PREDICTION_HORIZON = _settings.ML_PREDICTION_HORIZON
 GEMINI_BACKTEST_DAYS = _settings.GEMINI_BACKTEST_DAYS
 
+# Grok (xAI) API exports
+GROK_API_KEY = _settings.GROK_API_KEY
+GROK_MODEL = _settings.GROK_MODEL
+GROK_API_BASE_URL = _settings.GROK_API_BASE_URL
+GROK_API_DELAY_SECONDS = _settings.GROK_API_DELAY_SECONDS
+
 # New exports for The Graph multi-subgraph support
 THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS = _settings.THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS
 DEFAULT_NETWORK = _settings.DEFAULT_NETWORK
@@ -239,4 +256,3 @@ MIN_HARVEST_USD = _settings.MIN_HARVEST_USD
 MAX_DEBT_RATIO = _settings.MAX_DEBT_RATIO
 MAX_DEBT_TO_RESERVE_RATIO = _settings.MAX_DEBT_TO_RESERVE_RATIO
 DELEVERAGE_THRESHOLD_HF = _settings.DELEVERAGE_THRESHOLD_HF
-
