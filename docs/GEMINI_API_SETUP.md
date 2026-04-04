@@ -33,16 +33,14 @@ GEMINI_API_KEY=AIzaSyD_xample1234567890abcdefghij
 ### Passo 3: Instalar Dependências
 
 ```bash
-docker compose exec backend poetry add google-generativeai
-# OU if using requirements.txt
-docker compose exec backend pip install google-generativeai
+poetry add google-generativeai
 ```
 
 ### Passo 4: Rebuild Docker (se necessário)
 
 ```bash
-docker compose build backend
-docker compose up backend
+make build
+docker compose up -d backend
 ```
 
 ---

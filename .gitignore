@@ -49,3 +49,5 @@ assets/
 
 # Frontend
 frontend/node_modules/
+
+.codex

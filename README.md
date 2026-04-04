@@ -389,14 +389,14 @@ curl -X POST http://localhost:8000/api/data/sync
 
 ### Backend Tests
 ```bash
-# Run all tests
-poetry run pytest tests/ -v
+# Run all backend tests locally
+make test
 
-# Run specific test file
-poetry run pytest tests/test_trading_engine.py -v
+# Run with coverage locally
+make test-cov
 
-# Run with coverage
-poetry run pytest tests/ --cov=backend.src
+# Run tests in Docker against backend-test + postgres_test
+make test-docker
 ```
 
 **Test Suite Coverage:**
@@ -458,6 +458,41 @@ GEMINI_BACKTEST_DAYS = 30             # Default simulation window
 ---
 
 ## 🛠️ Development Commands
+
+### Local Development
+
+```bash
+# Install backend dependencies
+make install
+
+# Install frontend dependencies
+make install-frontend
+
+# Run backend API with reload
+make run-api
+
+# Run Vue frontend with Vite
+make run-frontend
+```
+
+### Docker Workflow
+
+```bash
+# Build the stack
+make build
+
+# Start backend, frontend and databases
+make up
+
+# Run backend tests in Docker
+make test-docker
+
+# Start the stack and run backend tests in one command
+make up-test
+
+# Stop the stack
+make down
+```
 
 ---
 

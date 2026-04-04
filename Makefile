@@ -1,49 +1,88 @@
-# Makefile para o projeto DefiSys com Poetry
+SHELL := /bin/bash
 
-# --- GERENCIAMENTO DE DEPENDÊNCIAS ---
+COMPOSE ?= docker compose
+FRONTEND_DIR := frontend
+PYTEST_ARGS ?= tests/ -v
 
-# Instala as dependências do projeto usando o Poetry
+.DEFAULT_GOAL := help
+
+help:
+	@echo "Available targets:"
+	@echo "  install           Install backend dependencies with Poetry"
+	@echo "  install-frontend  Install frontend dependencies with npm"
+	@echo "  run               Run backend main module locally"
+	@echo "  run-api           Run FastAPI locally with reload"
+	@echo "  run-frontend      Run Vue frontend locally with Vite"
+	@echo "  test              Run backend tests locally with Poetry"
+	@echo "  test-cov          Run backend tests with coverage locally"
+	@echo "  test-docker       Run backend tests in Docker using backend-test"
+	@echo "  lint              Run Ruff checks"
+	@echo "  format            Run Ruff format and Black"
+	@echo "  build             Build Docker images"
+	@echo "  up                Start the Docker stack in background"
+	@echo "  down              Stop the Docker stack"
+	@echo "  restart           Restart the Docker stack"
+	@echo "  ps                Show Docker Compose service status"
+	@echo "  logs              Follow Docker Compose logs"
+	@echo "  logs-backend      Follow backend logs"
+	@echo "  up-test           Start the Docker stack and run backend tests"
+	@echo "  clean             Remove Python cache files"
+
 install:
 	poetry install
 
-# --- EXECUÇÃO E TESTES ---
+install-frontend:
+	cd $(FRONTEND_DIR) && npm install
 
-# Roda a aplicação principal
 run:
 	poetry run python -m backend.src.main
 
-# (Alvo para futuros testes com pytest)
+run-api:
+	poetry run uvicorn backend.src.api:app --reload --host 0.0.0.0 --port 8000
+
+run-frontend:
+	cd $(FRONTEND_DIR) && npm run dev
+
 test:
-	poetry run pytest
+	poetry run pytest $(PYTEST_ARGS)
 
-# --- QUALIDADE DE CÓDIGO ---
+test-cov:
+	poetry run pytest tests/ --cov=backend.src
 
-# Verifica o código por erros e problemas de estilo com Ruff
+test-docker:
+	$(COMPOSE) --profile test run --rm backend-test
+
 lint:
 	poetry run ruff check .
 
-# Formata o código automaticamente com Black e Ruff
 format:
 	poetry run ruff format .
 	poetry run black .
 
-# --- EXECUÇÃO DO FRONTEND E BACKEND ---
-run-api:
-	poetry run uvicorn backend.src.api:app --reload --host 0.0.0.0
+build:
+	$(COMPOSE) build
 
-run-frontend:
-	poetry run streamlit run frontend/dashboard.py
-	
+up:
+	$(COMPOSE) up -d
 
-# --- LIMPEZA ---
+down:
+	$(COMPOSE) down
 
-# Limpa arquivos temporários do Python (cache e bytecode)
-# NOTA: NÃO remove postgres_data/ ou backend/data/ (dados persistentes)
+restart: down up
+
+ps:
+	$(COMPOSE) ps
+
+logs:
+	$(COMPOSE) logs -f
+
+logs-backend:
+	$(COMPOSE) logs -f backend
+
+up-test: up test-docker
+
 clean:
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 
-# --- CONFIGURAÇÃO ---
-
-# Um alvo "phony" diz ao Make que estes não são arquivos, mas sim comandos
-.PHONY: install run test lint format clean
+.PHONY: help install install-frontend run run-api run-frontend test test-cov test-docker lint format build up down restart ps logs logs-backend up-test clean

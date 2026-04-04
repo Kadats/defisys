@@ -55,6 +55,29 @@ services:
         condition: service_healthy
     restart: always
 
+  backend-test:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: test
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres_test:5432/defisys_test
+      - TEST_DATABASE_URL=postgresql://user:password@postgres_test:5432/defisys_test
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash}
+      - GROK_API_KEY=${GROK_API_KEY}
+    volumes:
+      - ./backend:/app/backend
+      - ./tests:/app/tests
+    depends_on:
+      postgres_test:
+        condition: service_healthy
+    command: ["/usr/local/bin/python", "-m", "pytest", "-q"]
+    profiles:
+      - test
+
   frontend:
     build:
       context: ./frontend

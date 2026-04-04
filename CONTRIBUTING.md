@@ -22,11 +22,11 @@ Não comite diretamente na `main`. Utilize branches de feature/fix e Pull Reques
 
 ## 2. Gerenciamento de Dependências (CRÍTICO)
 
-Este projeto utiliza **Poetry** para gerenciamento local e **requirements.txt** para o Docker. É vital manter os dois sincronizados.
+Este projeto utiliza **Poetry** como fonte única de dependências do backend. O Docker também instala dependências a partir de `pyproject.toml` e `poetry.lock`.
 
 ### Como Adicionar uma Nova Biblioteca
 
-**NUNCA** edite o `requirements.txt` manualmente.
+**NUNCA** adicione dependências editando arquivos gerados manualmente.
 
 1.  **Instale com Poetry:**
     ```bash
@@ -34,15 +34,9 @@ Este projeto utiliza **Poetry** para gerenciamento local e **requirements.txt** 
     ```
     *(Isso atualiza o `pyproject.toml` e o `poetry.lock`)*
 
-2.  **Atualize o requirements.txt (Obrigatório):**
-    Sempre que modificar as dependências, você deve regenerar o arquivo para o Docker:
+2.  **Commit:** Adicione ambos os arquivos ao git:
     ```bash
-    poetry run pip freeze > requirements.txt
-    ```
-
-3.  **Commit:** Adicione ambos os arquivos ao git:
-    ```bash
-    git add pyproject.toml poetry.lock requirements.txt
+    git add pyproject.toml poetry.lock
     ```
 
 ---
@@ -53,5 +47,21 @@ Antes de abrir um PR ou fazer um commit de feature, certifique-se de que nada fo
 
 ### Rodar Testes Unitários
 ```bash
-poetry run pytest
+make test
+```
 
+### Rodar Testes na Stack Docker
+```bash
+make test-docker
+```
+
+### Subir a Stack e Validar em Um Comando
+```bash
+make up-test
+```
+
+### Verificações de Qualidade
+```bash
+make lint
+make format
+```
