@@ -98,3 +98,20 @@ def test_fee_simulation_outside_range(setup_lp_magic_numbers):
 # NOTE: V1 strategy tests that used run_strategy_regime_switcher have been removed.
 # These tests are OBSOLETE for V2 architecture which uses the Strategy Pattern.
 # New tests should be written for BaseStrategy/BTCLiteStrategy once the interface stabilizes.
+
+def test_open_lp_db_failure_maintains_balance():
+    """Valida se uma falha no banco de dados na abertura de LP reverte/previne a dedução de saldo e gas fee."""
+    from backend.src.core.trading_engine import TradingEngine
+    import pandas as pd
+    
+    with patch('backend.src.core.trading_engine.log_open_position', return_value=None):
+        engine = TradingEngine(initial_capital_usd=1000.0, gas_fee_usd=15.0)
+        initial_balance = engine.usd_balance
+        
+        # Tentativa de abertura
+        engine.open_lp(500.0, 100.0, 400.0, 225.0, pd.Timestamp('2025-01-01'))
+        
+        # Saldo deve permanecer inalterado (nenhuma dedução de 500 ou 15)
+        assert engine.usd_balance == initial_balance
+        assert len(engine.active_lps) == 0
+

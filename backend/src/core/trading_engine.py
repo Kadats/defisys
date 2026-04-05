@@ -337,9 +337,6 @@ class TradingEngine:
                 f"Insufficient USD balance to open LP: need ${required_funds:.2f}, have ${self.usd_balance:.2f}"
             )
         
-        # Charge gas for opening an LP
-        self.usd_balance -= self.gas_fee_usd
-
         if range_lower >= range_upper:
             logger.warning(f"[{timestamp.date()}] Range inválido: Preço mínimo ${range_lower:.2f} é maior ou igual ao máximo ${range_upper:.2f}")
             return
@@ -358,9 +355,6 @@ class TradingEngine:
         if L == Decimal('0'):
             return
         
-        # CRITICAL FIX: Deduct capital from USD balance immediately after successful liquidity calc
-        self.usd_balance -= capital_usd
-
         new_lp = {
             "L": float(L), "range_lower": float(range_lower),
             "range_upper": float(range_upper), "open_timestamp": timestamp,
@@ -382,6 +376,10 @@ class TradingEngine:
         if position_id is None:
             logger.error("Falha ao registrar 'open_position' no DB. Abortando abertura de LP.")
             return
+
+        # DB inserção bem-sucedida, debita saldos
+        self.usd_balance -= self.gas_fee_usd
+        self.usd_balance -= capital_usd
 
         # Adiciona o ID do DB à nossa LP em memória
         new_lp["id"] = position_id
@@ -552,29 +550,29 @@ class TradingEngine:
                     self._emergency_cooldown_until = now + timedelta(days=365*2)
             return
 
-        # USE CASH: Try to rebalance using available cash
-        elif action == 'use_cash':
+        # USE CASH TO PAY DEBT: Try to rebalance using available cash
+        elif action == 'pay_debt_with_cash':
             available_cash = rebalance_options['available_cash']
-            if available_cash > 10:
-                # Buy and add to collateral
+            pay_amount = min(available_cash, self.total_debt_usd)
+            if pay_amount > 0:
                 ts = pd.Timestamp.now()
-                btc_bought = available_cash / current_price
-                self.buy_and_hodl(available_cash, current_price, timestamp=ts)
+                self.total_debt_usd -= pay_amount
+                self.usd_balance -= pay_amount
                 
-                # V13: Log debt repayment action (rebalance with cash)
+                # V13: Log debt repayment action
                 self._log_transaction(
                     timestamp=ts,
                     action_type="DEBT_REPAY",
                     btc_price=current_price,
-                    usd_amount=available_cash,
-                    btc_amount=btc_bought,
-                    fee_usd=self.gas_fee_usd,
-                    details="Emergency collateral boost to improve HF"
+                    usd_amount=pay_amount,
+                    btc_amount=0.0,
+                    fee_usd=0.0,
+                    details="Used available cash to pay down debt and improve HF"
                 )
                 
                 logger.info(
                     f"REBALANCE: {rebalance_options['reason']}. "
-                    f"Using ${available_cash:.2f} to buy collateral (Gas reserve protected)"
+                    f"Paid ${pay_amount:.2f} of debt using cash (Gas reserve protected)"
                 )
 
                 # Recompute HF to check if rebalance succeeded
