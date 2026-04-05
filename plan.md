@@ -118,7 +118,7 @@ Parar de tratar as 5 estratégias como equivalentes e definir o papel exato de c
 - Cada estratégia tem mandato claro.
 - Não existem estratégias “misturando tudo” sem objetivo mensurável.
 
-## Fase 4: Implementar arquitetura por regime com foco em USD
+## Fase 4: Implementar arquitetura por regime com foco em USD [/]
 
 ### Objetivo
 Trocar a lógica “uma estratégia tenta resolver tudo” por uma arquitetura com especialização por regime.
