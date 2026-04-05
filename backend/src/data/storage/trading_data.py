@@ -301,6 +301,9 @@ def create_simulation_summary_table(conn: PGConnection):
                     alpha_vs_hold DOUBLE PRECISION
                 )
             """)
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS run_id VARCHAR(50)")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS max_drawdown DOUBLE PRECISION")
+            cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS sharpe_ratio DOUBLE PRECISION")
             cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS wallet_spot_total_usd DOUBLE PRECISION")
             cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS wallet_lp_value_usd DOUBLE PRECISION")
             cursor.execute("ALTER TABLE simulation_summary ADD COLUMN IF NOT EXISTS lp_active_count INTEGER")

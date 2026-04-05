@@ -58,7 +58,7 @@ Eliminar bugs que podem distorcer saldo, risco, health factor ou resultado do ba
 - Saldo USD, dívida, colateral e posições permanecem consistentes após exceções.
 - Suite alvo: `tests/test_trading_engine.py` e `tests/test_risk_manager.py` totalmente verde.
 
-## Fase 2: Corrigir framework de avaliação
+## Fase 2: Corrigir framework de avaliação [x]
 
 ### Objetivo
 Parar de otimizar estratégias com métricas insuficientes ou janelas enganosas.
@@ -69,13 +69,13 @@ Parar de otimizar estratégias com métricas insuficientes ou janelas enganosas.
 - `backend/src/ai/prediction.py`
 - `backend/src/data/pipeline.py`
 - `backend/src/config.py`
-- `backend/src/data/storage.py`
+- `backend/src/data/storage/trading_data.py`
 
 ### Tarefas
 
-1. Unificar a definição do target do modelo entre config, pipeline e documentação.
-2. Remover dependência de avaliação por `accuracy` como métrica principal.
-3. Adicionar relatório padrão com:
+- [x] 1. Unificar a definição do target do modelo entre config, pipeline e documentação.
+- [x] 2. Remover dependência de avaliação por `accuracy` como métrica principal.
+- [x] 3. Adicionar relatório padrão com:
    - retorno final em USD;
    - retorno anualizado;
    - max drawdown;
@@ -84,8 +84,8 @@ Parar de otimizar estratégias com métricas insuficientes ou janelas enganosas.
    - alpha vs cash;
    - número de trades;
    - retorno por regime.
-4. Rodar backtests em múltiplas janelas fixas: bull, bear, sideways e histórico completo.
-5. Persistir resultados por `run_id` para comparação e auditoria.
+- [x] 4. Rodar backtests em múltiplas janelas fixas: bull, bear, sideways e histórico completo.
+- [x] 5. Persistir resultados por `run_id` para comparação e auditoria.
 
 ### Critério de aceite
 

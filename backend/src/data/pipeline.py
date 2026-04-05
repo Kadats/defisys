@@ -514,10 +514,10 @@ def get_full_prepared_data() -> pd.DataFrame:
         logger.info(f"Aplicando shift(1) em {len(cols_to_shift)} colunas de features para evitar Look-ahead Bias.")
         all_klines_df[cols_to_shift] = all_klines_df[cols_to_shift].shift(1)
 
-        # 2. Create Target (trend over next 12 candles / 48h)
-        future_close = all_klines_df['Close'].shift(-12)
+        # 2. Create Target (trend over next candles)
+        future_close = all_klines_df['Close'].shift(-ML_PREDICTION_HORIZON)
         log_return = np.log(future_close / all_klines_df['Close'])
-        all_klines_df['Target_Trend'] = (log_return > 0.02).astype(int)
+        all_klines_df['Target_Trend'] = (log_return > ML_TARGET_MIN_CHANGE).astype(int)
 
         # 3. Clean data
         REQUIRED_COLUMNS = feature_cols + ['Target_Trend']
@@ -602,4 +602,6 @@ def get_predictions_from_db() -> pd.DataFrame:
         return pd.DataFrame()
     finally:
         if conn:
+            conn.close()
+
             conn.close()

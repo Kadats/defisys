@@ -309,9 +309,28 @@ def run_simulation(
     price_initial = float(simulation_df.iloc[0]['Close'])
     btc_benchmark_profit_percentage = ((price_final - price_initial) / price_initial) * 100
     
+    # Calculate Max Drawdown and Sharpe Ratio
+    equity_series = pd.Series(engine.portfolio_history)
+    max_drawdown = 0.0
+    sharpe_ratio = 0.0
+    if not equity_series.empty:
+        cummax = equity_series.cummax()
+        drawdown = (cummax - equity_series) / cummax
+        max_drawdown = float(drawdown.max() * 100)
+        
+        returns = equity_series.pct_change().dropna()
+        if not returns.empty and returns.std() != 0:
+            # Annualized Sharpe (assuming 6 4h-candles per day, 365 days = 2190 candles/year)
+            sharpe_ratio = float((returns.mean() / returns.std()) * np.sqrt(2190))
+    
     backtest_results['btc_benchmark_profit_percentage'] = btc_benchmark_profit_percentage
     backtest_results['start_date'] = simulation_df.iloc[0]['Open_time'].isoformat()
     backtest_results['end_date'] = simulation_df.iloc[-1]['Open_time'].isoformat()
+    backtest_results['max_drawdown'] = max_drawdown
+    backtest_results['sharpe_ratio'] = sharpe_ratio
+    
+    run_id = str(uuid.uuid4())
+    backtest_results['run_id'] = run_id
     
     # Token-based performance metrics
     initial_token_balance = engine.initial_capital / price_initial
@@ -493,6 +512,24 @@ def run_trading_system(
     # FIX: Adicionar metadados de data ao resultado
     backtest_results['start_date'] = simulation_df.iloc[0]['Open_time'].isoformat()
     backtest_results['end_date'] = simulation_df.iloc[-1]['Open_time'].isoformat()
+    
+    # Calculate Max Drawdown and Sharpe Ratio
+    equity_series = pd.Series(engine.portfolio_history)
+    max_drawdown = 0.0
+    sharpe_ratio = 0.0
+    if not equity_series.empty:
+        cummax = equity_series.cummax()
+        drawdown = (cummax - equity_series) / cummax
+        max_drawdown = float(drawdown.max() * 100)
+        
+        returns = equity_series.pct_change().dropna()
+        if not returns.empty and returns.std() != 0:
+            sharpe_ratio = float((returns.mean() / returns.std()) * np.sqrt(2190))
+    
+    run_id = str(uuid.uuid4())
+    backtest_results['max_drawdown'] = max_drawdown
+    backtest_results['sharpe_ratio'] = sharpe_ratio
+    backtest_results['run_id'] = run_id
     
     # ========== NOVAS MÉTRICAS: Token-Based Performance ==========
     # Calcular saldo inicial em tokens (BTC): quanto BTC teríamos se comprássemos tudo no início
