@@ -145,7 +145,7 @@ class BTCLiteStrategy(BaseStrategy):
             return  # No debt to deleverage
         
         # Calculate Health Factor
-        collateral_value = engine.btc_hodl_balance * current_price
+        collateral_value = engine.btc_collateral_balance * current_price
         hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
         
         # Only deleverage if HF drops below threshold
@@ -300,6 +300,10 @@ class BTCLiteStrategy(BaseStrategy):
             # No existing BTC: Buy new collateral with allocation
             engine.buy_and_hodl(capital_to_allocate, current_price)
             logger.info(f"[{timestamp.date()}] BULLISH: No existing BTC. Buying {capital_to_allocate/current_price:.6f} BTC as collateral.")
+            
+        # 1.5 Move ALL BTC to collateral
+        if engine.btc_hodl_balance > 0:
+            engine.add_collateral(engine.btc_hodl_balance)
         
         # 2. Borrow against collateral (with HF guardrail)
         self._execute_safe_borrow(engine, timestamp, current_price)
@@ -317,13 +321,13 @@ class BTCLiteStrategy(BaseStrategy):
         Safely borrow against collateral with HF simulation and scaling.
         V13: Added "Covered Borrow" constraint - limit debt to MAX_DEBT_TO_RESERVE_RATIO * cash reserve.
         """
-        collateral_value = engine.btc_hodl_balance * current_price
+        collateral_value = engine.btc_collateral_balance * current_price
         max_borrowable = collateral_value * LOAN_TO_VALUE_RATIO
 
         # V14: Cap total leverage at conservative LTV
         debt_cap = collateral_value * MAX_DEBT_RATIO
         max_borrowable = max(0.0, min(max_borrowable, debt_cap - engine.total_debt_usd))
-        logger.debug(f"[{timestamp.date()}] BULLISH: Collateral = {engine.btc_hodl_balance:.6f} BTC @ ${current_price:.2f} = ${collateral_value:.2f}")
+        logger.debug(f"[{timestamp.date()}] BULLISH: Collateral = {engine.btc_collateral_balance:.6f} BTC @ ${current_price:.2f} = ${collateral_value:.2f}")
         
         # Apply scaling: only borrow a fraction of available borrowing power
         amount_to_borrow = max_borrowable * ENTRY_SIZE_PCT
@@ -388,7 +392,7 @@ class BTCLiteStrategy(BaseStrategy):
         Execute recursive loop: use borrowed funds for 50% collateral, 50% LP.
         V3: Uses ATR for dynamic range calculation.
         """
-        collateral_value = engine.btc_hodl_balance * current_price
+        collateral_value = engine.btc_collateral_balance * current_price
         hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
         
         # Only deploy surplus cash beyond the dynamic reserve and gas buffer
@@ -538,7 +542,7 @@ class BTCLiteStrategy(BaseStrategy):
             return
         
         # Check Health Factor for margin reuse decision
-        collateral_value = engine.btc_hodl_balance * current_price
+        collateral_value = engine.btc_collateral_balance * current_price
         hf = (collateral_value * 0.80) / engine.total_debt_usd if engine.total_debt_usd > 0 else 999.0
         
         if prediction == 1:  # BULLISH

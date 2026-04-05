@@ -31,7 +31,7 @@ Evoluir o DefiSys para maximizar retorno ajustado a risco em **USD**, com opera�
 - Nenhuma estratégia nova entra em produção sem comparação contra os baselines existentes.
 - Resultados sempre devem ser comparados em janela longa e por regime de mercado, nunca só em 30 dias.
 
-## Fase 1: Corrigir segurança do motor [/]
+## Fase 1: Corrigir segurança do motor [x]
 
 ### Objetivo
 Eliminar bugs que podem distorcer saldo, risco, health factor ou resultado do backtest.
@@ -49,8 +49,8 @@ Eliminar bugs que podem distorcer saldo, risco, health factor ou resultado do ba
 - [x] 1. Corrigir `open_lp` para não consumir caixa se a persistência falhar.
 - [x] 2. Corrigir fluxo de rebalanceamento defensivo para usar a mesma ação entre `RiskManager` e `TradingEngine`.
 - [x] 3. Implementar de fato os caminhos “usar caixa para reduzir risco” e “repay debt”.
-- [ ] 4. Corrigir cálculos de health factor que hoje usam saldo errado em pontos críticos do `BTCLiteStrategy`.
-- [ ] 5. Isolar o motor de banco nos testes para evitar falhas por infraestrutura.
+- [x] 4. Corrigir cálculos de health factor que hoje usam saldo errado em pontos críticos do `BTCLiteStrategy`.
+- [x] 5. Isolar o motor de banco nos testes para evitar falhas por infraestrutura.
 
 ### Critério de aceite
 

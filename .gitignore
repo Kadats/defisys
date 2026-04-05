@@ -51,3 +51,4 @@ assets/
 frontend/node_modules/
 
 .codex
+.gemini
