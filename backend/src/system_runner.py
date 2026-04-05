@@ -1,5 +1,7 @@
 import logging
 import pandas as pd
+import numpy as np
+import uuid
 import os
 
 from backend.src.data.pipeline import get_full_prepared_data

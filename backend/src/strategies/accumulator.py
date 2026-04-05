@@ -162,23 +162,26 @@ class AccumulatorStrategy(BaseStrategy):
         
         return None
     
-    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
+    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> dict:
         """
         Execute the BTC Accumulator strategy for a single time step.
-        
+
         Flow:
         1. Check DEFENSE MODE (liquidation risk)
         2. Check COOL-DOWN (prevent over-trading)
         3. Consult LLM Risk Agent for final decision
         4. Route to appropriate execution method based on agent recommendation
-        
+
         Args:
             row: Current market data with indicators and predictions
             engine: TradingEngine instance with portfolio state
             timestamp: Current timestamp
+
+        Returns:
+            dict: Standard decision dictionary
         """
-        current_price = row['Close']
-        # CRITICAL FIX: Handle NaN values in predictions (from missing data in early timeseries)
+        decision = {"action": "HOLD", "sizing": 0.0, "reason": "No entry/exit signals", "expected_risk": "Med"}
+        current_price = row['Close']        # CRITICAL FIX: Handle NaN values in predictions (from missing data in early timeseries)
         pred_value = row.get('prediction', 0)
         prediction = int(pred_value) if not pd.isna(pred_value) else 0
         
@@ -193,7 +196,8 @@ class AccumulatorStrategy(BaseStrategy):
         is_defense_mode = engine.health_factor < 1.5
         if is_defense_mode and has_leverage:
             self._execute_defense_mode(engine, current_price, timestamp)
-            return
+            decision.update({"action": "DEFENSE_MODE", "sizing": 1.0, "reason": "Low Health Factor", "expected_risk": "Low"})
+            return decision
         
         # --- COOL-DOWN CHECK: Prevent over-trading by enforcing minimum time between entries ---
         if not self._is_cooldown_passed(timestamp):
@@ -201,7 +205,8 @@ class AccumulatorStrategy(BaseStrategy):
             # Still maintain existing positions even during cool-down
             if len(engine.active_lps) > 0:
                 self._maintain_positions(engine, current_price, timestamp, prediction_proba=prediction_proba)
-            return
+            decision.update({"reason": "Cooldown active"})
+            return decision
         
         # --- CONSULT RISK AGENT: LLM-based decision making (with Trigger Architecture) ---
         # Only call Gemini API if there's a clear opportunity (save API quota)
@@ -335,6 +340,9 @@ class AccumulatorStrategy(BaseStrategy):
             logger.warning(f"[{timestamp.date()}] ⚠️  Unknown agent action: {action}. Maintaining positions.")
             if len(engine.active_lps) > 0:
                 self._maintain_positions(engine, current_price, timestamp, prediction_proba=prediction_proba)
+        
+        decision.update({"action": action, "sizing": amount_pct, "reason": reason, "expected_risk": "High"})
+        return decision
     
     def _execute_defense_mode(
         self, 

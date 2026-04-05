@@ -20,7 +20,7 @@ class BaseStrategy(ABC):
     """
     
     @abstractmethod
-    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
+    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> dict:
         """
         Execute the strategy logic for a single time step.
         
@@ -28,6 +28,13 @@ class BaseStrategy(ABC):
             row: Current market data (OHLCV + indicators)
             engine: TradingEngine instance with portfolio state
             timestamp: Current timestamp
+            
+        Returns:
+            dict: Decision object containing:
+                  - action (str): Action taken (e.g., 'BUY', 'SELL', 'HOLD', 'OPEN_LP')
+                  - sizing (float): Sizing of the action
+                  - reason (str): Reason for the action
+                  - expected_risk (str): Expected risk ('Low', 'Med', 'High')
         """
         pass
     

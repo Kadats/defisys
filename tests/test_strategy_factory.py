@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+import uuid
 
 from backend.src import system_runner
 import backend.src.data.pipeline as data_pipeline
@@ -37,6 +38,7 @@ class DummyEngine:
         self.health_factor = 999.0
         self.active_lps = []
         self.transaction_log = []
+        self.portfolio_history = [initial_capital_usd] * 10
         self.last_strategy = None
 
     def run(self, df: pd.DataFrame, strategy) -> dict:

@@ -1,6 +1,11 @@
 """
 Smart DCA Strategy (Dollar Cost Averaging).
 
+[Benchmark de Comparação]
+Objetivo: USD (Benchmark DCA)
+Regime Ideal: N/A (Baseline para testes)
+Risco Esperado: Médio (Spot puro, risco de drawdown direcional)
+
 Strategy that splits entry capital into 4 bullets (25% each):
 - 1st Bullet: Entry when prediction_proba >= 0.55
 - 2nd, 3rd, 4th Bullets: Entry if price drops >= 5% from average entry AND prediction_proba >= 0.52
@@ -28,9 +33,10 @@ class SmartDCAStrategy(BaseStrategy):
     def get_name(self) -> str:
         return "SmartDCAStrategy"
 
-    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
+    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> dict:
         current_price = float(row['Close'])
         prediction_proba = float(row.get('prediction_proba', 0.50))
+        decision = {"action": "HOLD", "sizing": 0.0, "reason": "No signal", "expected_risk": "Low"}
 
         # --- EXIT LOGIC ---
         if self.orders_placed > 0 and engine.btc_hodl_balance > 0:
@@ -49,7 +55,8 @@ class SmartDCAStrategy(BaseStrategy):
                 self.average_entry_price = 0.0
                 self.orders_placed = 0
                 self.bullet_size = 0.0
-                return
+                decision.update({"action": "SELL", "sizing": 1.0, "reason": reason, "expected_risk": "Low"})
+                return decision
 
         # --- ENTRY LOGIC ---
         
@@ -61,7 +68,8 @@ class SmartDCAStrategy(BaseStrategy):
                 engine.buy_and_hodl(self.bullet_size, current_price, timestamp)
                 self.average_entry_price = current_price
                 self.orders_placed = 1
-                return
+                decision.update({"action": "BUY", "sizing": 0.25, "reason": "1st Bullet", "expected_risk": "Med"})
+                return decision
 
         # 2. Subsequent DCA Entries
         if 0 < self.orders_placed < self.max_orders and engine.usd_balance >= self.bullet_size:
@@ -77,3 +85,7 @@ class SmartDCAStrategy(BaseStrategy):
                 
                 engine.buy_and_hodl(self.bullet_size, current_price, timestamp)
                 self.orders_placed += 1
+                decision.update({"action": "BUY", "sizing": 0.25, "reason": f"Bullet {self.orders_placed}", "expected_risk": "Med"})
+        
+        return decision
+

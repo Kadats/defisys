@@ -1,6 +1,11 @@
 """
 BTC Lite Strategy (V13 - Smart Reserve).
 
+[Estratégia Principal (Main)]
+Objetivo: USD (Maximizar retorno absoluto em dólar)
+Regime Ideal: Bull / Sideways
+Risco Esperado: Médio/Alto (Exposição direcional e alavancagem dinâmica)
+
 Strategy that uses ML predictions to make leveraged trading decisions:
 - prediction == 1 (BULLISH): Leverage existing collateral + amplify
 - prediction == 0 (NEUTRAL): Hold BTC (60% HODL + 40% LP), keep 20% USD Reserve
@@ -86,7 +91,7 @@ class BTCLiteStrategy(BaseStrategy):
 
         return usd_surplus
     
-    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
+    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> dict:
         """
         Execute the BTC Lite strategy for a single time step.
         
@@ -94,7 +99,11 @@ class BTCLiteStrategy(BaseStrategy):
             row: Current market data with indicators and predictions
             engine: TradingEngine instance with portfolio state
             timestamp: Current timestamp
+            
+        Returns:
+            dict: Standardized decision dictionary
         """
+        decision = {"action": "HOLD", "sizing": 0.0, "reason": "No clear signal", "expected_risk": "Med"}
         current_price = row['Close']
         
         # Flywheel equity snapshot
@@ -103,6 +112,7 @@ class BTCLiteStrategy(BaseStrategy):
         # --- 0. SMART DELEVERAGING: Check if we need to defend HF with cash reserve ---
         if engine.total_debt_usd > 0:
             self._handle_smart_deleveraging(engine, current_price, timestamp)
+            decision.update({"action": "DELEVERAGE_CHECK", "sizing": 1.0, "reason": "Deleveraging pass", "expected_risk": "Low"})
         
         # --- 1. CLOSING LOGIC: Close out-of-range LPs ---
         self._handle_lp_closures(engine, current_price, timestamp)
@@ -132,9 +142,13 @@ class BTCLiteStrategy(BaseStrategy):
         if engine.total_debt_usd == 0:
             # STATE 1: Pre-Leverage (waiting for BULLISH signal)
             self._handle_pre_leverage_state(row, engine, timestamp, current_price, prediction, target_reserve)
+            decision.update({"action": "PRE_LEVERAGE_EXEC", "sizing": 1.0, "reason": f"Pred: {prediction}", "expected_risk": "Med"})
         else:
             # STATE 2: Post-Leverage (already leveraged and operating)
             self._handle_post_leverage_state(row, engine, timestamp, current_price, prediction, target_reserve)
+            decision.update({"action": "POST_LEVERAGE_EXEC", "sizing": 1.0, "reason": f"Pred: {prediction}", "expected_risk": "High"})
+            
+        return decision
     
     def _handle_smart_deleveraging(self, engine: 'TradingEngine', current_price: float, timestamp: pd.Timestamp) -> None:
         """

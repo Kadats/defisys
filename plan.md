@@ -93,7 +93,7 @@ Parar de otimizar estratégias com métricas insuficientes ou janelas enganosas.
 - Não existe mais divergência entre target configurado e target real.
 - O time consegue responder “essa estratégia ganha em USD onde e por quê?”.
 
-## Fase 3: Reclassificar o papel das estratégias existentes
+## Fase 3: Reclassificar o papel das estratégias existentes [x]
 
 ### Objetivo
 Parar de tratar as 5 estratégias como equivalentes e definir o papel exato de cada uma.

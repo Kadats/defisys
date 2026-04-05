@@ -1,6 +1,11 @@
 """
 Pure Spot Strategy (100% In/Out Baseline).
 
+[Benchmark de Comparação]
+Objetivo: USD (Benchmark Passivo)
+Regime Ideal: N/A (Funciona como Baseline)
+Risco Esperado: Médio (Spot puro, sem alavancagem)
+
 Strategy that operates only with market buys and sells (Spot):
 - BUY: 90% of USD balance if prediction_proba >= 0.54
 - SELL: If Profit >= 5% OR Loss <= -5% OR prediction_proba < 0.48
@@ -24,9 +29,10 @@ class PureSpotStrategy(BaseStrategy):
     def get_name(self) -> str:
         return "PureSpotStrategy"
 
-    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
+    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> dict:
         current_price = float(row['Close'])
         prediction_proba = float(row.get('prediction_proba', 0.50))
+        decision = {"action": "HOLD", "sizing": 0.0, "reason": "No signal", "expected_risk": "Low"}
 
         # Check for SELL signals if we hold BTC
         if engine.btc_hodl_balance > 0 and self.average_entry_price > 0:
@@ -44,7 +50,8 @@ class PureSpotStrategy(BaseStrategy):
                 logger.info(f"[{timestamp.date()}] PureSpot SELL: {reason}")
                 engine.sell_btc(engine.btc_hodl_balance, current_price, timestamp)
                 self.average_entry_price = 0.0
-                return
+                decision.update({"action": "SELL", "sizing": 1.0, "reason": reason, "expected_risk": "Low"})
+                return decision
 
         # Check for BUY signal if we are in cash
         if engine.btc_hodl_balance == 0 and engine.usd_balance > 0:
@@ -54,3 +61,6 @@ class PureSpotStrategy(BaseStrategy):
                 logger.info(f"[{timestamp.date()}] PureSpot BUY: ML {prediction_proba:.2f} | Amount: ${amount_to_spend:.2f}")
                 engine.buy_and_hodl(amount_to_spend, current_price, timestamp)
                 self.average_entry_price = current_price
+                decision.update({"action": "BUY", "sizing": 0.9, "reason": f"ML {prediction_proba:.2f}", "expected_risk": "Med"})
+        
+        return decision

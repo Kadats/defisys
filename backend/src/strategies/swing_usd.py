@@ -1,6 +1,11 @@
 """
 Swing USD Strategy (V2 - DeFi-Enhanced Liquidity Pool Integration).
 
+[Preservação/Crescimento (Sub-estratégia)]
+Objetivo: USD (Acumular e proteger capital base)
+Regime Ideal: Bear / Sideways
+Risco Esperado: Médio (Foco em proteção e farming passivo)
+
 Strategy designed for traders who want to maximize USD holdings through swing trades with DeFi mechanics:
 - BUY LOW: Enter Directional LP positions when market is oversold with ML confirmation
 - IDLE YIELD: Farm fees with Wide Range LP when out of the market (40% capital)
@@ -205,7 +210,7 @@ class SwingUSDStrategy(BaseStrategy):
         )
         return None
     
-    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> None:
+    def execute(self, row: pd.Series, engine: 'TradingEngine', timestamp: pd.Timestamp) -> dict:
         """
         Execute the Swing USD strategy for a single time step.
         
@@ -218,7 +223,11 @@ class SwingUSDStrategy(BaseStrategy):
             row: Current market data with indicators and predictions
             engine: TradingEngine instance with portfolio state
             timestamp: Current timestamp
+            
+        Returns:
+            dict: Standard decision dictionary
         """
+        decision = {"action": "HOLD", "sizing": 0.0, "reason": "No entry/exit signals", "expected_risk": "Med"}
         current_price = row['Close']
         
         # Handle NaN values in predictions (from missing data in early timeseries)
@@ -332,6 +341,7 @@ class SwingUSDStrategy(BaseStrategy):
                         f"Range: [${range_lower:.2f} - ${range_upper:.2f}]"
                     )
                     logger.info(f"[{timestamp.date()}] 📝 Reason: {entry_signal['reason']}")
+                    decision.update({"action": "DIRECTIONAL_ENTRY", "sizing": POSITION_SIZE_PERCENT, "reason": entry_signal['reason'], "expected_risk": "Med"})
                 else:
                     logger.error(
                         f"[{timestamp.date()}] ❌ Failed to open directional LP. Check engine.open_lp() logs."
@@ -367,6 +377,7 @@ class SwingUSDStrategy(BaseStrategy):
                             f"[{timestamp.date()}] 🌾 IDLE YIELD LP: Opened LP #{lp_id} with ${idle_amount:.2f} "
                             f"@ ${current_price:.2f}. Range: [${range_lower:.2f} - ${range_upper:.2f}] (Wide range for low IL)"
                         )
+                        decision.update({"action": "IDLE_YIELD", "sizing": IDLE_YIELD_PERCENT, "reason": "No entry signal", "expected_risk": "Low"})
                     else:
                         logger.debug(
                             f"[{timestamp.date()}] ⚠️ Failed to open idle yield LP."
@@ -376,3 +387,4 @@ class SwingUSDStrategy(BaseStrategy):
                         f"[{timestamp.date()}] 💤 Idle (No entry signal). Capital=${safe_balance:.2f}, "
                         f"Idle Target=${idle_amount:.2f}, Min=${MIN_POSITION_USD:.2f}"
                     )
+        return decision
