@@ -164,7 +164,7 @@ Implementar em duas etapas:
 - Em janelas de bear, a estratégia principal perde menos que BTC hold.
 - Idealmente, gera alpha positivo em USD mesmo quando BTC cai.
 
-## Fase 6: Modelagem preditiva
+## Fase 6: Modelagem preditiva [/]
 
 ### Objetivo
 Evoluir a inteligência sem cair em complexidade prematura.

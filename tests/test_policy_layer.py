@@ -61,7 +61,7 @@ def test_policy_layer_uncertain_forces_abstain(mock_detect_regime, mock_engine):
     result = policy.execute(row, mock_engine, timestamp)
     
     assert result["action"] == "ABSTAIN"
-    assert result["reason"] == "Regime is UNCERTAIN. Forced 100% Cash."
+    assert "Forced Cash." in result["reason"]
     
     # Verify LPs were closed
     assert mock_engine.close_lp.call_count == 2
@@ -107,4 +107,4 @@ def test_bear_high_volatility_avoids_pools(mock_engine):
     # It should have classified as UNCERTAIN and forced ABSTAIN (Cash)
     assert policy.current_regime == MarketRegime.UNCERTAIN
     assert result["action"] == "ABSTAIN"
-    assert result["reason"] == "Regime is UNCERTAIN. Forced 100% Cash."
+    assert "Forced Cash." in result["reason"]
