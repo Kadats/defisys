@@ -76,3 +76,16 @@ def test_detect_regime_uncertain_extreme_greed_volatility():
         'prediction_proba': 0.9
     })
     assert detect_regime(row) == MarketRegime.UNCERTAIN
+
+def test_detect_regime_rapid_fgi_drop():
+    # Rapid drop in Fear & Greed Index (> 20 points)
+    row = pd.Series({
+        'Close': 40000,
+        'SMA_200': 35000,
+        'RSI': 50,
+        'Fear_Greed_Index': 40,
+        'FGI_Drop_24h': 25,
+        'ATR': 1000,
+        'prediction_proba': 0.4
+    })
+    assert detect_regime(row) == MarketRegime.UNCERTAIN

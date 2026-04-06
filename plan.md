@@ -141,7 +141,7 @@ Trocar a lógica “uma estratégia tenta resolver tudo” por uma arquitetura c
 - O sistema não tenta usar o mesmo comportamento em todos os mercados.
 - Existe caminho explícito de defesa e/ou ganho em bear market.
 
-## Fase 5: Bear market de verdade
+## Fase 5: Bear market de verdade [/]
 
 ### Objetivo
 Fazer o sistema ter tese clara para queda, orientada a USD.

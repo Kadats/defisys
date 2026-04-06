@@ -17,7 +17,10 @@ class PolicyLayerStrategy(BaseStrategy):
     
     def __init__(self, use_llm: bool = False):
         self.bull_strategy = BTCLiteStrategy()
-        self.bear_strategy = SwingUSDStrategy(use_llm=use_llm)
+        # Dual Path for BEAR Market (Fase 5)
+        self.bear_strategy_yield = SwingUSDStrategy(use_llm=use_llm, mode="YIELD_PRESERVATION")
+        # self.bear_strategy_short = AggressiveShortStrategy() # Placeholder para Fase 5.2
+        
         self.sideways_strategy = SwingUSDStrategy(use_llm=use_llm) # SwingUSD can handle mean reversion/sideways
         self.current_regime = MarketRegime.UNCERTAIN
 
@@ -34,7 +37,20 @@ class PolicyLayerStrategy(BaseStrategy):
             return self.bull_strategy.execute(row, engine, timestamp)
             
         elif self.current_regime == MarketRegime.BEAR:
-            return self.bear_strategy.execute(row, engine, timestamp)
+            # Dual Path Architecture for Bear Market
+            bear_path = "YIELD_PRESERVATION" # Path A
+            # bear_path = "AGGRESSIVE_SHORT" # Path B (Placeholder)
+            
+            if bear_path == "YIELD_PRESERVATION":
+                return self.bear_strategy_yield.execute(row, engine, timestamp)
+            elif bear_path == "AGGRESSIVE_SHORT":
+                # Not implemented yet
+                return {
+                    "action": "HOLD",
+                    "sizing": 0.0,
+                    "reason": "Aggressive Short not implemented",
+                    "expected_risk": "High"
+                }
             
         elif self.current_regime == MarketRegime.SIDEWAYS:
             return self.sideways_strategy.execute(row, engine, timestamp)

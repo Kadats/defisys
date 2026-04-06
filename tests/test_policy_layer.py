@@ -34,8 +34,8 @@ def test_policy_layer_bear_routes_to_swing_usd(mock_detect_regime, mock_engine):
     mock_detect_regime.return_value = MarketRegime.BEAR
     
     policy = PolicyLayerStrategy()
-    policy.bear_strategy = MagicMock()
-    policy.bear_strategy.execute.return_value = {"action": "BEAR_ACTION"}
+    policy.bear_strategy_yield = MagicMock()
+    policy.bear_strategy_yield.execute.return_value = {"action": "BEAR_ACTION"}
     
     row = pd.Series({'Close': 30000, 'ATR': 100})
     timestamp = pd.Timestamp('2024-01-01')
@@ -43,7 +43,7 @@ def test_policy_layer_bear_routes_to_swing_usd(mock_detect_regime, mock_engine):
     result = policy.execute(row, mock_engine, timestamp)
     
     assert result["action"] == "BEAR_ACTION"
-    policy.bear_strategy.execute.assert_called_once_with(row, mock_engine, timestamp)
+    policy.bear_strategy_yield.execute.assert_called_once_with(row, mock_engine, timestamp)
 
 @patch('backend.src.core.policy_layer.detect_regime')
 def test_policy_layer_uncertain_forces_abstain(mock_detect_regime, mock_engine):
@@ -86,3 +86,25 @@ def test_policy_layer_sideways_routes_to_sideways(mock_detect_regime, mock_engin
     
     assert result["action"] == "SIDEWAYS_ACTION"
     policy.sideways_strategy.execute.assert_called_once_with(row, mock_engine, timestamp)
+
+def test_bear_high_volatility_avoids_pools(mock_engine):
+    # Do not mock detect_regime, use the real one to test the integration.
+    # Scenario: Price is below SMA200 (normally BEAR), but FGI dropped rapidly (> 20).
+    row = pd.Series({
+        'Close': 30000,
+        'SMA_200': 40000,
+        'RSI': 30,
+        'Fear_Greed_Index': 20,
+        'FGI_Drop_24h': 25,  # Rapid drop!
+        'ATR': 1000,
+        'prediction_proba': 0.3
+    })
+    timestamp = pd.Timestamp('2024-01-01')
+    
+    policy = PolicyLayerStrategy()
+    result = policy.execute(row, mock_engine, timestamp)
+    
+    # It should have classified as UNCERTAIN and forced ABSTAIN (Cash)
+    assert policy.current_regime == MarketRegime.UNCERTAIN
+    assert result["action"] == "ABSTAIN"
+    assert result["reason"] == "Regime is UNCERTAIN. Forced 100% Cash."

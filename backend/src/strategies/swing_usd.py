@@ -67,17 +67,19 @@ class SwingUSDStrategy(BaseStrategy):
     - DeFi Integration: Uses Liquidity Pools for fee farming + directional exposure
     """
     
-    def __init__(self, use_llm: bool = False):
+    def __init__(self, use_llm: bool = False, mode: str = "DEFAULT"):
         """
         Initialize strategy with state tracking.
         
         Args:
             use_llm: If True, consult Gemini API for decisions. If False, use heuristic only (default).
+            mode: Strategy mode (e.g., 'DEFAULT', 'YIELD_PRESERVATION').
         """
         super().__init__()
         self.average_entry_price = 0.0    # Track average entry price for P&L calculations
         self.last_trade_time = None        # Track last trade timestamp for cool-down
         self.use_llm = use_llm             # LLM toggle (not used in V1, reserved for future)
+        self.mode = mode                   # Strategy mode
     
     def _is_cooldown_passed(self, current_time: pd.Timestamp) -> bool:
         """
@@ -293,8 +295,30 @@ class SwingUSDStrategy(BaseStrategy):
                 logger.debug(
                     f"[{timestamp.date()}] Skipping entry due to active cool-down period."
                 )
-                return
+                return decision
             
+            # --- FASE 5: YIELD PRESERVATION MODE (BEAR MARKET) ---
+            if self.mode == "YIELD_PRESERVATION":
+                safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD - MIN_RESERVE_USD)
+                idle_amount = safe_balance * IDLE_YIELD_PERCENT
+                
+                if idle_amount >= MIN_POSITION_USD:
+                    logger.info(
+                        f"[{timestamp.date()}] 🛡️ YIELD PRESERVATION: Stablecoin LP simulation. "
+                        f"Allocating ${idle_amount:.2f} to Delta-Neutral Stable Pool (Mocked as Cash)."
+                    )
+                    decision.update({
+                        "action": "YIELD_PRESERVATION_STABLE_LP",
+                        "sizing": IDLE_YIELD_PERCENT,
+                        "reason": "Bear market yield focus (Stablecoin LP mock)",
+                        "expected_risk": "Low"
+                    })
+                else:
+                    logger.debug(
+                        f"[{timestamp.date()}] 💤 Yield Preservation Idle (Capital=${safe_balance:.2f} < Min=${MIN_POSITION_USD:.2f})"
+                    )
+                return decision
+
             # Check entry conditions
             entry_signal = self._check_entry_conditions(rsi, prediction_proba, timestamp)
             

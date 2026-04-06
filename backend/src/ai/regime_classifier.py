@@ -26,6 +26,7 @@ def detect_regime(row: pd.Series) -> MarketRegime:
         prediction_proba = float(row.get('prediction_proba', 0.5))
         fgi = float(row.get('Fear_Greed_Index', 50))
         atr = float(row.get('ATR', 0))
+        fgi_drop = float(row.get('FGI_Drop_24h', 0))
     except Exception:
         return MarketRegime.UNCERTAIN
 
@@ -39,6 +40,10 @@ def detect_regime(row: pd.Series) -> MarketRegime:
     is_high_volatility = atr_pct > 0.05
     
     if is_high_volatility and (fgi < 25 or fgi > 75):
+        return MarketRegime.UNCERTAIN
+
+    # 2.6 Check for rapid drop in Fear & Greed Index (UNCERTAIN for total abstention)
+    if fgi_drop > 20:
         return MarketRegime.UNCERTAIN
 
     # 3. Calculate trend indicators
