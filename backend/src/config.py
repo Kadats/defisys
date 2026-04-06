@@ -174,7 +174,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.MAX_DEBT_RATIO = float(os.environ.get('MAX_DEBT_RATIO', 0.45))
 			
 			# Machine Learning Configuration
-			self.ML_TRAIN_SPLIT_DATE = os.environ.get('ML_TRAIN_SPLIT_DATE', '2024-01-01')
+			self.ML_TRAIN_SPLIT_DATE = os.environ.get('ML_TRAIN_SPLIT_DATE', '2026-01-01')
 			self.ML_CONFIDENCE_THRESHOLD = float(os.environ.get('ML_CONFIDENCE_THRESHOLD', 0.65))
 			self.ML_TARGET_MIN_CHANGE = float(os.environ.get('ML_TARGET_MIN_CHANGE', 0.02))
 			self.ML_PREDICTION_HORIZON = int(os.environ.get('ML_PREDICTION_HORIZON', 12))
