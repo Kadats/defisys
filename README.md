@@ -218,7 +218,9 @@ GET /api/simulation
 
 ## 🧪 Testes e Desenvolvimento
 
-O projeto defende rigidamente o **TDD (Test-Driven Development)**. Qualquer alteração deve começar com um teste que falha e passar em ambiente Docker.
+O projeto defende rigidamente o **TDD (Test-Driven Development)** e conta atualmente com uma suíte de **110 testes automatizados**, assegurando proteção contra regressões em lógicas financeiras críticas, de machine learning e de execução on-chain. Além disso, a nova **Arquitetura por Regime** e o uso do Ensemble para Sizing de Posições (Cautela vs Ganância) garantem que o sistema proteja ativamente o Drawdown em USD durante "Cisnes Negros".
+
+Qualquer alteração deve começar com um teste que falha e passar em ambiente Docker.
 
 ```bash
 # Executar todos os testes do backend via Docker (Recomendado)

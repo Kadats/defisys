@@ -141,7 +141,7 @@ Trocar a lógica “uma estratégia tenta resolver tudo” por uma arquitetura c
 - O sistema não tenta usar o mesmo comportamento em todos os mercados.
 - Existe caminho explícito de defesa e/ou ganho em bear market.
 
-## Fase 5: Bear market de verdade [/]
+## Fase 5: Bear market de verdade [x]
 
 ### Objetivo
 Fazer o sistema ter tese clara para queda, orientada a USD.
@@ -164,7 +164,7 @@ Implementar em duas etapas:
 - Em janelas de bear, a estratégia principal perde menos que BTC hold.
 - Idealmente, gera alpha positivo em USD mesmo quando BTC cai.
 
-## Fase 6: Modelagem preditiva [/]
+## Fase 6: Modelagem preditiva [x]
 
 ### Objetivo
 Evoluir a inteligência sem cair em complexidade prematura.
@@ -191,7 +191,7 @@ No estado atual, **múltiplos modelos simples e especializados** têm melhor rel
 - O ensemble supera baselines simples em USD líquido e drawdown.
 - A troca para deep learning só ocorre com evidência, não por preferência.
 
-## Fase 7: Release gate para operação real
+## Fase 7: Release gate para operação real [/]
 
 ### Objetivo
 Criar um processo mínimo de segurança antes de qualquer capital relevante.

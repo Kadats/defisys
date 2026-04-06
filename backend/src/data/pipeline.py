@@ -32,6 +32,8 @@ from backend.src.config import (
     THEGRAPH_UNISWAP_V3_SUBGRAPH_IDS,
     DEFAULT_NETWORK,
     DEFAULT_POLYGON_POOL_ID,
+    ML_PREDICTION_HORIZON,
+    ML_TARGET_MIN_CHANGE,
 )
 
 logger = logging.getLogger(__name__)
