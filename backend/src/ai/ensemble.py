@@ -1,6 +1,7 @@
 """
 Ensemble Voting System and Position Sizing.
 """
+import pandas as pd
 
 def evaluate_ensemble_signal(regime, prediction_proba: float, atr_pct: float) -> bool:
     """
@@ -12,7 +13,7 @@ def evaluate_ensemble_signal(regime, prediction_proba: float, atr_pct: float) ->
     if regime == MarketRegime.UNCERTAIN:
         return False
         
-    if atr_pct > 0.05 and prediction_proba < 0.85:
+    if atr_pct > 0.05 and prediction_proba < 0.75:
         return False
         
     return True
@@ -23,8 +24,8 @@ def calculate_confidence_sizing(prediction_proba: float) -> float:
     
     Confidence curve:
     - < 0.70: 0.0 (Abstention)
-    - 0.70 to 0.85: Scaled from 0.1 to 0.3 (10% to 30%)
-    - > 0.85: 1.0 (Full sizing allowed by the strategy/risk manager)
+    - 0.70 to 0.75: Scaled from 0.1 to 0.3 (10% to 30%)
+    - > 0.75: 1.0 (Full sizing allowed by the strategy/risk manager)
     """
     if pd.isna(prediction_proba):
         return 0.0
@@ -32,13 +33,11 @@ def calculate_confidence_sizing(prediction_proba: float) -> float:
     if prediction_proba < 0.70:
         return 0.0
         
-    if prediction_proba > 0.85:
+    if prediction_proba > 0.75:
         return 1.0
         
-    # Scale between 0.70 and 0.85 -> Map to 0.1 to 0.3
-    # slope = (0.3 - 0.1) / (0.85 - 0.70) = 0.2 / 0.15 = 1.333...
-    slope = 0.2 / 0.15
+    # Scale between 0.70 and 0.75 -> Map to 0.1 to 0.3
+    # slope = (0.3 - 0.1) / (0.75 - 0.70) = 0.2 / 0.05 = 4.0
+    slope = 4.0
     sizing = 0.1 + (prediction_proba - 0.70) * slope
     return float(round(sizing, 4))
-
-import pandas as pd
