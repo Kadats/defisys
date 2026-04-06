@@ -25,11 +25,20 @@ def detect_regime(row: pd.Series) -> MarketRegime:
         rsi = float(row.get('RSI', 50))
         prediction_proba = float(row.get('prediction_proba', 0.5))
         fgi = float(row.get('Fear_Greed_Index', 50))
+        atr = float(row.get('ATR', 0))
     except Exception:
         return MarketRegime.UNCERTAIN
 
     # 2. Check for missing crucial data (if sma_200 is 0, we can't establish trend)
     if sma_200 == 0 or close == 0:
+        return MarketRegime.UNCERTAIN
+
+    # 2.5 Check for extreme volatility combined with extreme sentiment (UNCERTAIN)
+    # ATR is absolute, we calculate it as a percentage of close price
+    atr_pct = atr / close if close > 0 else 0
+    is_high_volatility = atr_pct > 0.05
+    
+    if is_high_volatility and (fgi < 25 or fgi > 75):
         return MarketRegime.UNCERTAIN
 
     # 3. Calculate trend indicators
