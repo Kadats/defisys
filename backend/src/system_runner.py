@@ -6,6 +6,7 @@ import os
 
 from backend.src.data.pipeline import get_full_prepared_data
 from .core import TradingEngine
+from .core.policy_layer import PolicyLayerStrategy
 from .strategies import BTCLiteStrategy, AccumulatorStrategy, SwingUSDStrategy, PureSpotStrategy, SmartDCAStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE, GEMINI_BACKTEST_DAYS
 
@@ -287,11 +288,13 @@ def run_simulation(
         strategy = PureSpotStrategy()
     elif strategy_type == "smart_dca":
         strategy = SmartDCAStrategy()
+    elif strategy_type == "policy_layer":
+        strategy = PolicyLayerStrategy(use_llm=use_llm)
     else:
         logger.error(f"Estratégia desconhecida: {strategy_type}")
         return {
             "backtest_report": {
-                "error": f"Unknown strategy type: {strategy_type}. Available: accumulator, btc_lite, swing_usd, pure_spot, smart_dca"
+                "error": f"Unknown strategy type: {strategy_type}. Available: accumulator, btc_lite, swing_usd, pure_spot, smart_dca, policy_layer"
             }
         }
     
