@@ -191,7 +191,7 @@ No estado atual, **múltiplos modelos simples e especializados** têm melhor rel
 - O ensemble supera baselines simples em USD líquido e drawdown.
 - A troca para deep learning só ocorre com evidência, não por preferência.
 
-## Fase 7: Release gate para operação real [/]
+## Fase 7: Release gate para operação real [x]
 
 ### Objetivo
 Criar um processo mínimo de segurança antes de qualquer capital relevante.

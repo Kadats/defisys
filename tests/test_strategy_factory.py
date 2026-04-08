@@ -9,7 +9,7 @@ import backend.src.data.pipeline as data_pipeline
 def _make_market_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "Open_time": [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")],
+            "Open_time": [pd.Timestamp("2025-06-02"), pd.Timestamp("2025-06-03")],
             "Close": [100.0, 110.0],
         }
     )
@@ -18,7 +18,7 @@ def _make_market_df() -> pd.DataFrame:
 def _make_predictions_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "open_time": [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")],
+            "open_time": [pd.Timestamp("2025-06-02"), pd.Timestamp("2025-06-03")],
             "prediction": [1, 0],
             "prediction_proba": [0.7, 0.4],
         }

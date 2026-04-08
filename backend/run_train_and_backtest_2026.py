@@ -56,8 +56,8 @@ def main():
     predictions_df['Open_time'] = pd.to_datetime(predictions_df['Open_time'])
     df = pd.merge(market_df, predictions_df[['Open_time', 'prediction', 'prediction_proba']], on='Open_time', how='left')
 
-    # Filtrar apenas 2026 em diante
-    df = df[df['Open_time'] >= pd.Timestamp('2026-01-01')].copy()
+    # Filtrar apenas 2025-06-01 em diante
+    df = df[df['Open_time'] >= pd.Timestamp('2025-06-01')].copy()
     df['prediction_proba'] = df['prediction_proba'].fillna(0.5)
 
     if 'FGI_Drop_24h' not in df.columns and 'Fear_Greed_Index' in df.columns:
@@ -65,7 +65,7 @@ def main():
         df['FGI_Drop_24h'] = df['FGI_Drop_24h'].fillna(0)
 
     logger.info(f"\n==================================================")
-    logger.info(f"RODANDO TESTE OOS: 2026-01-01 até o presente")
+    logger.info(f"RODANDO TESTE OOS: 2025-06-01 até o presente")
     logger.info(f"Tamanho do dataset (velas): {len(df)}")
     logger.info(f"==================================================\n")
     

@@ -45,7 +45,9 @@ class RiskManager:
         hf_warning: float = HF_WARNING_THRESHOLD,
         hf_critical: float = HF_CRITICAL_THRESHOLD,
         hf_refinance: float = HF_REFINANCE_THRESHOLD,
-        liquidation_threshold: float = LIQUIDATION_THRESHOLD
+        liquidation_threshold: float = LIQUIDATION_THRESHOLD,
+        max_global_drawdown: float = 0.15,
+        max_daily_drawdown: float = 0.10
     ):
         """
         Initialize the Risk Manager.
@@ -57,6 +59,8 @@ class RiskManager:
             hf_critical: HF threshold for critical state (default 1.1)
             hf_refinance: Minimum HF to allow refinancing (default 2.0)
             liquidation_threshold: LTV ratio for liquidation (default 0.8)
+            max_global_drawdown: Max acceptable drawdown from global high-water mark
+            max_daily_drawdown: Max acceptable drawdown from 24h high-water mark
         """
         self.gas_reserve_usd = gas_reserve_usd
         self.simulated_gas_fee_usd = simulated_gas_fee_usd
@@ -64,10 +68,13 @@ class RiskManager:
         self.hf_critical = hf_critical
         self.hf_refinance = hf_refinance
         self.liquidation_threshold = liquidation_threshold
+        self.max_global_drawdown = max_global_drawdown
+        self.max_daily_drawdown = max_daily_drawdown
         
         logger.info(
             f"RiskManager initialized: GAS_RESERVE=${gas_reserve_usd:.2f}, "
-            f"HF_WARNING={hf_warning}, HF_CRITICAL={hf_critical}, HF_REFINANCE={hf_refinance}"
+            f"HF_WARNING={hf_warning}, HF_CRITICAL={hf_critical}, HF_REFINANCE={hf_refinance}, "
+            f"MAX_GLOBAL_DD={max_global_drawdown}, MAX_DAILY_DD={max_daily_drawdown}"
         )
     
     def calculate_health_factor(self, collateral_value: float, debt: float) -> float:
@@ -185,6 +192,32 @@ class RiskManager:
         """Compute dynamic reserve target as a fraction of total equity."""
         return total_equity_usd * TARGET_RESERVE_RATIO
     
+    def check_drawdown_limits(self, current_equity: float, global_hwm: float, daily_hwm: float) -> Literal['SAFE', 'KILL_SWITCH']:
+        """
+        Check if the current equity violates global or daily drawdown limits.
+        
+        Args:
+            current_equity: Current total portfolio value in USD
+            global_hwm: Highest historical portfolio value
+            daily_hwm: Highest portfolio value in the last 24 hours
+            
+        Returns:
+            'SAFE' if within limits, 'KILL_SWITCH' if limits are exceeded.
+        """
+        if global_hwm > 0:
+            global_dd = (global_hwm - current_equity) / global_hwm
+            if global_dd >= self.max_global_drawdown:
+                logger.critical(f"[KILL SWITCH] Global Drawdown {global_dd:.1%} exceeded limit {self.max_global_drawdown:.1%}")
+                return 'KILL_SWITCH'
+                
+        if daily_hwm > 0:
+            daily_dd = (daily_hwm - current_equity) / daily_hwm
+            if daily_dd >= self.max_daily_drawdown:
+                logger.critical(f"[KILL SWITCH] Daily Drawdown {daily_dd:.1%} exceeded limit {self.max_daily_drawdown:.1%}")
+                return 'KILL_SWITCH'
+                
+        return 'SAFE'
+
     def assess_rebalance_options(
         self,
         health_factor: float,

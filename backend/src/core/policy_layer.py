@@ -33,6 +33,15 @@ class PolicyLayerStrategy(BaseStrategy):
         Detects regime and routes to the appropriate strategy.
         Forces abstention (100% USD Cash) if the regime is UNCERTAIN.
         """
+        # --- KILL SWITCH CHECK ---
+        if getattr(engine, 'is_killed', False):
+            return {
+                "action": "ABSTAIN",
+                "sizing": 0.0,
+                "reason": "[KILL SWITCH] System is killed. Refusing all orders.",
+                "expected_risk": "Low"
+            }
+            
         # 1. Detect the current market regime
         self.current_regime = detect_regime(row)
         current_price = float(row.get('Close', 0.0))

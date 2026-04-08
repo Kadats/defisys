@@ -7,7 +7,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from backend.src.data.storage import log_open_position, log_close_position
-from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL
+from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL, MAX_GLOBAL_DRAWDOWN, MAX_DAILY_DRAWDOWN
 from ..utils.math import calculate_lp_value, calculate_liquidity_l
 from .risk_manager import RiskManager
 
@@ -33,6 +33,9 @@ class TradingEngine:
         
         self.health_factor = 999.0
         self.is_liquidated = False
+        self.is_killed = False
+        self.global_hwm = initial_capital_usd
+        self.daily_hwm_window = []  # List of tuples: (timestamp, equity)
         
         self.active_lps = []
         self.portfolio_history = []
@@ -717,6 +720,38 @@ class TradingEngine:
             lp['fees_accrued_usdt'] = 0.0
 
 
+    def emergency_shutdown(self, current_price: float, timestamp: pd.Timestamp):
+        """
+        Global Kill Switch: Cancels strategy execution, closes all LPs, 
+        and converts all BTC (Hodl & Collateral) to USD Cash.
+        """
+        logger.critical(f"[{timestamp.date()}] 🚨 EMERGENCY SHUTDOWN INITIATED 🚨")
+        
+        # 1. Flag system as killed
+        self.is_killed = True
+        
+        # 2. Resgatar colateral
+        if self.btc_collateral_balance > 0:
+            logger.info(f"Removendo {self.btc_collateral_balance:.6f} BTC de colateral AAVE...")
+            # Paga gas se puder, mas mesmo se não puder, força a remoção no shutdown
+            self.btc_hodl_balance += self.btc_collateral_balance
+            self.btc_collateral_balance = 0.0
+            
+        # 3. Fechar LPs
+        lps_to_close = list(self.active_lps)
+        for lp in lps_to_close:
+            logger.info(f"Fechando LP ID {lp['id']} em modo de emergência...")
+            self.close_lp(lp['id'], current_price, timestamp, is_emergency=True)
+            
+        # 4. Vender todo o BTC HODL para USD
+        if self.btc_hodl_balance > 0:
+            logger.info(f"Vendendo {self.btc_hodl_balance:.6f} BTC para USD Cash...")
+            # Força venda mesmo se não tiver gas (ignoramos falha de slippage se gas faltar)
+            self.sell_btc(self.btc_hodl_balance, current_price, timestamp)
+            
+        logger.critical(f"[{timestamp.date()}] 🚨 EMERGENCY SHUTDOWN COMPLETED. Final USD: ${self.usd_balance:.2f} 🚨")
+        self.decision_history.append(f"[{timestamp.date()}] [KILL SWITCH ACTIVATED] Portfólio revertido para 100% USD Cash.")
+
     def run(self, df: pd.DataFrame, strategy):
         """
         Run the backtest with a given strategy.
@@ -749,9 +784,33 @@ class TradingEngine:
 
             current_price = row['Close']
             timestamp = row['Open_time']
-            
-            # 1. Calcular HF e checar Liquidação (se houver dívida)
-            if self.total_debt_usd > 0:
+
+            # --- KILL SWITCH & DRAWDOWN CHECK ---
+            current_equity = self._calculate_portfolio_value(current_price)
+            if self.is_killed:
+                self.portfolio_history.append(current_equity)
+                continue
+
+            # Update HWMs
+            if current_equity > self.global_hwm:
+                self.global_hwm = current_equity
+
+            # Maintain 24h rolling window (assuming timestamps are sorted)
+            self.daily_hwm_window.append((timestamp, current_equity))
+            cutoff_time = timestamp - timedelta(hours=24)
+            self.daily_hwm_window = [(t, v) for t, v in self.daily_hwm_window if t >= cutoff_time]
+
+            daily_hwm = max([v for t, v in self.daily_hwm_window]) if self.daily_hwm_window else current_equity
+
+            # Check limits
+            drawdown_status = self.risk_manager.check_drawdown_limits(current_equity, self.global_hwm, daily_hwm)
+            if drawdown_status == 'KILL_SWITCH':
+                self.emergency_shutdown(current_price, timestamp)
+                self.portfolio_history.append(self._calculate_portfolio_value(current_price))
+                continue
+            # ------------------------------------
+
+            # 1. Calcular HF e checar Liquidação (se houver dívida)            if self.total_debt_usd > 0:
                 collateral_value = self.btc_collateral_balance * current_price
                 self.health_factor = self.risk_manager.calculate_health_factor(collateral_value, self.total_debt_usd)
                 

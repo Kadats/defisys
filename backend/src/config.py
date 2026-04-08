@@ -92,7 +92,7 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Hard cut for Walk-Forward validation - train before, test after
 	# Train on: 2017-08-17 to 2023-12-31 (full historical cycles)
 	# Backtest on: 2024-01-01 to 2026-02-20 (Halving cycle + post-ETF market)
-	ML_TRAIN_SPLIT_DATE: str = "2024-01-01"
+	ML_TRAIN_SPLIT_DATE: str = "2025-06-01"
 	# Minimum probability threshold to trigger a buy signal (65%)
 	ML_CONFIDENCE_THRESHOLD: float = 0.65
 	# Price must rise by at least 4% to be considered a positive target (swing trade)
@@ -138,6 +138,10 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	# Deleveraging Threshold: Use cash reserve to pay debt if HF drops below this
 	DELEVERAGE_THRESHOLD_HF: float = 1.6  # Trigger deleveraging at HF < 1.6
 
+	# Kill Switch Limits
+	MAX_DAILY_DRAWDOWN: float = 0.10  # 10% daily drawdown limit
+	MAX_GLOBAL_DRAWDOWN: float = 0.15  # 15% global drawdown limit
+
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
 			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -172,6 +176,8 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.TARGET_RESERVE_RATIO = float(os.environ.get('TARGET_RESERVE_RATIO', 0.20))
 			self.MIN_HARVEST_USD = float(os.environ.get('MIN_HARVEST_USD', 15.0))
 			self.MAX_DEBT_RATIO = float(os.environ.get('MAX_DEBT_RATIO', 0.45))
+			self.MAX_DAILY_DRAWDOWN = float(os.environ.get('MAX_DAILY_DRAWDOWN', 0.10))
+			self.MAX_GLOBAL_DRAWDOWN = float(os.environ.get('MAX_GLOBAL_DRAWDOWN', 0.15))
 			
 			# Machine Learning Configuration
 			self.ML_TRAIN_SPLIT_DATE = os.environ.get('ML_TRAIN_SPLIT_DATE', '2026-01-01')
@@ -256,3 +262,5 @@ MIN_HARVEST_USD = _settings.MIN_HARVEST_USD
 MAX_DEBT_RATIO = _settings.MAX_DEBT_RATIO
 MAX_DEBT_TO_RESERVE_RATIO = _settings.MAX_DEBT_TO_RESERVE_RATIO
 DELEVERAGE_THRESHOLD_HF = _settings.DELEVERAGE_THRESHOLD_HF
+MAX_DAILY_DRAWDOWN = _settings.MAX_DAILY_DRAWDOWN
+MAX_GLOBAL_DRAWDOWN = _settings.MAX_GLOBAL_DRAWDOWN
