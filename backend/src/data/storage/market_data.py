@@ -173,7 +173,7 @@ def create_open_interest_table(conn: PGConnection, table_name: str):
         conn.rollback()
 
 
-def save_open_interest_to_db(data: Dict[str, Any], table_name: str):
+def save_open_interest_to_db(data: List[Dict[str, Any]], table_name: str):
     """Saves Open Interest data to PostgreSQL database."""
     conn = create_connection()
     if not conn:
@@ -182,13 +182,25 @@ def save_open_interest_to_db(data: Dict[str, Any], table_name: str):
     try:
         create_open_interest_table(conn, table_name)
         
+        # Determine the key for timestamp and open_interest based on the endpoint used
+        rows = []
+        for item in data:
+            ts = item.get('timestamp') or item.get('time')
+            oi = item.get('sumOpenInterestValue') or item.get('sumOpenInterest') or item.get('openInterest')
+            sym = item.get('symbol')
+            if ts and oi and sym:
+                rows.append((int(ts), sym, float(oi)))
+                
+        if not rows:
+            return
+
         with conn.cursor() as cursor:
-            cursor.execute(sql.SQL("""
+            insert_query = sql.SQL("""
                 INSERT INTO {} (timestamp, symbol, open_interest)
-                VALUES (%s, %s, %s)
+                VALUES %s
                 ON CONFLICT (timestamp) DO NOTHING
-            """).format(sql.Identifier(table_name)),
-            (data['time'], data['symbol'], float(data['openInterest'])))
+            """).format(sql.Identifier(table_name))
+            extras.execute_values(cursor, insert_query, rows)
             
         conn.commit()
         logger.info(f"Open Interest data saved to table '{table_name}'.")
@@ -199,6 +211,29 @@ def save_open_interest_to_db(data: Dict[str, Any], table_name: str):
         if conn:
             conn.close()
 
+def get_last_open_interest_timestamp_from_db(table_name: str) -> Optional[int]:
+    """Gets the timestamp of the last Open Interest entry saved in the database (milliseconds)."""
+    conn = create_connection()
+    if not conn:
+        return None
+        
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql.SQL("SELECT MAX(timestamp) FROM {}").format(sql.Identifier(table_name)))
+            result = cursor.fetchone()
+            last_timestamp_ms = result[0] if result else None
+            if last_timestamp_ms:
+                return last_timestamp_ms + 1
+            return None
+    except psycopg2.Error as e:
+        if getattr(e, "pgcode", None) == "42P01":
+            logger.warning(f"Table '{table_name}' does not exist yet. Starting fresh.")
+            return None
+        logger.error(f"Error fetching last Open Interest timestamp: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
 
 # ==================== FUNDING RATE TABLE ====================
 

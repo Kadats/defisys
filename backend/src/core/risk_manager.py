@@ -188,11 +188,27 @@ class RiskManager:
         """
         return max(0.0, total_balance - self.gas_reserve_usd)
 
+    def adjust_position_size(self, requested_capital: float, current_balance: float, gas_fee_usd: float, min_reserve_usd: float = 0.0) -> float:
+        """
+        Adjusts requested capital to not exceed the available usable balance.
+        
+        Args:
+            requested_capital: Desired investment amount in USD.
+            current_balance: Current total balance in USD.
+            gas_fee_usd: Cost of the transaction in USD.
+            min_reserve_usd: Extra reserve to maintain in USD.
+            
+        Returns:
+            Adjusted amount in USD (clamped to available), minimum 0.0.
+        """
+        available = max(0.0, current_balance - gas_fee_usd - min_reserve_usd)
+        return min(requested_capital, available)
+
     def calculate_target_reserve(self, total_equity_usd: float) -> float:
         """Compute dynamic reserve target as a fraction of total equity."""
         return total_equity_usd * TARGET_RESERVE_RATIO
     
-    def check_drawdown_limits(self, current_equity: float, global_hwm: float, daily_hwm: float) -> Literal['SAFE', 'KILL_SWITCH']:
+    def check_drawdown_limits(self, current_equity: float, global_hwm: float, daily_hwm: float, regime: str = 'UNCERTAIN') -> Literal['SAFE', 'KILL_SWITCH']:
         """
         Check if the current equity violates global or daily drawdown limits.
         
@@ -200,14 +216,24 @@ class RiskManager:
             current_equity: Current total portfolio value in USD
             global_hwm: Highest historical portfolio value
             daily_hwm: Highest portfolio value in the last 24 hours
+            regime: Current market regime (BULL, BEAR, SIDEWAYS, UNCERTAIN)
             
         Returns:
             'SAFE' if within limits, 'KILL_SWITCH' if limits are exceeded.
         """
+        # Limites dinâmicos de Fase 8.2
+        max_global_dd = self.max_global_drawdown
+        if regime == 'BULL':
+            max_global_dd = 0.20
+        elif regime == 'BEAR':
+            max_global_dd = 0.10
+        elif regime in ['SIDEWAYS', 'UNCERTAIN']:
+            max_global_dd = 0.15
+            
         if global_hwm > 0:
             global_dd = (global_hwm - current_equity) / global_hwm
-            if global_dd >= self.max_global_drawdown:
-                logger.critical(f"[KILL SWITCH] Global Drawdown {global_dd:.1%} exceeded limit {self.max_global_drawdown:.1%}")
+            if global_dd >= max_global_dd:
+                logger.critical(f"[KILL SWITCH] Global Drawdown {global_dd:.1%} exceeded {regime} limit {max_global_dd:.1%}")
                 return 'KILL_SWITCH'
                 
         if daily_hwm > 0:

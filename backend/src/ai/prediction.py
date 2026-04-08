@@ -21,7 +21,9 @@ FEATURES = [
     'BB_Width',
     'FundingRate',
     'OpenInterest',
-    'VolumeUSD'
+    'VolumeUSD',
+    'oi_change_4h',
+    'funding_velocity'
 ]
 
 # A coluna que queremos prever

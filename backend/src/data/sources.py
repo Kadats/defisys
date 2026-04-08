@@ -247,6 +247,45 @@ def get_funding_rate_history(symbol: str, limit: int = 1000, start_time_ms: int 
         logger.error("Erro ao conectar à API da Binance Futures para Funding Rate (url=%s): %s", client._build_url(endpoint), e)
         return []
 
+def get_open_interest_history(symbol: str, period: str = "4h", limit: int = 500, start_time_ms: int = None, end_time_ms: int = None, binance_futures_api_base_url: str = None) -> list:
+    """
+    Coleta o histórico de Open Interest da API da Binance Futures com suporte a paginação.
+
+    Args:
+        symbol (str): O par de trading (ex: "BTCUSDT").
+        period (str): O período dos dados (ex: "4h", "1d").
+        limit (int): Número máximo de entradas por requisição (máximo: 500).
+        start_time_ms (int): Timestamp inicial em ms (opcional).
+        end_time_ms (int): Timestamp final em ms (opcional).
+
+    Returns:
+        list: Uma lista de dicionários com os dados históricos do Open Interest, ou uma lista vazia.
+    """
+    endpoint = "/futures/data/openInterestHist"
+    params = {"symbol": symbol, "period": period, "limit": min(limit, 500)}
+    
+    if start_time_ms:
+        params["startTime"] = int(start_time_ms)
+    if end_time_ms:
+        params["endTime"] = int(end_time_ms)
+        
+    if not binance_futures_api_base_url:
+        raise ValueError("binance_futures_api_base_url must be provided to get_open_interest_history")
+        
+    base_url = binance_futures_api_base_url
+    client = APIClient(base_url=base_url, timeout=10, max_retries=3, backoff_factor=1)
+    
+    try:
+        resp = client.get(endpoint, params=params)
+        try:
+            return resp.json()
+        except json.JSONDecodeError:
+            logger.error("Erro ao decodificar a resposta JSON do Open Interest Histórico: %s", resp.text)
+            return []
+    except requests.exceptions.RequestException as e:
+        logger.error("Erro ao conectar à API da Binance Futures para Open Interest Histórico (url=%s): %s", client._build_url(endpoint), e)
+        raise e
+
 def get_open_interest(symbol: str, binance_futures_api_base_url: str = None) -> dict:
     """
     Coleta o Open Interest atual da API da Binance Futures.
@@ -321,7 +360,7 @@ def get_bitcoin_network_fees(blockchair_api_url: str = None) -> dict:
     if not blockchair_api_url:
         raise ValueError("blockchair_api_url must be provided to get_bitcoin_network_fees")
     base_url = blockchair_api_url
-    client = APIClient(base_url=base_url, timeout=10, max_retries=2, backoff_factor=0.5)
+    client = APIClient(base_url=base_url, timeout=20, max_retries=5, backoff_factor=1.0)
     try:
         resp = client.get(base_url)
         try:

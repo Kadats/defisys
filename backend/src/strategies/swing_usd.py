@@ -285,7 +285,8 @@ class SwingUSDStrategy(BaseStrategy):
                 self.average_entry_price = 0.0
                 self.last_trade_time = timestamp
                 
-                return  # Exit after closing positions
+                decision.update({"action": "EXIT", "sizing": 0.0, "reason": exit_signal['reason'], "expected_risk": "Low"})
+                return decision  # Exit after closing positions
         
         # ==================== PART 2: ENTRY LOGIC (Open Directional LP if conditions met) ====================
         # Only consider entry if we don't have directional positions
@@ -304,13 +305,14 @@ class SwingUSDStrategy(BaseStrategy):
                 
                 if idle_amount >= MIN_POSITION_USD:
                     logger.info(
-                        f"[{timestamp.date()}] 🛡️ YIELD PRESERVATION: Stablecoin LP simulation. "
-                        f"Allocating ${idle_amount:.2f} to Delta-Neutral Stable Pool (Mocked as Cash)."
+                        f"[{timestamp.date()}] 🛡️ YIELD PRESERVATION: Real Aave Yield simulation. "
+                        f"Allocating ${idle_amount:.2f} to Aave V3 (Stablecoin Lending)."
                     )
+                    engine.allocate_to_yield(idle_amount, timestamp)
                     decision.update({
                         "action": "YIELD_PRESERVATION_STABLE_LP",
                         "sizing": IDLE_YIELD_PERCENT,
-                        "reason": "Bear market yield focus (Stablecoin LP mock)",
+                        "reason": "Bear market yield focus (Aave Lending)",
                         "expected_risk": "Low"
                     })
                 else:
@@ -335,7 +337,8 @@ class SwingUSDStrategy(BaseStrategy):
                         f"Safe Balance=${safe_balance:.2f}, Target=${target_amount:.2f}, "
                         f"Mínimo=${MIN_POSITION_USD:.2f}"
                     )
-                    return
+                    decision.update({"action": "HOLD", "sizing": 0.0, "reason": "Insufficient capital", "expected_risk": "Low"})
+                    return decision
                 
                 # Ensure we don't exceed available balance
                 final_amount = min(target_amount, safe_balance)

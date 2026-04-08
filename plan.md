@@ -237,3 +237,37 @@ O plano será considerado concluído quando o sistema demonstrar, com evidência
 - reduz drawdown em bear market;
 - tem comportamento consistente por regime;
 - consegue ser operado com disciplina de risco e sem dependência de interpretação manual ad hoc.
+
+## Fase 8: Infraestrutura e Melhoria Operacional [x]
+
+### Objetivo
+Resolver falhas de dimensionamento de posição que causam abortos desnecessários e introduzir a capacidade do sistema gerar Yield passivo em Stablecoins no protocolo Aave V3.
+
+### Tarefas
+- [x] Sizing Proporcional Adaptativo (RiskManager) com ajuste dinâmico em vez de aborto.
+- [x] Integração Aave Yield para capital ocioso em bear/uncertain markets.
+- [x] Refino de Logs de Capital (formato `[BALANCE_INFO]`).
+- [x] TDD para simulação de saldo insuficiente ajustado dinamicamente.
+
+## Fase 8.2: Sensibilidade e Inteligência [x]
+
+### Objetivo
+Aumentar a acurácia do modelo através de engenharia de features em derivativos e implementar um RiskManager dinâmico de acordo com o regime de mercado.
+
+### Tarefas
+- [x] Engenharia de Features (Derivativos): escalar e criar `oi_change_4h` e `funding_velocity`.
+- [x] RiskManager Dinâmico: adaptar os limites de Drawdown de acordo com o regime.
+- [x] Teste de Estresse (TDD): verificar o Kill Switch acionado em quedas (BULL vs BEAR).
+- [x] Retreino e Validação.
+
+## Fase 8.3: Aggressive Short e Hidratação [x]
+
+### Objetivo
+Conectar dados reais de derivativos e implementar a capacidade de lucrar em quedas acentuadas (Short Selling) via empréstimo na Aave.
+
+### Tarefas
+- [x] Data Hydration: sync histórico de Funding Rate e Open Interest (Binance Futures).
+- [x] TradingEngine: suporte a `open_short` e `close_short` (empréstimo simulado).
+- [x] AggressiveShortStrategy: gatilho em Regime BEAR com alta confiança de queda.
+- [x] TDD: validação de lucro em cenário de queda de 5%.
+- [x] Retreino Final e Validação de ROI (+3.56% no OOS Bear Market).

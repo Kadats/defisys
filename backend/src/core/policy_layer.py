@@ -5,6 +5,7 @@ import logging
 from backend.src.strategies.base import BaseStrategy
 from backend.src.strategies.btc_lite import BTCLiteStrategy
 from backend.src.strategies.swing_usd import SwingUSDStrategy
+from backend.src.strategies.short_strategy import AggressiveShortStrategy
 from backend.src.ai.regime_classifier import MarketRegime, detect_regime
 from backend.src.ai.ensemble import evaluate_ensemble_signal, calculate_confidence_sizing
 
@@ -23,7 +24,7 @@ class PolicyLayerStrategy(BaseStrategy):
         self.bull_strategy = BTCLiteStrategy()
         # Dual Path for BEAR Market (Fase 5)
         self.bear_strategy_yield = SwingUSDStrategy(use_llm=use_llm, mode="YIELD_PRESERVATION")
-        # self.bear_strategy_short = AggressiveShortStrategy() # Placeholder para Fase 5.2
+        self.bear_strategy_short = AggressiveShortStrategy() 
         
         self.sideways_strategy = SwingUSDStrategy(use_llm=use_llm) # SwingUSD can handle mean reversion/sideways
         self.current_regime = MarketRegime.UNCERTAIN
@@ -67,18 +68,12 @@ class PolicyLayerStrategy(BaseStrategy):
             decision = self.bull_strategy.execute(row, engine, timestamp)
             
         elif self.current_regime == MarketRegime.BEAR:
-            # Dual Path Architecture for Bear Market
-            bear_path = "YIELD_PRESERVATION" # Path A
-            
-            if bear_path == "YIELD_PRESERVATION":
+            # Dual Path Architecture for Bear Market (Fase 8.3)
+            # Use short if confidence in fall is very high (ML < 0.20)
+            if prediction_proba < 0.20:
+                decision = self.bear_strategy_short.execute(row, engine, timestamp)
+            else:
                 decision = self.bear_strategy_yield.execute(row, engine, timestamp)
-            elif bear_path == "AGGRESSIVE_SHORT":
-                decision = {
-                    "action": "HOLD",
-                    "sizing": 0.0,
-                    "reason": "Aggressive Short not implemented",
-                    "expected_risk": "High"
-                }
             
         elif self.current_regime == MarketRegime.SIDEWAYS:
             decision = self.sideways_strategy.execute(row, engine, timestamp)
@@ -134,6 +129,13 @@ class PolicyLayerStrategy(BaseStrategy):
         # 2. Sell all Spot BTC
         if hasattr(engine, 'btc_hodl_balance') and engine.btc_hodl_balance > 0:
             engine.sell_btc(engine.btc_hodl_balance, current_price, timestamp)
+            
+        # 3. Allocate idle cash to Yield
+        if hasattr(engine, 'allocate_to_yield'):
+            from backend.src.config import GAS_RESERVE_USD
+            safe_balance = max(0.0, engine.usd_balance - GAS_RESERVE_USD)
+            if safe_balance > 0:
+                engine.allocate_to_yield(safe_balance, timestamp)
             
     def get_name(self) -> str:
         return f"PolicyLayer({self.current_regime.name})"

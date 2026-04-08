@@ -163,24 +163,39 @@ def sync_market_data() -> None:
     )
     end_ts_funding = int(datetime.now().timestamp() * 1000)
     
-    funding_data = sources.get_funding_rate_history(
-        DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
-        binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
-    )
-    if funding_data:
-        storage.save_funding_rate_to_db(funding_data, funding_rate_table_name)
-        logger.info("  ✓ Funding Rate atualizado")
-    else:
-        logger.warning("  ⚠️  Falha ao coletar Funding Rate")
-    
+    try:
+        funding_data = sources.get_funding_rate_history(
+            DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
+            binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
+        )
+        if funding_data:
+            storage.save_funding_rate_to_db(funding_data, funding_rate_table_name)
+            logger.info("  ✓ Funding Rate atualizado")
+        else:
+            logger.warning("  ⚠️  Nenhum dado de Funding Rate coletado")
+    except Exception as e:
+        logger.warning(f"  ⚠️  Falha ao coletar Funding Rate: {e}")
+
     # 5. Collect Open Interest
     logger.info("  📊 Coletando Open Interest...")
-    oi_data = sources.get_open_interest(DEFAULT_SYMBOL, binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL)
-    if oi_data:
-        storage.save_open_interest_to_db(oi_data, open_interest_table_name)
-        logger.info("  ✓ Open Interest atualizado")
-    else:
-        logger.warning("  ⚠️  Falha ao coletar Open Interest")
+    start_ts_oi = storage.get_start_timestamp_for_collection(
+        storage.get_last_open_interest_timestamp_from_db, open_interest_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    end_ts_oi = int(datetime.now().timestamp() * 1000)
+    
+    try:
+        oi_data = sources.get_open_interest_history(
+            DEFAULT_SYMBOL, period=DEFAULT_INTERVAL, limit=500, 
+            start_time_ms=start_ts_oi, end_time_ms=end_ts_oi,
+            binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
+        )
+        if oi_data:
+            storage.save_open_interest_to_db(oi_data, open_interest_table_name)
+            logger.info("  ✓ Open Interest atualizado")
+        else:
+            logger.warning("  ⚠️  Nenhum dado de Open Interest coletado")
+    except Exception as e:
+        logger.warning(f"  ⚠️  Falha ao coletar Open Interest: {e}")
     
     # 6. Collect Implied Volatility (Deribit)
     logger.info("  📉 Coletando Implied Volatility...")
@@ -307,17 +322,32 @@ def get_full_prepared_data() -> pd.DataFrame:
     )
     end_ts_funding = int(datetime.now().timestamp() * 1000)
     
-    funding_data = sources.get_funding_rate_history(
-        DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
-        binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
-    )
-    if funding_data:
-        storage.save_funding_rate_to_db(funding_data, funding_rate_table_name)
+    try:
+        funding_data = sources.get_funding_rate_history(
+            DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
+            binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
+        )
+        if funding_data:
+            storage.save_funding_rate_to_db(funding_data, funding_rate_table_name)
+    except Exception as e:
+        logger.warning(f"  ⚠️  Falha ao coletar Funding Rate: {e}")
     
     # 5. Collect Open Interest
-    oi_data = sources.get_open_interest(DEFAULT_SYMBOL, binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL)
-    if oi_data:
-        storage.save_open_interest_to_db(oi_data, open_interest_table_name)
+    start_ts_oi = storage.get_start_timestamp_for_collection(
+        storage.get_last_open_interest_timestamp_from_db, open_interest_table_name, DEFAULT_HISTORICAL_DAYS
+    )
+    end_ts_oi = int(datetime.now().timestamp() * 1000)
+    
+    try:
+        oi_data = sources.get_open_interest_history(
+            DEFAULT_SYMBOL, period=DEFAULT_INTERVAL, limit=500, 
+            start_time_ms=start_ts_oi, end_time_ms=end_ts_oi,
+            binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
+        )
+        if oi_data:
+            storage.save_open_interest_to_db(oi_data, open_interest_table_name)
+    except Exception as e:
+        logger.warning(f"  ⚠️  Falha ao coletar Open Interest: {e}")
     
     # 6. Collect Implied Volatility (Deribit)
     start_ts_iv = storage.get_start_timestamp_for_collection(
@@ -504,11 +534,17 @@ def get_full_prepared_data() -> pd.DataFrame:
         all_klines_df['dist_from_ema_50'] = (all_klines_df['Close'] - all_klines_df['EMA_50']) / all_klines_df['EMA_50']
         all_klines_df['dist_from_sma_200'] = (all_klines_df['Close'] - all_klines_df['SMA_200']) / all_klines_df['SMA_200']
 
+        all_klines_df['oi_change_4h'] = all_klines_df['OpenInterest'].pct_change().fillna(0.0)
+        # Avoid infinity if OpenInterest was 0
+        all_klines_df['oi_change_4h'] = all_klines_df['oi_change_4h'].replace([np.inf, -np.inf], 0.0)
+        
+        all_klines_df['funding_velocity'] = all_klines_df['FundingRate'].diff().fillna(0.0)
+
         # --- APLICAR SHIFT(1) NAS FEATURES (ZERO LOOK-AHEAD BIAS) ---
         # Definir as colunas que são features para o modelo
         feature_cols = [
             'RSI', 'dist_from_ema_50', 'dist_from_sma_200', 'BB_Width',
-            'FundingRate', 'OpenInterest', 'VolumeUSD'
+            'FundingRate', 'OpenInterest', 'VolumeUSD', 'oi_change_4h', 'funding_velocity'
         ]
         
         # Aplicar o shift(1) apenas nas features existentes no DataFrame
