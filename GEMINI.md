@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-**DefiSys** (version 3) is an institutional-grade automated cryptocurrency trading system that implements the **BTC Standard Lite** philosophy: holding Bitcoin by default and leveraging strategically on confirmed bullish signals. The system uses walk-forward machine learning (XGBoost) and adaptive volatility controls (ATR-based ranges) to manage liquidity positions in DeFi protocols (Uniswap v3, Aave).
+**DefiSys** (version 3) is an institutional-grade automated cryptocurrency trading system that implements the **BTC Standard Lite** philosophy: holding Bitcoin by default and leveraging strategically on confirmed bullish signals. The system uses walk-forward machine learning (XGBoost) and adaptive volatility controls (ATR-based ranges) to manage liquidity positions in DeFi protocols (Uniswap v3, Aave) and aggressively short market drops.
 
 The system architecture is strictly split into:
-1. **Data Fetching (Phase 1):** Automated collection of market data (Binance, Blockchair, Deribit, Uniswap V3) to a PostgreSQL database.
-2. **Model Training (Phase 2):** On-demand walk-forward training using XGBClassifier on historical data without look-ahead bias.
-3. **Simulation/Backtesting (Phase 3-4):** Executing trading strategies (e.g., `AccumulatorStrategy`, `BTCLiteStrategy`) against ML predictions and visualizing outcomes.
+1. **Data Fetching (Phase 1):** Automated collection of market data including Derivatives (Funding/OI) to a PostgreSQL database.
+2. **Model Training (Phase 2):** On-demand walk-forward training using XGBClassifier with derivative sensitivity.
+3. **Simulation/Backtesting (Phase 3-4):** Executing multi-regime strategies (Bull, Bear, Sideways) against ML predictions.
 
 ## Architecture & Core Technologies
 
@@ -97,4 +97,4 @@ npm run dev
 - **Regra 2 (Ambiente Docker):** Use sempre `docker compose exec backend` para comandos de execução e teste. Nunca tente instalar dependências no host local.
 - **Regra 3 (Gestão de Contexto):** Respeite o arquivo `.gemini-ignore` para não ler logs (`*.log`) ou bases de dados (`*.db`), economizando tokens e mantendo o foco no código.
 
-- **Skill Ativa:** Sempre carregue e atualize o Napkin em `backend/.gemini/napkin.md` seguindo a lógica de `backend/.gemini/skills/napkin_logic.md`.
+- **Skill Ativa:** Always load and update the Napkin in `backend/.gemini/napkin.md`.

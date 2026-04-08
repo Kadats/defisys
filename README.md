@@ -4,50 +4,40 @@
 
 ---
 
-## 🎯 Status do Projeto: Fase 2 Concluída ✅
+## 🎯 Status do Projeto: Fase 8 Concluída ✅
 
-**Arquitetura Atual:** Modular, baseada em API com separação de responsabilidades (Separation of Concerns).
-- ✅ **Fase 1 (Coleta de Dados):** Roda automaticamente ao iniciar a API.
-- ✅ **Fase 2 (Treinamento do Modelo):** Acionada via endpoint `/api/model/train`.
-- ✅ **Fase 3-4 (Simulação/Backtesting):** Acionada via endpoint `/api/simulation/run`.
+**Arquitetura Atual:** Modular, baseada em API com suporte a Bull, Bear e Sideways markets.
+- ✅ **Fase 1-6:** Concluídas (Infraestrutura, ML, Policy Layer).
+- ✅ **Fase 7 (Release Gate):** Kill Switch Global e Travas de Capital operacionais.
+- ✅ **Fase 8 (Operacional):** Aave Yield Integration e Aggressive Short Strategy implementados.
 
-**Princípio de Arquitetura Inteligente:** O Backend lida com todo o processamento e cálculos; o Frontend serve exclusivamente para exibição.
+**ROI OOS (Jun/25 - Abr/26):** +3.56% em Bear Market (vs -31.1% HODL).
 
 ---
 
 ## 🎯 Visão Geral do Projeto
 
-### Filosofia Central: BTC Standard Lite
-A estratégia baseia-se em um princípio contrário (contrarian) porém robusto:
-- **Estado Padrão:** Manter 100% em BTC (o ativo mais forte a longo prazo).
-- **Regime Bullish (Alta):** Quando o modelo de ML confirma uma tendência de alta + alinhamento técnico, toma-se USD emprestado contra o BTC para amplificar ganhos através de posições concentradas de liquidez (LP) na Uniswap v3.
-- **Regime Neutro:** Farming conservador com alavancagem mínima, foco no pagamento de dívidas e coleta de taxas.
-- **Nunca Operar Vendido (Short) em BTC:** O sistema nunca aposta contra o Bitcoin, apenas modula a intensidade da alavancagem.
+### Filosofia Central: BTC Standard Lite (Extended)
+A estratégia baseia-se em um princípio robusto de preservação e ataque:
+- **Estado Padrão:** Manter em BTC (Bull) ou USD/Yield (Bear).
+- **Regime Bullish (Alta):** Alavancagem estratégica via Aave + Uniswap v3 LP Ranges.
+- **Regime Bearish (Baixa):** Caminho duplo baseado em confiança ML:
+  - **High Confidence Drop:** Aggressive Short via empréstimo de BTC na Aave.
+  - **Uncertainty/Stable Drop:** Yield passivo em Stablecoins (Aave V3).
+- **Regime Sideways:** Farming conservador Delta-Neutral.
 
 ### Principais Funcionalidades
 
 #### 🧠 Machine Learning: Walk-Forward (XGBoost)
-- **Janela de Treinamento:** 3 anos de dados históricos (1095 dias).
-- **Janela de Teste:** 2 anos à frente (730 dias).
-- **Zero Viés de Visão de Futuro (Look-Ahead Bias):** O modelo é treinado usando um XGBClassifier apenas com dados passados e testado em dados futuros não vistos.
-- **Retreinamento Adaptativo:** Em produção, o modelo pode ser retreinado sob demanda (ex: mensalmente) para se adaptar a mudanças de regime do mercado.
+- **Features de Derivativos:** Integração real de `FundingRate` e `OpenInterest` (Binance Futures) com escalonamento dinâmico.
+- **Janela de Treinamento:** Walk-forward com data de corte adaptativa (Fase 7: Junho/2025).
+- **Zero Look-Ahead Bias:** Aplicação rigorosa de `shift(1)` em todas as features.
 
-#### 📊 Gestão Dinâmica de Volatilidade (Ranges Baseados em ATR)
-- **O Problema:** Ranges fixos de LP (ex: ±30%) são ineficientes. Muito amplos em mercados calmos (baixas taxas), muito estreitos em mercados voláteis (rebalanceamento frequente).
-- **A Solução:** Usar o **Average True Range (ATR)** para dimensionar dinamicamente as posições de LP:
-  - **Alta Volatilidade → Ranges Mais Amplos:** Proteção contra oscilações violentas de preço.
-  - **Baixa Volatilidade → Ranges Mais Estreitos:** Maximização da eficiência na coleta de taxas.
-- **Configuração:**
-  - Limite Inferior Bullish: `preço_atual - (ATR × 10.0)`
-  - Limite Superior Bullish: `preço_atual + (ATR × 25.0)`
-  - Neutro Simétrico: `preço_atual ± (ATR × 20.0)`
-
-#### 🛡️ Gestão de Risco Institucional
-- **Módulo RiskManager:** Guardião centralizado que aplica restrições rigorosas de segurança:
-  - **Monitoramento do Health Factor (Fator de Saúde):** Nunca permite que posições na AAVE fiquem abaixo de um HF de 1.5 (liquidação ocorre em 1.0).
-  - **Reserva de Gas:** Mantém sempre $50 em reservas para transações de emergência.
-  - **Buffer Líquido (Liquid Buffer):** Mantém 20% do capital em stablecoins para flexibilidade.
-  - **Saída de Emergência:** Desalavancagem automática se os limites de risco forem violados.
+#### 🛡️ Gestão de Risco Institucional (RiskManager V2)
+- **Kill Switch Global:** Desalavancagem total e conversão para 100% USD se o Drawdown Global exceder 15% ou Daily exceder 10%.
+- **Position Sizing Adaptativo:** Recálculo automático de ordens baseados no saldo real disponível para eliminar falhas de execução.
+- **Travas por Regime:** Limites de Drawdown dinâmicos (BEAR: 10% | BULL: 20%).
+- **Reserva de Gas:** Proteção de $50 para operações de emergência.
 
 ---
 
