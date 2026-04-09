@@ -9,7 +9,8 @@ from decimal import Decimal
 from backend.src.data.storage import log_open_position, log_close_position
 from ..config import (
     SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL, 
-    MAX_GLOBAL_DRAWDOWN, MAX_DAILY_DRAWDOWN, ENVIRONMENT, PRIVATE_RPC_URL,
+    MAX_GLOBAL_DRAWDOWN, MAX_DAILY_DRAWDOWN, ENVIRONMENT,
+    RPC_URL_PRIMARY, RPC_URL_SECONDARY, RPC_URL_DECENTRALIZED,
     NETWORK_TIMEOUT_SECONDS, NETWORK_RETRY_ATTEMPTS, BINANCE_API_KEY, BINANCE_API_SECRET,
     validate_production_secrets
 )
@@ -17,6 +18,7 @@ from ..utils.math import calculate_lp_value, calculate_liquidity_l
 from ..utils.network import async_execute_with_retry
 from .risk_manager import RiskManager
 from .exchange import BinanceExchangeClient, SecurityAuditException
+from .rpc_manager import RPCManager
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,14 @@ class TradingEngine:
         self.is_killed = False
         self.environment = ENVIRONMENT
         self.cloud_mode = cloud_mode or (ENVIRONMENT == "production")
-        self.rpc_url = PRIVATE_RPC_URL
+        
+        # Nível 2.1: Multi-RPC Failover
+        self.rpc_manager = RPCManager(
+            primary_url=RPC_URL_PRIMARY,
+            secondary_url=RPC_URL_SECONDARY,
+            decentralized_url=RPC_URL_DECENTRALIZED,
+            timeout=NETWORK_TIMEOUT_SECONDS
+        )
         
         # Auditoria Crítica: Nível 3.2
         self.exchange_client = BinanceExchangeClient(BINANCE_API_KEY, BINANCE_API_SECRET, environment=ENVIRONMENT)
@@ -65,11 +74,19 @@ class TradingEngine:
             logger.info(f"🛡️ Auditoria Ativa (Níveis 1, 2, 3): Timeouts habilitados e RPC Privado pronto.")
 
     def _verify_environment_security(self):
-        """Implementa as travas de segurança da Auditoria Nível 3.2."""
+        """Implementa as travas de segurança da Auditoria Nível 3.2 e Resiliência 2.1."""
         if self.environment == "production":
             logger.warning("🚨 [MODO PRODUÇÃO] Iniciando verificações de segurança institucionais.")
             validate_production_secrets()
             self.exchange_client.validate_api_permissions()
+            
+            # Nível 2.1: RPC Health Check
+            try:
+                import asyncio
+                asyncio.run(self.rpc_manager.perform_health_check())
+            except Exception as e:
+                logger.error(f"Falha ao realizar Health Check inicial de RPC: {e}")
+
             logger.info("✓ Verificações Institucionais Nível 3.2 Passaram (API Key Protegida).")
         else:
             logger.info("🛡️ [SANDBOX MODE] Isolamento de ambiente garantido. Nenhuma ordem real para Mainnet.")

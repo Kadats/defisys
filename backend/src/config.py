@@ -146,7 +146,9 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 
 	# Level 2 Resilience & Infrastructure
 	ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "sandbox")
-	PRIVATE_RPC_URL: str = os.environ.get("PRIVATE_RPC_URL", "")
+	RPC_URL_PRIMARY: str = os.environ.get("RPC_URL_PRIMARY", "")
+	RPC_URL_SECONDARY: str = os.environ.get("RPC_URL_SECONDARY", "")
+	RPC_URL_DECENTRALIZED: str = os.environ.get("RPC_URL_DECENTRALIZED", "")
 	NETWORK_TIMEOUT_SECONDS: float = 5.0
 	NETWORK_RETRY_ATTEMPTS: int = 3
 
@@ -302,6 +304,8 @@ MAX_GLOBAL_DRAWDOWN = _settings.MAX_GLOBAL_DRAWDOWN
 
 # Level 2 Resilience & Infrastructure (exports)
 ENVIRONMENT = _settings.ENVIRONMENT
-PRIVATE_RPC_URL = _settings.PRIVATE_RPC_URL
+RPC_URL_PRIMARY = _settings.RPC_URL_PRIMARY
+RPC_URL_SECONDARY = _settings.RPC_URL_SECONDARY
+RPC_URL_DECENTRALIZED = _settings.RPC_URL_DECENTRALIZED
 NETWORK_TIMEOUT_SECONDS = _settings.NETWORK_TIMEOUT_SECONDS
 NETWORK_RETRY_ATTEMPTS = _settings.NETWORK_RETRY_ATTEMPTS

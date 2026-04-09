@@ -14,7 +14,7 @@ Documento de controle de auditoria de risco e arquitetura para implantação em 
 
 ## Nível 2: Auditoria de Infraestrutura (Risco de Execução)
 
-- [ ] **2.1 Resiliência de API e RPC**: Implementar lógica de fallback, timeouts (max 5s) e retries assíncronos para chamadas externas (ex: consultas de preço e integrações com corretoras/DEX).
+- [x] **2.1 Resiliência de API e RPC**: Implementar lógica de fallback (Multi-RPC Failover), timeouts (max 5s) e retries assíncronos para chamadas externas. (Concluído: 2026-04-09)
 
 - [ ] **2.2 Proteção contra MEV**: Estruturar a lógica de execução real de LPs e Swaps utilizando RPCs privados ou proteção de slippage estrita para evitar ataques de Sandwich Bots.
 
@@ -34,6 +34,7 @@ Documento de controle de auditoria de risco e arquitetura para implantação em 
 
 | Data | Evento | Status |
 |------|--------|--------|
+| 2026-04-09 | Nível 2.1 concluído (Multi-RPC Failover). Resiliência de infraestrutura garantida. | ✓ Concluído |
 | 2026-04-09 | Nível 3.2 concluído (Validação de chaves de API e isolamento Sandbox). Nível 1 revalidado (Verde). | ✓ Concluído |
 | 2026-04-09 | Nível 1 revalidado (Verde). Kill-Switch validado em produção. Iniciado Nível 2 (RPC/Resiliência). | ✓ Concluído |
 | 2026-03-27 | Aplicado shift(1) em todas as colunas de features no pipeline de dados para eliminar Look-ahead Bias. Incluída SMA_200. | ✓ Concluído |
