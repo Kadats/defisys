@@ -31,6 +31,23 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres_paper:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: defisys_paper_trading
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - paper_db_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d defisys_paper_trading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -42,6 +59,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/defisys
       - TEST_DATABASE_URL=postgresql://user:password@postgres_test:5432/defisys_test
+      - PAPER_DATABASE_URL=postgresql://user:password@postgres_paper:5432/defisys_paper_trading
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash}
       - GEMINI_BACKTEST_DAYS=30
@@ -50,10 +68,19 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./tests:/app/tests
+      - backend_logs:/app/backend/logs
     depends_on:
       postgres:
         condition: service_healthy
+      postgres_paper:
+        condition: service_healthy
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   backend-test:
     build:
@@ -96,3 +123,5 @@ services:
 
 volumes:
   db_data:
+  paper_db_data:
+  backend_logs:

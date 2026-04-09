@@ -271,3 +271,15 @@ Conectar dados reais de derivativos e implementar a capacidade de lucrar em qued
 - [x] AggressiveShortStrategy: gatilho em Regime BEAR com alta confiança de queda.
 - [x] TDD: validação de lucro em cenário de queda de 5%.
 - [x] Retreino Final e Validação de ROI (+3.56% no OOS Bear Market).
+
+## Fase 9: Infraestrutura Cloud e Isolamento de Paper Trading [ ]
+
+### Objetivo
+Preparar o ambiente para execução 24/7 na nuvem com isolamento total de dados de teste, histórico e simulação real (Paper Trading).
+
+### Tarefas
+- [x] Multi-DB Setup: Criação da instância `defisys_paper_trading` no Docker Compose.
+- [x] Persistência Robusta: Configuração de volumes nomeados para logs e dados para evitar perda em reinicializações.
+- [x] Health Checks: Auto-restart do backend caso a API/Engine trave por mais de 60s.
+- [x] Script de Bootstrap: Criação do `setup_cloud.sh` para deploy automatizado em instâncias remotas.
+- [ ] Conexão WebSockets: Migração de polling para dados em tempo real (Audit 3.3).
