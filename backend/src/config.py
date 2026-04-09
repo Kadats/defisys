@@ -142,6 +142,12 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	MAX_DAILY_DRAWDOWN: float = 0.10  # 10% daily drawdown limit
 	MAX_GLOBAL_DRAWDOWN: float = 0.15  # 15% global drawdown limit
 
+	# Level 2 Resilience & Infrastructure
+	ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "sandbox")
+	PRIVATE_RPC_URL: str = os.environ.get("PRIVATE_RPC_URL", "")
+	NETWORK_TIMEOUT_SECONDS: float = 5.0
+	NETWORK_RETRY_ATTEMPTS: int = 3
+
 	if _HAS_PYDANTIC:
 		model_config = ConfigDict(
 			env_file=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -179,6 +185,12 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 			self.MAX_DAILY_DRAWDOWN = float(os.environ.get('MAX_DAILY_DRAWDOWN', 0.10))
 			self.MAX_GLOBAL_DRAWDOWN = float(os.environ.get('MAX_GLOBAL_DRAWDOWN', 0.15))
 			
+			# Level 2 Resilience & Infrastructure
+			self.ENVIRONMENT = os.environ.get("ENVIRONMENT", "sandbox")
+			self.PRIVATE_RPC_URL = os.environ.get("PRIVATE_RPC_URL", "")
+			self.NETWORK_TIMEOUT_SECONDS = float(os.environ.get("NETWORK_TIMEOUT_SECONDS", 5.0))
+			self.NETWORK_RETRY_ATTEMPTS = int(os.environ.get("NETWORK_RETRY_ATTEMPTS", 3))
+
 			# Machine Learning Configuration
 			self.ML_TRAIN_SPLIT_DATE = os.environ.get('ML_TRAIN_SPLIT_DATE', '2026-01-01')
 			self.ML_CONFIDENCE_THRESHOLD = float(os.environ.get('ML_CONFIDENCE_THRESHOLD', 0.65))
@@ -264,3 +276,9 @@ MAX_DEBT_TO_RESERVE_RATIO = _settings.MAX_DEBT_TO_RESERVE_RATIO
 DELEVERAGE_THRESHOLD_HF = _settings.DELEVERAGE_THRESHOLD_HF
 MAX_DAILY_DRAWDOWN = _settings.MAX_DAILY_DRAWDOWN
 MAX_GLOBAL_DRAWDOWN = _settings.MAX_GLOBAL_DRAWDOWN
+
+# Level 2 Resilience & Infrastructure (exports)
+ENVIRONMENT = _settings.ENVIRONMENT
+PRIVATE_RPC_URL = _settings.PRIVATE_RPC_URL
+NETWORK_TIMEOUT_SECONDS = _settings.NETWORK_TIMEOUT_SECONDS
+NETWORK_RETRY_ATTEMPTS = _settings.NETWORK_RETRY_ATTEMPTS

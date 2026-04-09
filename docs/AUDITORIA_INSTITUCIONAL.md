@@ -22,7 +22,7 @@ Documento de controle de auditoria de risco e arquitetura para implantação em 
 
 ## Nível 3: Auditoria Financeira e de Segurança
 
-- [ ] **3.1 Global Kill-Switch (Drawdown)**: Desenvolver um serviço independente que trava novas execuções e converte garantias para Stablecoins caso o portfólio sofra queda > 15% em 24h, ignorando a IA.
+- [x] **3.1 Global Kill-Switch (Drawdown)**: Desenvolver um serviço independente que trava novas execuções e converte garantias para Stablecoins caso o portfólio sofra queda > 15% em 24h, ignorando a IA. (Concluído: 2026-04-09)
 
 - [ ] **3.2 API Keys e Sandbox**: Isolar ambientes e garantir que as chaves de produção tenham bloqueio total de saque (Withdrawal = False).
 
@@ -34,6 +34,7 @@ Documento de controle de auditoria de risco e arquitetura para implantação em 
 
 | Data | Evento | Status |
 |------|--------|--------|
+| 2026-04-09 | Nível 1 revalidado (Verde). Kill-Switch validado em produção. Iniciado Nível 2 (RPC/Resiliência). | ✓ Concluído |
 | 2026-03-27 | Aplicado shift(1) em todas as colunas de features no pipeline de dados para eliminar Look-ahead Bias. Incluída SMA_200. | ✓ Concluído |
 | 2026-02-27 | Documento criado. Foco inicial no Nível 1. | ✓ Iniciado |
 

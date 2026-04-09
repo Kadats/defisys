@@ -7,8 +7,13 @@ from datetime import timedelta
 from decimal import Decimal
 
 from backend.src.data.storage import log_open_position, log_close_position
-from ..config import SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL, MAX_GLOBAL_DRAWDOWN, MAX_DAILY_DRAWDOWN
+from ..config import (
+    SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL, 
+    MAX_GLOBAL_DRAWDOWN, MAX_DAILY_DRAWDOWN, ENVIRONMENT, PRIVATE_RPC_URL,
+    NETWORK_TIMEOUT_SECONDS, NETWORK_RETRY_ATTEMPTS
+)
 from ..utils.math import calculate_lp_value, calculate_liquidity_l
+from ..utils.network import async_execute_with_retry
 from .risk_manager import RiskManager
 
 logger = logging.getLogger(__name__)
@@ -19,7 +24,7 @@ DEBT_INTEREST_RATE = 0.075
 
 class TradingEngine:
     
-    def __init__(self, initial_capital_usd: float = 1000.0, gas_fee_usd: float = SIMULATED_GAS_FEE_USD, slippage_pct: float = SLIPPAGE_PCT):
+    def __init__(self, initial_capital_usd: float = 1000.0, gas_fee_usd: float = SIMULATED_GAS_FEE_USD, slippage_pct: float = SLIPPAGE_PCT, cloud_mode: bool = False):
         self.initial_capital = initial_capital_usd
         self.usd_balance = initial_capital_usd 
         self.btc_hodl_balance = 0.0
@@ -33,6 +38,8 @@ class TradingEngine:
         self.health_factor = 999.0
         self.is_liquidated = False
         self.is_killed = False
+        self.cloud_mode = cloud_mode or (ENVIRONMENT == "production")
+        self.rpc_url = PRIVATE_RPC_URL
         self.global_hwm = initial_capital_usd
         self.daily_hwm_window = []
         self.active_lps = []
@@ -44,7 +51,10 @@ class TradingEngine:
         self._audit_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "audit.csv"))
         with open(self._audit_path, "w", encoding="utf-8") as f: f.write("Timestamp,Action,BTC_Price,USD_Balance,Total_Debt,BTC_Hodl,Net_Worth,Health_Factor\n")
         self.risk_manager = RiskManager(gas_reserve_usd=GAS_RESERVE_USD, simulated_gas_fee_usd=self.gas_fee_usd, max_global_drawdown=MAX_GLOBAL_DRAWDOWN, max_daily_drawdown=MAX_DAILY_DRAWDOWN)
-        logger.info(f"TradingEngine v2 inicializado com ${initial_capital_usd} USD.")
+        
+        logger.info(f"TradingEngine v2.1 ({'CLOUD' if self.cloud_mode else 'SIM'}) inicializado com ${initial_capital_usd} USD.")
+        if self.cloud_mode:
+            logger.info(f"🛡️ Auditoria Nível 2 Ativa: Timeouts (5s) e Retries (3) habilitados via RPC Privado.")
 
     def _log_transaction(self, timestamp, action_type, btc_price, usd_amount=0.0, btc_amount=0.0, fee_usd=0.0, pnl_usd=0.0, details=""):
         net_worth = self._calculate_portfolio_value(btc_price)
