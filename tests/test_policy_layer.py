@@ -48,13 +48,13 @@ def test_policy_layer_bear_routes_to_swing_usd(mock_detect_regime, mock_engine):
 @patch('backend.src.core.policy_layer.detect_regime')
 def test_policy_layer_uncertain_forces_abstain(mock_detect_regime, mock_engine):
     mock_detect_regime.return_value = MarketRegime.UNCERTAIN
-    
+
     # Mock some active positions
     mock_engine.active_lps = [{'id': 1}, {'id': 2}]
     mock_engine.btc_hodl_balance = 1.5
-    
+    mock_engine.usd_balance = 1000.0
+
     policy = PolicyLayerStrategy()
-    
     row = pd.Series({'Close': 40000, 'ATR': 100})
     timestamp = pd.Timestamp('2024-01-01')
     
@@ -100,7 +100,8 @@ def test_bear_high_volatility_avoids_pools(mock_engine):
         'prediction_proba': 0.3
     })
     timestamp = pd.Timestamp('2024-01-01')
-    
+    mock_engine.usd_balance = 500.0
+
     policy = PolicyLayerStrategy()
     result = policy.execute(row, mock_engine, timestamp)
     

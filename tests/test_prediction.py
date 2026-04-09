@@ -16,6 +16,8 @@ def dummy_data():
         'FundingRate': np.random.uniform(-0.01, 0.01, 100),
         'OpenInterest': np.random.uniform(1e8, 1e9, 100),
         'VolumeUSD': np.random.uniform(1e6, 1e7, 100),
+        'oi_change_4h': np.random.uniform(-0.05, 0.05, 100),
+        'funding_velocity': np.random.uniform(-0.0001, 0.0001, 100),
         TARGET: np.random.randint(0, 2, 100)
     }
     return pd.DataFrame(data)

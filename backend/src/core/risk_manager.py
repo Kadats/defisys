@@ -202,7 +202,12 @@ class RiskManager:
             Adjusted amount in USD (clamped to available), minimum 0.0.
         """
         available = max(0.0, current_balance - gas_fee_usd - min_reserve_usd)
-        return min(requested_capital, available)
+        adjusted = min(requested_capital, available)
+        
+        if adjusted < requested_capital:
+            logger.info(f"[BALANCE_INFO] Requested: ${requested_capital:.2f} | Available: ${available:.2f} | Adjusted: ${adjusted:.2f}")
+            
+        return adjusted
 
     def calculate_target_reserve(self, total_equity_usd: float) -> float:
         """Compute dynamic reserve target as a fraction of total equity."""

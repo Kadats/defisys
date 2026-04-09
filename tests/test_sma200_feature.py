@@ -22,7 +22,7 @@ def make_dummy_df(n=3000):
 
     # Fill other numeric features required by FEATURES with random numbers
     for col in [
-        'RSI', 'FundingRate', 'OpenInterest', 'VolumeUSD'
+        'RSI', 'FundingRate', 'OpenInterest', 'VolumeUSD', 'oi_change_4h', 'funding_velocity'
     ]:
         df[col] = rng.normal(0, 1, n)
 

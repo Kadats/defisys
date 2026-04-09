@@ -10,11 +10,13 @@ from backend.src.data.storage import log_open_position, log_close_position
 from ..config import (
     SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL, 
     MAX_GLOBAL_DRAWDOWN, MAX_DAILY_DRAWDOWN, ENVIRONMENT, PRIVATE_RPC_URL,
-    NETWORK_TIMEOUT_SECONDS, NETWORK_RETRY_ATTEMPTS
+    NETWORK_TIMEOUT_SECONDS, NETWORK_RETRY_ATTEMPTS, BINANCE_API_KEY, BINANCE_API_SECRET,
+    validate_production_secrets
 )
 from ..utils.math import calculate_lp_value, calculate_liquidity_l
 from ..utils.network import async_execute_with_retry
 from .risk_manager import RiskManager
+from .exchange import BinanceExchangeClient, SecurityAuditException
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,14 @@ class TradingEngine:
         self.health_factor = 999.0
         self.is_liquidated = False
         self.is_killed = False
+        self.environment = ENVIRONMENT
         self.cloud_mode = cloud_mode or (ENVIRONMENT == "production")
         self.rpc_url = PRIVATE_RPC_URL
+        
+        # Auditoria Crítica: Nível 3.2
+        self.exchange_client = BinanceExchangeClient(BINANCE_API_KEY, BINANCE_API_SECRET, environment=ENVIRONMENT)
+        self._verify_environment_security()
+
         self.global_hwm = initial_capital_usd
         self.daily_hwm_window = []
         self.active_lps = []
@@ -52,9 +60,19 @@ class TradingEngine:
         with open(self._audit_path, "w", encoding="utf-8") as f: f.write("Timestamp,Action,BTC_Price,USD_Balance,Total_Debt,BTC_Hodl,Net_Worth,Health_Factor\n")
         self.risk_manager = RiskManager(gas_reserve_usd=GAS_RESERVE_USD, simulated_gas_fee_usd=self.gas_fee_usd, max_global_drawdown=MAX_GLOBAL_DRAWDOWN, max_daily_drawdown=MAX_DAILY_DRAWDOWN)
         
-        logger.info(f"TradingEngine v2.1 ({'CLOUD' if self.cloud_mode else 'SIM'}) inicializado com ${initial_capital_usd} USD.")
+        logger.info(f"TradingEngine v2.2 [{ENVIRONMENT.upper()}] inicializado com ${initial_capital_usd} USD.")
         if self.cloud_mode:
-            logger.info(f"🛡️ Auditoria Nível 2 Ativa: Timeouts (5s) e Retries (3) habilitados via RPC Privado.")
+            logger.info(f"🛡️ Auditoria Ativa (Níveis 1, 2, 3): Timeouts habilitados e RPC Privado pronto.")
+
+    def _verify_environment_security(self):
+        """Implementa as travas de segurança da Auditoria Nível 3.2."""
+        if self.environment == "production":
+            logger.warning("🚨 [MODO PRODUÇÃO] Iniciando verificações de segurança institucionais.")
+            validate_production_secrets()
+            self.exchange_client.validate_api_permissions()
+            logger.info("✓ Verificações Institucionais Nível 3.2 Passaram (API Key Protegida).")
+        else:
+            logger.info("🛡️ [SANDBOX MODE] Isolamento de ambiente garantido. Nenhuma ordem real para Mainnet.")
 
     def _log_transaction(self, timestamp, action_type, btc_price, usd_amount=0.0, btc_amount=0.0, fee_usd=0.0, pnl_usd=0.0, details=""):
         net_worth = self._calculate_portfolio_value(btc_price)
@@ -120,6 +138,7 @@ class TradingEngine:
         if pos_id is None: return None
         self.usd_balance -= (self.gas_fee_usd + actual)
         self.active_lps.append({"id": pos_id, "L": float(L), "range_lower": float(range_lower), "range_upper": float(range_upper), "open_timestamp": timestamp, "entry_price": eff_price, "initial_capital_usd": actual, "fees_accrued_usdt": 0.0, "fees_accrued_btc": 0.0, "initial_amount_btc": float(btc), "initial_amount_usdt": float(usdt), "days_out_of_range": 0})
+        self.decision_history.append(f"[{timestamp.date()}] OPEN LP ({strategy}): ${actual:.2f} at {eff_price:.2f}")
         self._log_transaction(timestamp, "OPEN_LP", eff_price, actual, float(btc), self.gas_fee_usd, details=f"LP_ID: {pos_id}")
         return pos_id
 
@@ -163,12 +182,73 @@ class TradingEngine:
         if not self.active_lps or self.usd_balance < self.gas_fee_usd: return
         refill = self.usd_balance < GAS_RESERVE_USD
         for lp in self.active_lps:
-            total = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_price)
-            if total > self.gas_fee_usd * (2 if refill else 25) and self.usd_balance >= self.gas_fee_usd:
+            total_fees_usd = lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_price)
+            # Harvest threshold: 2x gas if refill needed, else 10x gas (V14 Smart Harvest)
+            threshold = self.gas_fee_usd * (2 if refill else 10)
+            
+            if total_fees_usd > threshold and self.usd_balance >= self.gas_fee_usd:
                 self.usd_balance -= self.gas_fee_usd
-                if refill: self.usd_balance += total
-                else: self.btc_hodl_balance += lp['fees_accrued_btc']; self.usd_balance += lp['fees_accrued_usdt']
-                lp['fees_accrued_btc'] = lp['fees_accrued_usdt'] = 0.0
+                btc_fees = lp['fees_accrued_btc']
+                usdt_fees = lp['fees_accrued_usdt']
+                
+                if refill:
+                    # Refill mode: convert all to USD to stay solvent
+                    self.usd_balance += total_fees_usd
+                    self.decision_history.append(f"[{timestamp.date()}] HARVEST (REFILL): {total_fees_usd:.2f} USD from LP {lp['id']} (Gas: {self.gas_fee_usd:.2f})")
+                else:
+                    # Auto-compound mode: BTC to collateral, USD to balance
+                    self.usd_balance += usdt_fees
+                    if btc_fees > 0:
+                        self.btc_hodl_balance += btc_fees
+                        self.add_collateral(btc_fees)
+                    self.decision_history.append(f"[{timestamp.date()}] HARVEST (AUTO): {usdt_fees:.2f} USD + {btc_fees:.4f} BTC to Collateral from LP {lp['id']} (Gas: {self.gas_fee_usd:.2f})")
+                
+                lp['fees_accrued_btc'] = 0.0
+                lp['fees_accrued_usdt'] = 0.0
+
+    def add_collateral(self, btc_amount):
+        if btc_amount <= 0 or self.btc_hodl_balance < btc_amount: return
+        self.btc_hodl_balance -= btc_amount
+        self.btc_collateral_balance += btc_amount
+        logger.info(f"Added {btc_amount:.4f} BTC to collateral.")
+
+    def remove_collateral(self, btc_amount, current_price):
+        if btc_amount <= 0 or self.btc_collateral_balance < btc_amount: return False
+        # Safety check: can't remove if it would trigger liquidation
+        new_collateral = self.btc_collateral_balance - btc_amount
+        if self.total_debt_usd > 0:
+            new_hf = self.risk_manager.calculate_health_factor(new_collateral * current_price, self.total_debt_usd)
+            if new_hf < self.risk_manager.hf_warning: return False
+        
+        self.btc_collateral_balance -= btc_amount
+        self.btc_hodl_balance += btc_amount
+        return True
+
+    def borrow_usd(self, amount, current_price):
+        if amount <= 0: return False
+        new_debt = self.total_debt_usd + amount
+        hf = self.risk_manager.calculate_health_factor(self.btc_collateral_balance * current_price, new_debt)
+        if hf < self.risk_manager.hf_refinance: return False
+        
+        self.total_debt_usd = new_debt
+        self.usd_balance += amount
+        return True
+
+    def repay_usd(self, amount):
+        actual = min(amount, self.usd_balance, self.total_debt_usd)
+        if actual <= 0: return
+        self.usd_balance -= actual
+        self.total_debt_usd -= actual
+
+    def _handle_liquidation(self, timestamp):
+        logger.critical(f"[{timestamp.date()}] 💀 LIQUIDATION EVENT 💀")
+        self.is_liquidated = True
+        self.usd_balance = 0.0
+        self.btc_hodl_balance = 0.0
+        self.btc_collateral_balance = 0.0
+        self.total_debt_usd = 0.0
+        self.active_lps = []
+        self.active_shorts = []
 
     def emergency_shutdown(self, current_price, timestamp):
         logger.critical(f"[{timestamp.date()}] 🚨 EMERGENCY SHUTDOWN 🚨")

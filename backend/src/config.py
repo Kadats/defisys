@@ -21,6 +21,8 @@ class Settings(BaseSettings if _HAS_PYDANTIC else object):
 	)
 
 	# API endpoints (change via env if needed)
+	BINANCE_API_KEY: str = os.environ.get("BINANCE_API_KEY", "")
+	BINANCE_API_SECRET: str = os.environ.get("BINANCE_API_SECRET", "")
 	BINANCE_API_BASE_URL: str = "https://api.binance.com/api/v3"
 	BINANCE_FUTURES_API_BASE_URL: str = "https://fapi.binance.com"
 	DERIBIT_API_BASE_URL: str = "https://www.deribit.com/api/v2"
@@ -211,12 +213,33 @@ _settings = Settings()
 PROJECT_ROOT = _settings.PROJECT_ROOT
 DATA_DIR = _settings.DATA_DIR
 DATABASE_URL = _settings.DATABASE_URL
+BINANCE_API_KEY = _settings.BINANCE_API_KEY
+BINANCE_API_SECRET = _settings.BINANCE_API_SECRET
 BINANCE_API_BASE_URL = _settings.BINANCE_API_BASE_URL
 BINANCE_FUTURES_API_BASE_URL = _settings.BINANCE_FUTURES_API_BASE_URL
 FNG_API_URL = _settings.FNG_API_URL
 BLOCKCHAIR_API_URL = _settings.BLOCKCHAIR_API_URL
 THEGRAPH_UNISWAP_V3_URL = _settings.THEGRAPH_UNISWAP_V3_URL
 THEGRAPH_API_KEY = _settings.THEGRAPH_API_KEY
+
+def validate_production_secrets():
+    """Valida se as chaves necessárias estão presentes em modo produção."""
+    if _settings.ENVIRONMENT == "production":
+        missing = []
+        if not _settings.BINANCE_API_KEY: missing.append("BINANCE_API_KEY")
+        if not _settings.BINANCE_API_SECRET: missing.append("BINANCE_API_SECRET")
+        
+        # Auditoria Nível 3.2: Verificar existência de .env em produção
+        env_path = os.path.abspath(os.path.join(_settings.PROJECT_ROOT, ".env"))
+        if not os.path.exists(env_path):
+            import logging
+            logging.getLogger(__name__).warning(f"⚠️ Arquivo .env não encontrado em {env_path}. Usando variáveis de ambiente do sistema.")
+            
+        if missing:
+            raise RuntimeError(f"⚠️ MODO PRODUÇÃO ATIVO: Faltam chaves de segredo: {', '.join(missing)}")
+        # Nunca logar o valor das chaves
+        import logging
+        logging.getLogger(__name__).info("✓ Chaves de produção validadas com sucesso.")
 DEFAULT_SYMBOL = _settings.DEFAULT_SYMBOL
 DEFAULT_INTERVAL = _settings.DEFAULT_INTERVAL
 DEFAULT_KLINES_LIMIT = _settings.DEFAULT_KLINES_LIMIT
