@@ -31,19 +31,20 @@ RUN poetry config virtualenvs.create false && \
 
 COPY backend ./backend
 
-FROM gcr.io/distroless/base-debian12 AS runtime
+FROM python:3.12-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/usr/local/bin:$PATH"
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /usr/local /usr/local
-COPY --from=builder /lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
-COPY --from=builder /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
 COPY --from=builder /app/backend /app/backend
 
 EXPOSE 8000
 
-CMD ["/usr/local/bin/python", "-m", "uvicorn", "backend.src.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "backend.src.api:app", "--host", "0.0.0.0", "--port", "8000"]

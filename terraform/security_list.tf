@@ -1,0 +1,84 @@
+# Security List para restringir SSH e liberar 80/443 diretamente para a internet.
+resource "oci_core_security_list" "defisys_public" {
+  # Security List aplica regras na subnet (modelo simples para 1 VM).
+  compartment_id = local.compartment_id
+  vcn_id         = oci_core_vcn.defisys.id
+  display_name   = "${local.project_name}-public-sl"
+
+  egress_security_rules {
+    # Egress livre para updates do sistema e downloads da aplicacao.
+    protocol         = "all"
+    destination      = "0.0.0.0/0"
+    destination_type = "CIDR_BLOCK"
+  }
+
+  dynamic "egress_security_rules" {
+    for_each = var.enable_ipv6 ? [1] : []
+    content {
+      protocol         = "all"
+      destination      = "::/0"
+      destination_type = "CIDR_BLOCK"
+    }
+  }
+
+  ingress_security_rules {
+    # SSH somente do seu IP fixo (mais seguro).
+    protocol    = "6"
+    source      = var.allowed_ssh_cidr
+    source_type = "CIDR_BLOCK"
+    tcp_options {
+      min = 22
+      max = 22
+    }
+  }
+
+  ingress_security_rules {
+    # HTTP publico direto.
+    protocol    = "6"
+    source      = "0.0.0.0/0"
+    source_type = "CIDR_BLOCK"
+    tcp_options {
+      min = 80
+      max = 80
+    }
+  }
+
+  ingress_security_rules {
+    # HTTPS publico direto.
+    protocol    = "6"
+    source      = "0.0.0.0/0"
+    source_type = "CIDR_BLOCK"
+    tcp_options {
+      min = 443
+      max = 443
+    }
+  }
+
+  dynamic "ingress_security_rules" {
+    # IPv6 HTTP publico (opcional) se sua conta/VCN suportar IPv6.
+    for_each = var.enable_ipv6 ? [1] : []
+    content {
+      protocol    = "6"
+      source      = "::/0"
+      source_type = "CIDR_BLOCK"
+      tcp_options {
+        min = 80
+        max = 80
+      }
+    }
+  }
+
+  dynamic "ingress_security_rules" {
+    # IPv6 HTTPS publico (opcional) se sua conta/VCN suportar IPv6.
+    for_each = var.enable_ipv6 ? [1] : []
+    content {
+      protocol    = "6"
+      source      = "::/0"
+      source_type = "CIDR_BLOCK"
+      tcp_options {
+        min = 443
+        max = 443
+      }
+    }
+  }
+}
