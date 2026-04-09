@@ -1,13 +1,14 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`backend/src/` contains the Python application: `api.py` exposes the FastAPI app, `system_runner.py` orchestrates sync, training, and simulation flows, `core/` holds trading and risk logic, `ai/` holds ML and sentiment code, `data/` handles ingestion and storage, and `utils/math/` contains pure financial helpers. `frontend/src/` is a Vue 3 + Vite UI with `views/`, `components/`, and `router/`. `tests/` contains the backend test suite. Supporting docs live in `docs/`, and container setup lives in `docker-compose.yml`, `backend/Dockerfile`, and `frontend/Dockerfile`.
+`backend/src/` contains the Python application: `api.py` exposes the FastAPI app, `system_runner.py` orchestrates sync, training, and simulation flows, `core/` holds trading and risk logic (including `rpc_manager.py` for Multi-RPC Failover), `ai/` holds ML and sentiment code, `data/` handles ingestion and storage, and `utils/math/` contains pure financial helpers. `frontend/src/` is a Vue 3 + Vite UI with `views/`, `components/`, and `router/`. `tests/` contains the backend test suite. Supporting docs live in `docs/`, and container setup lives in `docker-compose.yml`, `backend/Dockerfile`, and `frontend/Dockerfile`. The `setup_cloud.sh` script facilitates remote deployment.
 
 ## Build, Test, and Development Commands
 Use Poetry for backend work and npm for the frontend.
 
 - `make install`: install Python dependencies with Poetry.
 - `make install-frontend`: install Vue dependencies with npm.
+- `./setup_cloud.sh`: automate Docker installation and basic setup for cloud instances.
 - `make run-api`: start FastAPI with reload on `0.0.0.0`.
 - `make run-frontend`: run the Vue frontend locally with Vite.
 - `cd frontend && npm run dev`: run the Vue frontend locally on Vite.
@@ -16,7 +17,7 @@ Use Poetry for backend work and npm for the frontend.
 - `make up-test`: start the Docker stack and run backend tests in one step.
 - `make lint`: run Ruff checks.
 - `make format`: run Ruff format and Black.
-- `make up` / `make down`: start or stop the Docker stack.
+- `make up` / `make down`: start or stop the Docker stack (including `postgres`, `postgres_test`, and `postgres_paper`).
 - `cd frontend && npm run build`: build the Vue app for production.
 
 ## Coding Style & Naming Conventions

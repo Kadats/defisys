@@ -41,7 +41,20 @@ Este projeto utiliza **Poetry** como fonte única de dependências do backend. O
 
 ---
 
-## 3. Testes e Qualidade
+## 3. Configuração de Ambiente Institucional
+
+Com a evolução para o Nível 2 da Auditoria, o arquivo `.env` exige novas configurações de resiliência:
+
+*   **RPCs Prioritizados:** Configure `RPC_URL_PRIMARY`, `RPC_URL_SECONDARY` e `RPC_URL_DECENTRALIZED` para habilitar o `RPCManager`.
+*   **Ambiente:** Utilize `ENVIRONMENT=sandbox` para desenvolvimento seguro (Paper Trading) e `ENVIRONMENT=production` apenas em instâncias de nuvem validadas.
+*   **Isolamento de Banco de Dados:** O sistema utiliza três esquemas:
+    - `defisys`: Produção/Histórico.
+    - `defisys_test`: Exclusivo para `pytest`.
+    - `defisys_paper_trading`: Exclusivo para Forward Testing (Paper Trading).
+
+---
+
+## 4. Testes e Qualidade
 
 Antes de abrir um PR ou fazer um commit de feature, certifique-se de que nada foi quebrado.
 

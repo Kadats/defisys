@@ -17,19 +17,19 @@ This is a modular, API-driven application.
 - **Language:** Python 3.12+
 - **Dependency Management:** Poetry (`pyproject.toml`)
 - **Framework:** FastAPI (`backend/src/api.py`), Uvicorn
-- **Database / ORM:** PostgreSQL, SQLAlchemy, Psycopg2
-- **Data Science / ML:** Pandas, NumPy, Scikit-learn, XGBoost
-- **AI Integration:** Google Generative AI (`google-generativeai`)
+- **Database / ORM:** PostgreSQL (Triple Isolation: `defisys`, `defisys_test`, `defisys_paper_trading`), SQLAlchemy
+- **Resilience:** Multi-RPC Failover via `RPCManager` (Primary, Secondary, Decentralized nodes).
 - **Structure:**
   - `src/api.py` & `main.py`: Application entrypoints and API endpoints.
-  - `src/core/`: Trade execution engine and centralized risk management.
-  - `src/ai/`: ML model training, prediction, and heuristics (rule-based signals).
-  - `src/strategies/`: Trading strategies logic.
-  - `src/data/`: Data pipelines, external API sources, and database storage.
-  - `src/utils/math/`: Stateless, testable financial mathematics (APY, IL, Uniswap math).
+  - `src/core/`: Trade execution engine, centralized risk management, and `rpc_manager.py`.
+  - `src/ai/`: ML model training (XGBoost), prediction, and heuristics.
+  - `src/strategies/`: Trading strategies (Bullish, Bearish Short, Aave Yield).
+  - `src/data/`: Data pipelines and isolated storage schemas.
 
-### Frontend (`frontend/`)
-- **Framework:** Vue.js 3 (`App.vue`, `views/`, `components/`)
+### Infrastructure
+- **Containerization:** Docker & Docker Compose (3x PostgreSQL instances, Backend, Frontend).
+- **Deployment:** Cloud-ready via `setup_cloud.sh` with automated health checks.
+
 - **Build Tool:** Vite
 - **Styling:** Tailwind CSS, PostCSS
 - **Libraries:** Vue Router, Lightweight Charts (for crypto charts), xterm.js (for log terminal)

@@ -1,273 +1,196 @@
-# DefiSys V3 - Motor de Trading DeFi Inteligente
+# 🚀 DefiSys V3: Institutional-Grade DeFi Trading Engine
 
-**DefiSys** é um sistema de trading automatizado de nível institucional que implementa a filosofia **BTC Standard Lite**: manter Bitcoin por padrão e alavancar estrategicamente em sinais de alta confirmados. Construído com gestão de risco de nível corporativo, machine learning (treinamento walk-forward) e controles adaptativos de volatilidade.
+![Python Version](https://img.shields.io/badge/python-3.12-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.116+-009688.svg)
+![Docker](https://img.shields.io/badge/Docker-Enabled-blue.svg)
+![License](https://img.shields.io/badge/License-Proprietary-red.svg)
+![Status](https://img.shields.io/badge/Status-Fase%209%20(Resili%C3%AAncia%20Cloud)-green.svg)
 
----
-
-## 🎯 Status do Projeto: Fase 8 Concluída ✅
-
-**Arquitetura Atual:** Modular, baseada em API com suporte a Bull, Bear e Sideways markets.
-- ✅ **Fase 1-6:** Concluídas (Infraestrutura, ML, Policy Layer).
-- ✅ **Fase 7 (Release Gate):** Kill Switch Global e Travas de Capital operacionais.
-- ✅ **Fase 8 (Operacional):** Aave Yield Integration e Aggressive Short Strategy implementados.
-
-**ROI OOS (Jun/25 - Abr/26):** +3.56% em Bear Market (vs -31.1% HODL).
+**DefiSys** is an institutional-grade automated cryptocurrency trading system implementing the **BTC Standard Lite** philosophy: maintaining long Bitcoin exposure by default and strategically leveraging on confirmed bullish signals. Built with corporate-level risk management, walk-forward machine learning (XGBoost), and adaptive volatility controls.
 
 ---
 
-## 🎯 Visão Geral do Projeto
-
-### Filosofia Central: BTC Standard Lite (Extended)
-A estratégia baseia-se em um princípio robusto de preservação e ataque:
-- **Estado Padrão:** Manter em BTC (Bull) ou USD/Yield (Bear).
-- **Regime Bullish (Alta):** Alavancagem estratégica via Aave + Uniswap v3 LP Ranges.
-- **Regime Bearish (Baixa):** Caminho duplo baseado em confiança ML:
-  - **High Confidence Drop:** Aggressive Short via empréstimo de BTC na Aave.
-  - **Uncertainty/Stable Drop:** Yield passivo em Stablecoins (Aave V3).
-- **Regime Sideways:** Farming conservador Delta-Neutral.
-
-### Principais Funcionalidades
-
-#### 🧠 Machine Learning: Walk-Forward (XGBoost)
-- **Features de Derivativos:** Integração real de `FundingRate` e `OpenInterest` (Binance Futures) com escalonamento dinâmico.
-- **Janela de Treinamento:** Walk-forward com data de corte adaptativa (Fase 7: Junho/2025).
-- **Zero Look-Ahead Bias:** Aplicação rigorosa de `shift(1)` em todas as features.
-
-#### 🛡️ Gestão de Risco Institucional (RiskManager V2)
-- **Kill Switch Global:** Desalavancagem total e conversão para 100% USD se o Drawdown Global exceder 15% ou Daily exceder 10%.
-- **Position Sizing Adaptativo:** Recálculo automático de ordens baseados no saldo real disponível para eliminar falhas de execução.
-- **Travas por Regime:** Limites de Drawdown dinâmicos (BEAR: 10% | BULL: 20%).
-- **Reserva de Gas:** Proteção de $50 para operações de emergência.
+## 📌 Table of Contents
+- [🎯 Project Status](#-project-status)
+- [🛡️ Institutional Audit & Resilience](#️-institutional-audit--resilience)
+- [🏗️ System Architecture](#️-system-architecture)
+- [🧠 Core Features](#-core-features)
+- [💡 Trading Strategies](#-the-strategies)
+- [🚀 Quick Start](#-installation--usage)
+- [🔌 API Endpoints](#-essential-api-routes)
+- [🧪 Testing & Development](#-tests--development)
+- [📁 Project Structure](#-project-structure)
 
 ---
 
-## 🏗️ Arquitetura do Sistema: Workflow de Quatro Fases
+## 🎯 Project Status: Phase 9 (Cloud Resilience) 🚀
 
-O DefiSys opera em uma arquitetura **modular e desacoplada**, com fases claramente separadas:
+The project is currently in its final pre-production stage, focusing on high availability and real-time execution.
 
+- **Completed (Phases 1-8):** Core Infrastructure, ML Pipeline, Regime-Aware Policy, Aave Yield, Aggressive Short.
+- **Ongoing (Phase 9):** Optimized Docker infrastructure, Automated Health Checks, and Triple-DB Isolation.
+- **Institutional Audit:** Level 1 (Zero Look-ahead), Level 2.1 (Multi-RPC Failover), Level 3.1 (Global Kill-Switch), and Level 3.2 (API Keys & Sandbox) are fully **APPROVED**.
+
+**Performance Benchmark:** ROI OOS (Jun/25 - Apr/26): **+3.56%** in Bear Market (vs -31.1% HODL).
+
+---
+
+## 🛡️ Institutional Audit & Resilience
+
+DefiSys is engineered for high-stakes environments with multi-layered protection:
+
+1.  **Zero Look-ahead Bias (Level 1):** Rigorous validation ensuring ML models and technical indicators (ATR, RSI, SMA) strictly use closed-candle data (`shift(1)`).
+2.  **Multi-RPC Failover (Level 2.1):** Automated `RPCManager` that switches between prioritized providers (Alchemy, Flashbots, Infura) on failure or timeout (>5s).
+3.  **Global Kill-Switch (Level 3.1):** Hard-coded emergency deleveraging and conversion to Stablecoins if Global Drawdown > 15% or Daily Drawdown > 10%.
+4.  **API Security & Sandbox (Level 3.2):** Automated API Key permission checks (requires `canWithdraw: False`) and strict environment isolation via `ENVIRONMENT=sandbox`.
+
+---
+
+## 🏗️ System Architecture
+
+DefiSys operates on a **modular, resilient, and data-isolated** architecture:
+
+### Triple Database Isolation
+- **`defisys` (Production/History):** Market data for training and verified backtests.
+- **`defisys_test` (Testing):** Ephemeral database for the `pytest` suite.
+- **`defisys_paper_trading` (Forward Testing):** Isolated virtual trade logs for real-time simulation.
+
+### Workflow Visualization
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ FASE 1: COLETA DE DADOS (Automática na inicialização da API)│
+│ PHASE 1: DATA INGESTION (Automatic on Boot)                 │
 │ ─────────────────────────────────────────────────────────── │
-│ • Binance: Velas (klines) de BTC/USDT (4h)                  │
-│ • Índice Fear & Greed: Sentimento diário                    │
-│ • On-Chain: Blockchair (taxas da rede, padrões de tx)       │
-│ • Funding Rate: Binance Futures (sentimento de alavancagem) │
-│ • Open Interest: Binance Futures (indicador de volatilidade)│
-│ • Volatilidade Implícita: Deribit (mercado de opções)       │
-│ • Uniswap V3: Dados das pools (liquidez e volumes)          │
-│                                                             │
-│ ✅ Saída: Banco de dados PostgreSQL com dados atualizados   │
+│ • Binance: BTC/USDT Klines (4h)                             │
+│ • Sentiment: Fear & Greed Index                             │
+│ • On-Chain: Network fees & transaction patterns             │
+│ • Derivatives: Funding Rate & Open Interest (Futures)       │
+│ • DEX: Uniswap V3 Pool Liquidity & Volume                   │
+│ ✅ Output: PostgreSQL Hydro-Synced Data                     │
 └─────────────────────────────────────────────────────────────┘
                            ⬇️
 ┌─────────────────────────────────────────────────────────────┐
-│ FASE 2: TREINAMENTO DO MODELO (Acionado via API)            │
+│ PHASE 2: ML MODEL TRAINING (API Triggered)                  │
 │ ─────────────────────────────────────────────────────────── │
-│ • Carrega dados preparados do banco de dados                │
-│ • Aplica split temporal Walk-Forward:                       │
-│   - TREINO: Dados até 31/12/2023 (~4 anos)                  │
-│   - TESTE: Dados a partir de 01/01/2024 (~2 anos)           │
-│ • Treina: XGBClassifier com base em features essenciais     │
-│ • Gera: Predições para toda a base histórica                │
-│ • Salva: Predições na tabela ml_predictions                 │
-│                                                             │
-│ ✅ Saída: Predições de ML prontas para simulação            │
+│ • Walk-Forward Temporal Split (Train: <2024, Test: 2024-26) │
+│ • Model: XGBClassifier with Derivative Sensitivity          │
+│ • Output: Signal Probability stored in ml_predictions       │
 └─────────────────────────────────────────────────────────────┘
                            ⬇️
 ┌─────────────────────────────────────────────────────────────┐
-│ FASE 3-4: BACKTESTING & SIMULAÇÃO (Acionado via API)        │
+│ PHASE 3-4: SIMULATION & EXECUTION                           │
 │ ─────────────────────────────────────────────────────────── │
-│ • Carrega predições de ML do banco de dados                 │
-│ • Aplica a janela temporal (padrão: últimos 30 dias)        │
-│ • Executa a TradingEngine (com AccumulatorStrategy / BTCLite)│
-│ • Gera: Trades, posições, curvas de capital (equity)        │
-│ • Salva: Métricas resumidas no banco de dados               │
-│                                                             │
-│ ✅ Saída: Relatório completo do backtest com PnL            │
+│ • Regime Classifier (Bull, Bear, Sideways, Uncertain)       │
+│ • TradingEngine: Smart Sizing & Risk Gates                  │
+│ • Output: Trade History, Equity Curves, Audit Logs          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Princípios Chave de Design
+---
 
-1. **Backend Inteligente, Frontend "Burro"**
-   - Backend (Python/FastAPI): Processa todos os dados de mercado, ML, e a lógica de trading.
-   - Frontend (Vue 3/Tailwind): Exibe dados apenas; sem regras de negócio ou cálculos complexos.
+## 🧠 Core Features
 
-2. **Integridade Temporal (Sem Look-Ahead Bias)**
-   - Sincronização de Dados: Sempre coleta os dados mais recentes.
-   - Treinamento: Apenas dados históricos até a data de corte (ex: 31/12/2023).
-   - Teste: Dados após o corte (nunca antes vistos pelo modelo de treinamento).
+### 🧠 Machine Learning: Walk-Forward XGBoost
+- **Derivative-Aware:** Integrates real-time `FundingRate` velocity and `OpenInterest` change.
+- **Confidence Gates:** Executes only when model probability exceeds calibrated thresholds (default 65%).
 
-3. **Cultura de Testes (TDD)**
-   - Orientação baseada em testes contínuos; lógica validada em contêineres Docker usando `pytest`.
+### 🛡️ RiskManager V2
+- **Adaptive Position Sizing:** Automatically adjusts order sizes based on actual balance to prevent execution errors.
+- **Regime-Based Limits:** Dynamic Drawdown caps (e.g., BEAR: 10% limit | BULL: 20% limit).
+- **Gas Solvency:** Mandatory $50 reserve kept in USD for emergency closes.
 
 ---
 
-## 💡 A Estratégia: Como o Sistema Ganha Dinheiro
+## 💡 The Strategies
 
-### Máquina de Estados: Regimes de Mercado
+### 1. **Bullish Regime (Aggressive Growth)**
+- **Leverage Loop:** BTC collateral on Aave -> Borrow USD -> Concentrated LP on Uniswap V3.
+- **Asymmetric ATR Ranges:** Wide upper bounds to capture upside, tight lower bounds for protection.
 
-#### 1. **NEUTRO (Padrão/Conservador)**
-**Condições de Mercado:** O modelo (ML) prevê lateralização ou incerteza.
-
-**Ações:**
-- **Manter BTC:** Mantém exposição 100% à valorização a longo prazo do Bitcoin.
-- **Farming Conservador:** Se houver dívida, abre posições pequenas na Uniswap v3 (BTC/USD) com ranges baseados em ATR simétricos.
-- **Prioridade no Pagamento de Dívida:** Aloca 50% dos lucros para pagar agressivamente qualquer empréstimo pendente na AAVE.
-- **Sem Nova Alavancagem:** Não toma novos USD emprestados.
-
-**Objetivo:** Preservar capital, coletar taxas de LP e reduzir despesas com juros.
+### 2. **Bearish Regime (Defensive / Shorting)**
+- **Aggressive Short:** High-confidence drop signals trigger BTC borrowing and immediate selling.
+- **Aave Yield:** Low-confidence/Uncertain periods move all capital to Aave V3 Lending for passive interest.
 
 ---
 
-#### 2. **BULLISH (Crescimento Agressivo)**
-**Condições de Mercado:** O modelo prevê tendência de alta (>60% de probabilidade) + BTC acima da SMA200 + Fear & Greed > 45.
+## 🚀 Installation & Usage
 
-**Ações:**
-- **Ciclo de Alavancagem (Leverage Loop):**
-  1. Deposita BTC como colateral na AAVE.
-  2. Pega USD emprestado (máx 50% LTV para manter HF > 2.0).
-  3. Troca (swap) 50% do USD emprestado por BTC.
-  4. Abre posição concentrada na Uniswap v3 (BTC/USD) com **ranges assimétricos de ATR**:
-     - Limite Inferior: `preço - (ATR × 10)` (proteção contra volatilidade).
-     - Limite Superior: `preço + (ATR × 25)` (espaço para lucro de alta).
-- **Entrada Fracionada:** Os empréstimos são feitos em lotes graduais (ex: de $250) para suavizar a execução.
-- **Juros Compostos:** As taxas coletadas das posições LP são reinvestidas.
+### Prerequisites
+- **Docker & Docker Compose** (Highly Recommended)
+- Optional: Python 3.12+, Poetry, Node.js 20+
 
-**Objetivo:** Amplificar os ganhos do BTC usando alavancagem enquanto coleta taxas na Uniswap.
-
----
-
-#### 3. **Mecanismos de Segurança (Sempre Ativos)**
-- **Reserva de Gas ($50)** e **Buffer Líquido (20%)**.
-- **Piso de Segurança (Health Factor):** Se o HF da AAVE cair abaixo de 1.5:
-  1. Fecha todas as posições LP imediatamente.
-  2. Paga a dívida para restaurar o HF para > 2.0.
-  3. Retorna ao regime NEUTRO.
-
----
-
-## 🚀 Instalação e Uso
-
-### Pré-requisitos
-- **Docker e Docker Compose** (Ambiente Recomendado)
-- Opcionalmente para dev local sem docker: **Python 3.12+**, **Poetry**, **Node.js 20+**
-
-### Quick Start com Docker (Recomendado)
-
-A melhor forma de rodar o DefiSys é via Docker, pois todas as dependências complexas de ML (XGBoost) e banco de dados já vêm prontas.
+### Quick Start (Docker)
+The Docker environment comes pre-configured with all ML dependencies (XGBoost) and the PostgreSQL stack.
 
 ```bash
-# 1. Clone o repositório
+# 1. Clone & Enter
 git clone https://github.com/Kadats/defisys.git
 cd defisys
 
-# 2. Configure o ambiente
+# 2. Setup Environment
 cp .env.example .env
-# Opcional: Adicione chaves de API caso possua.
+# Edit .env with your API keys (Gemini, Binance, etc.)
 
-# 3. Construa e inicie todos os serviços
+# 3. Boot the System
 docker compose up --build -d
 
-# 4. Acompanhe os logs (útil para ver a sincronização da Fase 1):
+# 4. Monitor Logs
 docker compose logs -f backend
-
-# Endpoints:
-# - API (Swagger UI): http://localhost:8000/docs
-# - Frontend: http://localhost:5173
-```
-
-### Fluxo de Uso via Frontend
-
-1. Acesse o **Frontend** em `http://localhost:5173`.
-2. A sincronização (Fase 1) ocorre automaticamente ao iniciar a API.
-3. Clique em **"🤖 Treinar Modelo"** e aguarde a conclusão da Fase 2.
-4. Clique em **"▶ Simular"** para rodar o backtest dos últimos dias usando as predições geradas (Fases 3-4).
-5. O painel será atualizado automaticamente com as métricas e o histórico de negociação.
-
-### Rotas Essenciais da API
-
-```bash
-# Fase 1: Sincronização de Dados (Automática)
-POST /api/data/sync
-
-# Fase 2: Treinamento de Modelo
-POST /api/model/train
-
-# Fase 3-4: Rodar Simulação / Backtest
-# Corpo da requisição: {"initial_capital": 1050, "simulation_days": 30}
-POST /api/simulation/run
-
-# Checar Resultados e Status
-GET /api/simulation/status
-GET /api/simulation/summary
-GET /api/simulation
 ```
 
 ---
 
-## 🧪 Testes e Desenvolvimento
+## 🔌 Essential API Routes
 
-O projeto defende rigidamente o **TDD (Test-Driven Development)** e conta atualmente com uma suíte de **110 testes automatizados**, assegurando proteção contra regressões em lógicas financeiras críticas, de machine learning e de execução on-chain. Além disso, a nova **Arquitetura por Regime** e o uso do Ensemble para Sizing de Posições (Cautela vs Ganância) garantem que o sistema proteja ativamente o Drawdown em USD durante "Cisnes Negros".
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/api/data/sync` | Manually trigger market data synchronization. |
+| `POST` | `/api/model/train` | Train the XGBoost model using historical data. |
+| `POST` | `/api/simulation/run` | Execute backtest (Body: `{"simulation_days": 30}`). |
+| `GET` | `/api/simulation/summary` | Retrieve PnL, Drawdown, and Sharpe metrics. |
 
-Qualquer alteração deve começar com um teste que falha e passar em ambiente Docker.
+---
+
+## 🧪 Tests & Development
+
+DefiSys follows strict **TDD (Test-Driven Development)** with over **110+ automated tests**.
 
 ```bash
-# Executar todos os testes do backend via Docker (Recomendado)
+# Run full suite in Docker
 docker compose exec backend pytest tests/ -p no:cacheprovider
 
-# Para testar localmente na máquina host usando Make (caso configurado localmente)
-make test
+# Local setup via Makefile
+make build
+make up-test
 ```
-
-### Comandos de Desenvolvimento (Makefile)
-Para conveniência, existe um `Makefile` configurado na raiz:
-- `make build`: Constrói a stack docker.
-- `make up`: Inicia os serviços em background.
-- `make test-docker`: Executa a suíte do `pytest` dentro do contêiner.
-- `make down`: Desliga os contêineres e limpa os volumes descartáveis.
 
 ---
 
-## 📁 Estrutura do Projeto
+## 📁 Project Structure
 
 ```text
 defisys/
 ├── backend/
 │   ├── src/
-│   │   ├── api.py                 # FastAPI main application
-│   │   ├── system_runner.py       # Orquestradores das Fases
-│   │   ├── core/                  # Engine de trade, gestão de risco, e PnL
-│   │   ├── ai/                    # ML (XGBoost), inferências, heurísticas e Agente LLM
-│   │   ├── strategies/            # Estratégias (ex: AccumulatorStrategy, BTCLite)
-│   │   ├── data/                  # Fontes de API e abstração do PostgreSQL
-│   │   └── utils/                 # Funções matemáticas e indicadores
-│   ├── Dockerfile                 # Contêiner do Backend
-│   └── tests/                     # Suite de testes TDD rigorosa
-├── frontend/
-│   ├── src/
-│   │   ├── App.vue                # Main app shell (Vue 3)
-│   │   ├── views/                 # Páginas (Dashboard, Logs, Simulation)
-│   │   └── components/            # Gráficos e Cartões
-│   ├── package.json               # Dependências NPM (Tailwind, Lightweight-charts)
-│   └── Dockerfile                 # Contêiner do Frontend
-├── docs/                          # Documentações detalhadas e referências
-├── docker-compose.yml             # Orquestração (Frontend, Backend, PostgreSQL)
-├── Makefile                       # Comandos úteis
-├── pyproject.toml                 # Dependências gerenciadas via Poetry
-└── README.md                      # Este arquivo
+│   │   ├── api.py                 # FastAPI Gateway
+│   │   ├── core/                  # Engine, RiskManager, RPCManager
+│   │   ├── ai/                    # ML Training & Prediction
+│   │   ├── strategies/            # Bull/Bear/Short Logic
+│   │   └── data/                  # Storage & API Sources
+│   └── tests/                     # TDD Suite (110+ Tests)
+├── frontend/                      # Vue 3 Dashboard
+├── docs/                          # Institutional Audit Documentation
+├── setup_cloud.sh                 # Cloud Auto-Deployment Script
+├── docker-compose.yml             # Triple-DB Infrastructure
+└── README.md                      # Professional Overview
 ```
 
 ---
 
-## 🤝 Contribuição
-Consulte `CONTRIBUTING.md` para diretrizes sobre formatação, testes obrigatórios e fluxo de versionamento. Todas as credenciais e lógicas secretas não devem nunca ser incluídas no versionamento git.
+## 🤝 Contributing
+Refer to `CONTRIBUTING.md` for style guides and PR protocols. 
+
+## 📄 License
+Proprietary Software. All rights reserved.
 
 ---
-
-## 📄 Licença
-Software Proprietário. Todos os direitos reservados.
-
----
-
-**DefiSys V3** - Trading inteligente com gestão de risco inabalável e uma arquitetura modular moderna. 🚀
+**DefiSys V3** - Unyielding Risk Management. Intelligent Execution. 🚀
