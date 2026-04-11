@@ -38,27 +38,53 @@ resource "oci_core_security_list" "defisys_public" {
     }
   }
 
-  ingress_security_rules {
-    # HTTP publico direto.
-    protocol    = "6"
-    source      = "0.0.0.0/0"
-    source_type = "CIDR_BLOCK"
-    tcp_options {
-      min = 80
-      max = 80
+  dynamic "ingress_security_rules" {
+    # Portas operacionais atuais do projeto acessiveis apenas dos CIDRs permitidos.
+    for_each = {
+      for pair in setproduct(
+        toset([
+          for cidr in split(",", var.allowed_ssh_cidr) : trimspace(cidr)
+          if trimspace(cidr) != ""
+        ]),
+        toset([5173, 8000, 5432, 5433, 5434, 3000])
+      ) :
+      "${pair[0]}:${pair[1]}" => {
+        cidr = pair[0]
+        port = pair[1]
+      }
+    }
+    content {
+      protocol    = "6"
+      source      = ingress_security_rules.value.cidr
+      source_type = "CIDR_BLOCK"
+      tcp_options {
+        min = ingress_security_rules.value.port
+        max = ingress_security_rules.value.port
+      }
     }
   }
 
-  ingress_security_rules {
-    # HTTPS publico direto.
-    protocol    = "6"
-    source      = "0.0.0.0/0"
-    source_type = "CIDR_BLOCK"
-    tcp_options {
-      min = 443
-      max = 443
-    }
-  }
+  # ingress_security_rules {
+  #   # HTTP publico direto.
+  #   protocol    = "6"
+  #   source      = "0.0.0.0/0"
+  #   source_type = "CIDR_BLOCK"
+  #   tcp_options {
+  #     min = 80
+  #     max = 80
+  #   }
+  # }
+
+  # ingress_security_rules {
+  #   # HTTPS publico direto.
+  #   protocol    = "6"
+  #   source      = "0.0.0.0/0"
+  #   source_type = "CIDR_BLOCK"
+  #   tcp_options {
+  #     min = 443
+  #     max = 443
+  #   }
+  # }
 
   dynamic "ingress_security_rules" {
     # IPv6 HTTP publico (opcional) se sua conta/VCN suportar IPv6.
