@@ -13,6 +13,7 @@ class RPCNode:
     priority: int
     is_healthy: bool = True
     name: str = "Unknown"
+    latency: float = 0.0
 
 class RPCManager:
     """
@@ -38,6 +39,17 @@ class RPCManager:
         self._active_node_index = 0
         logger.info(f"RPCManager inicializado com {len(self.nodes)} nós configurados.")
 
+    def get_all_health(self) -> dict:
+        """Retorna o estado de saúde e latência de todos os nós (para o Control Center)."""
+        return {
+            node.name.lower(): {
+                "status": "ok" if node.is_healthy else "error",
+                "latency": round(node.latency * 1000, 2),  # em ms
+                "url": node.url[:25] + "..." if len(node.url) > 25 else node.url
+            }
+            for node in self.nodes
+        }
+
     def get_active_rpc(self) -> Optional[RPCNode]:
         """Retorna o nó RPC ativo atual (o primeiro saudável disponível)."""
         for node in self.nodes:
@@ -56,9 +68,14 @@ class RPCManager:
         def post():
             return requests.post(url, data=json.dumps(payload), headers=headers, timeout=self.timeout)
 
+        start_time = asyncio.get_event_loop().time()
         response = await loop.run_in_executor(None, post)
+        end_time = asyncio.get_event_loop().time()
+        
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        result["_latency"] = end_time - start_time
+        return result
 
     async def perform_health_check(self):
         """Realiza um health check rápido (eth_blockNumber) em todos os nós."""
@@ -68,11 +85,13 @@ class RPCManager:
         for node in self.nodes:
             try:
                 # Usando o transporte interno com timeout
-                await self._make_request(node.url, payload)
+                response = await self._make_request(node.url, payload)
                 node.is_healthy = True
-                logger.info(f"✓ Nó {node.name} está SAUDÁVEL.")
+                node.latency = response.get("_latency", 0.0)
+                logger.info(f"✓ Nó {node.name} está SAUDÁVEL ({round(node.latency*1000)}ms).")
             except Exception as e:
                 node.is_healthy = False
+                node.latency = 0.0
                 logger.warning(f"❌ Nó {node.name} está OFFLINE: {str(e)}")
         
         # Garante que o índice ativo seja redefinido para o primeiro saudável

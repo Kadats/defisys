@@ -34,3 +34,21 @@ def analyze_market_regime(row: pd.Series) -> str:
     # (Inclui a "Tendência de Alta Saudável")
     return 'SIDEWAYS'
 
+def get_market_indicators(df: pd.DataFrame = None) -> dict:
+    """
+    Retorna os indicadores mais recentes (RSI, Fear & Greed, Regime) para o Control Center.
+    """
+    if df is None or df.empty:
+        return {
+            "rsi": 0.0,
+            "fear_and_greed": 0,
+            "market_regime": "unknown"
+        }
+    
+    last_row = df.iloc[-1]
+    return {
+        "rsi": float(last_row.get('RSI', 50.0)),
+        "fear_and_greed": int(last_row.get('FNG_Value', 50)),
+        "market_regime": analyze_market_regime(last_row).lower()
+    }
+
