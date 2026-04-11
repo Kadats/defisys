@@ -11,22 +11,49 @@ Data de revisao: 2026-04-09
 
 ## Operacao
 
-### Aplicar a infraestrutura
+### Passo a passo basico
 
-Carregue as variaveis do `.env` e aplique:
+Entre na pasta do projeto:
+
+```bash
+cd /home/luckstyle/repo/private/defisys/terraform
+```
+
+Carregue as variaveis do arquivo `.env` na sua sessao atual do terminal:
 
 ```bash
 set -a
 source .env
 set +a
-terraform apply
 ```
 
-Para revisar antes:
+Esse passo faz o Terraform enxergar automaticamente credenciais, OCIDs, caminho da chave SSH e demais configuracoes necessarias.
+
+### Ver o que sera alterado (`terraform plan`)
+
+Depois de carregar o `.env`, rode:
 
 ```bash
 terraform plan
 ```
+
+O `plan` nao cria nem remove nada. Ele apenas mostra o que o Terraform pretende fazer.
+
+### Criar ou atualizar a infraestrutura (`terraform apply`)
+
+Se o resultado do `plan` estiver correto, rode:
+
+```bash
+terraform apply
+```
+
+O Terraform vai mostrar o resumo e pedir confirmacao. Para continuar, digite:
+
+```bash
+yes
+```
+
+Depois disso ele cria ou atualiza a VM, rede e demais recursos gerenciados por este projeto.
 
 ### Acessar a VM por SSH
 
@@ -53,14 +80,21 @@ Observacao: a porta `22` so aceita os CIDRs configurados em `TF_VAR_allowed_ssh_
 
 ### Destruir os recursos
 
-Para destruir toda a infraestrutura gerenciada por este estado, incluindo rede e VM:
+Se voce quiser remover toda a infraestrutura gerenciada por este projeto, incluindo rede e VM, primeiro carregue o `.env`:
 
 ```bash
 set -a
 source .env
 set +a
+```
+
+Depois rode:
+
+```bash
 terraform destroy
 ```
+
+Assim como no `apply`, o Terraform vai pedir confirmacao antes de apagar os recursos.
 
 ## Nomenclatura
 
