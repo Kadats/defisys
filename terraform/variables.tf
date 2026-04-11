@@ -19,8 +19,9 @@ variable "private_key_path" {
 }
 
 variable "region" {
-  description = "Regiao OCI (ex: sa-saopaulo-1)."
+  description = "Regiao OCI. Padrao operacional atual: us-ashburn-1."
   type        = string
+  default     = "us-ashburn-1"
 }
 
 variable "compartment_ocid" {
@@ -52,13 +53,13 @@ variable "enable_ipv6" {
 }
 
 variable "instance_shape" {
-  description = "Shape flex da VM. Padrao recomendado: VM.Standard.A1.Flex."
+  description = "Shape flex da VM. Padrao operacional atual: VM.Standard.A2.Flex."
   type        = string
-  default     = "VM.Standard.A1.Flex"
+  default     = "VM.Standard.A2.Flex"
 }
 
 variable "instance_ocpus" {
-  description = "OCPUs da VM. Em shapes x86 flex, 1 OCPU equivale a 2 vCPUs."
+  description = "OCPUs da VM. Perfil atual usa 2 OCPUs no shape ARM A2."
   type        = number
   default     = 2
 }
@@ -82,9 +83,9 @@ variable "subnet_cidr" {
 }
 
 variable "availability_domain_name" {
-  description = "Nome do Availability Domain. Se vazio, sera escolhido automaticamente."
+  description = "Nome do Availability Domain. Padrao alinhado com a tenancy atual; deixe vazio para escolha automatica."
   type        = string
-  default     = ""
+  default     = "IgOd:US-ASHBURN-AD-1"
 }
 
 variable "ad_index_seed" {
@@ -96,7 +97,7 @@ variable "ad_index_seed" {
 variable "boot_volume_size_gbs" {
   description = "Tamanho do boot volume (GB) da VM."
   type        = number
-  default     = 100
+  default     = 200
 }
 
 variable "extra_block_volume_size_gbs" {

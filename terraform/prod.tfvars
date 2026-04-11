@@ -1,14 +1,10 @@
 # us-ashburn-1
 region = "us-ashburn-1"
 
-# Perfil padrao: ARM em Always Free.
-# Free Trial OCI: 30 dias + US$ 300 em creditos.
-# Always Free relevante:
-# - Arm: ate 4 OCPUs / 24 GB somados em VM.Standard.A1.Flex
-# - Block Volume: 200 GB totais
-# Este perfil fica confortavel dentro do Always Free e entrega mais folga do que
-# o minimo pedido originalmente.
-instance_shape      = "VM.Standard.A1.Flex"
+# Perfil padrao operacional: ARM pago em creditos usando A2.
+# Mantem a instancia alinhada com o ambiente atual e evita depender da
+# capacidade instavel do Always Free em A1.
+instance_shape      = "VM.Standard.A2.Flex"
 instance_ocpus      = 2
 instance_memory_gbs = 12
 
@@ -19,12 +15,12 @@ enable_ipv6 = false
 vcn_cidr    = "10.0.0.0/16"
 subnet_cidr = "10.0.1.0/24"
 
-# Availability Domain (opcional) IgOd:US-ASHBURN-AD-1 IgOd:US-ASHBURN-AD-2 IgOd:US-ASHBURN-AD-3
+# Availability Domain da tenancy atual.
 availability_domain_name = "IgOd:US-ASHBURN-AD-1"
 # ad_index_seed = "try-ad-2"
 
 # Storage adicional (0 = nao cria)
 extra_block_volume_size_gbs = 0
 
-# 100 GB ocupam metade da cota Always Free total de block storage.
-boot_volume_size_gbs = 100
+# Mantido em 200 GB para acompanhar a VM atual.
+boot_volume_size_gbs = 200
