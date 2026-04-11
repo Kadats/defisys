@@ -21,14 +21,20 @@ resource "oci_core_security_list" "defisys_public" {
     }
   }
 
-  ingress_security_rules {
-    # SSH somente do seu IP fixo (mais seguro).
-    protocol    = "6"
-    source      = var.allowed_ssh_cidr
-    source_type = "CIDR_BLOCK"
-    tcp_options {
-      min = 22
-      max = 22
+  dynamic "ingress_security_rules" {
+    # SSH somente dos CIDRs explicitamente permitidos.
+    for_each = toset([
+      for cidr in split(",", var.allowed_ssh_cidr) : trimspace(cidr)
+      if trimspace(cidr) != ""
+    ])
+    content {
+      protocol    = "6"
+      source      = ingress_security_rules.value
+      source_type = "CIDR_BLOCK"
+      tcp_options {
+        min = 22
+        max = 22
+      }
     }
   }
 

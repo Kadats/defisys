@@ -19,8 +19,8 @@ enable_ipv6 = false
 vcn_cidr    = "10.0.0.0/16"
 subnet_cidr = "10.0.1.0/24"
 
-# Availability Domain (opcional) vLCq:US-ASHBURN-AD-1 vLCq:US-ASHBURN-AD-2 vLCq:US-ASHBURN-AD-3
-availability_domain_name = "vLCq:US-ASHBURN-AD-1"
+# Availability Domain (opcional) IgOd:US-ASHBURN-AD-1 IgOd:US-ASHBURN-AD-2 IgOd:US-ASHBURN-AD-3
+availability_domain_name = "IgOd:US-ASHBURN-AD-1"
 # ad_index_seed = "try-ad-2"
 
 # Storage adicional (0 = nao cria)
