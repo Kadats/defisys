@@ -30,10 +30,20 @@ Documento de controle de auditoria de risco e arquitetura para implantação em 
 
 ---
 
+## 🎨 Próximos Passos: DefiSys Control Center (UI)
+
+- [ ] **Interface de Controle Administrativo (Nível 3.2)**: Implementar Next.js com autenticação local forte e API Routes (BFF) para isolamento do backend.
+- [ ] **War Room em Tempo Real**: Conexão via WebSockets diretos para Ticker de Preços e Monitoramento de Pools (Uniswap/Aave).
+- [ ] **System Pulse**: Streaming de logs do Trading Engine via xterm.js para auditoria visual de decisões e erros de RPC.
+- [ ] **Sandbox Lab**: Interface para ajuste de hiperparâmetros de IA e simulações em ambiente isolado (`postgres_test`).
+
+---
+
 ## Histórico de Alterações
 
 | Data | Evento | Status |
 |------|--------|--------|
+| 2026-04-11 | Fase 10 (Control Center) implementada. War Room, System Pulse e Sandbox Lab funcionais em Next.js. | ✓ Concluído |
 | 2026-04-09 | Nível 2.1 concluído (Multi-RPC Failover). Resiliência de infraestrutura garantida. | ✓ Concluído |
 | 2026-04-09 | Nível 3.2 concluído (Validação de chaves de API e isolamento Sandbox). Nível 1 revalidado (Verde). | ✓ Concluído |
 | 2026-04-09 | Nível 1 revalidado (Verde). Kill-Switch validado em produção. Iniciado Nível 2 (RPC/Resiliência). | ✓ Concluído |

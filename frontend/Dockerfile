@@ -1,12 +1,9 @@
-FROM node:20-slim
-
+FROM node:20-bookworm-slim
 WORKDIR /app
-
-COPY package.json package-lock.json ./
+COPY package*.json ./
 RUN npm install
-
 COPY . .
-
-EXPOSE 5173
-
-CMD ["npm", "run", "dev", "--", "--host"]
+RUN chown -R node:node /app
+USER node
+EXPOSE 3000
+CMD ["npm", "run", "dev", "--", "--webpack"]

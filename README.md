@@ -177,7 +177,7 @@ defisys/
 │   │   ├── strategies/            # Bull/Bear/Short Logic
 │   │   └── data/                  # Storage & API Sources
 │   └── tests/                     # TDD Suite (110+ Tests)
-├── frontend/                      # Vue 3 Dashboard
+├── frontend/                      # Next.js Control Center (Fase 10)
 ├── docs/                          # Institutional Audit Documentation
 ├── setup_cloud.sh                 # Cloud Auto-Deployment Script
 ├── docker-compose.yml             # Triple-DB Infrastructure
@@ -191,6 +191,10 @@ Refer to `CONTRIBUTING.md` for style guides and PR protocols.
 
 ## 📄 License
 Proprietary Software. All rights reserved.
+
+---
+**DefiSys V3** - Unyielding Risk Management. Intelligent Execution. 🚀
+are. All rights reserved.
 
 ---
 **DefiSys V3** - Unyielding Risk Management. Intelligent Execution. 🚀

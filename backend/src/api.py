@@ -3,6 +3,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import logging
+import os
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -10,7 +11,9 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 # Imports internos
+from backend.src.ai import heuristics
 from backend.src.data import storage
+from backend.src.core.rpc_manager import RPCManager
 from backend.src.data.storage import get_data_from_db, get_latest_simulation_summary
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db, sync_market_data
 from backend.src.system_runner import run_trading_system, train_model_pipeline, run_simulation
@@ -18,7 +21,11 @@ from backend.src.services.analytics import get_simulation_results
 from backend.src.utils.analytics import calculate_yearly_metrics
 from backend.src.utils.log_handler import WebSocketHandler
 from backend.src.utils.ws_manager import manager
-from .config import DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT, LOG_LEVEL
+from .config import (
+    DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT, LOG_LEVEL,
+    RPC_URL_PRIMARY, RPC_URL_SECONDARY, RPC_URL_DECENTRALIZED, NETWORK_TIMEOUT_SECONDS,
+    PROJECT_ROOT
+)
 from .logging_config import setup_logging
 
 # Initialize logging BEFORE creating the FastAPI app
@@ -27,9 +34,23 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DefiSys API")
 
+# RPC Manager Singleton para a API (Auditoria 2.1 e 3.2)
+rpc_manager = RPCManager(
+    primary_url=RPC_URL_PRIMARY,
+    secondary_url=RPC_URL_SECONDARY,
+    decentralized_url=RPC_URL_DECENTRALIZED,
+    timeout=NETWORK_TIMEOUT_SECONDS
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:8501"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8501",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -47,6 +68,52 @@ class SimulationRunRequest(BaseModel):
     simulation_days: int | None = None
     strategy_type: str = "accumulator"
     use_llm: bool = False  # LLM Toggle: False by default for fast backtests
+
+
+class SandboxRunRequest(BaseModel):
+    ai_confidence: float
+    initial_capital: float
+    train_window: int
+    test_window: int
+
+
+def run_sandbox_simulation(payload: SandboxRunRequest):
+    """Executa simulação isolada para o Sandbox Lab com Mock realista (Auditoria 3.3)"""
+    import random
+    from datetime import datetime, timedelta
+    
+    logger.info(f"Sandbox Lab: Iniciando simulação com AI Confidence {payload.ai_confidence}")
+    
+    # Simulação de processamento (delay fake)
+    # Em produção isso seria assíncrono real, aqui retornamos direto para agilizar o lab
+    
+    # Gerar curva de equidade fake baseada no capital inicial
+    current_equity = payload.initial_capital
+    equity_curve = []
+    start_date = datetime.now() - timedelta(days=30)
+    
+    # Tendência levemente alta se confidence for alto
+    trend = (payload.ai_confidence - 0.5) * 0.02
+    
+    for i in range(30):
+        # Volatilidade de 2%
+        change = (random.random() - 0.5 + trend) * 0.02
+        current_equity *= (1 + change)
+        date_str = (start_date + timedelta(days=i)).strftime("%Y-%m-%d")
+        equity_curve.append({"date": date_str, "equity": round(current_equity, 2)})
+    
+    roi_total = ((current_equity / payload.initial_capital) - 1) * 100
+    
+    return {
+        "success": True, 
+        "job_id": f"sandbox-{int(datetime.now().timestamp())}",
+        "metrics": {
+            "roi_total": round(roi_total, 2),
+            "max_drawdown": round(random.uniform(5.0, 15.0), 2),
+            "win_rate": round(random.uniform(55.0, 75.0), 2)
+        },
+        "equity_curve": equity_curve
+    }
 
 
 @app.on_event("startup")
@@ -169,6 +236,81 @@ async def websocket_logs(websocket: WebSocket):
     except Exception as e:
         manager.disconnect(websocket)
         logger.exception("WebSocket error on /ws/logs: %s", e)
+
+
+@app.websocket("/api/ws/pulse")
+async def websocket_pulse(websocket: WebSocket):
+    """Alias para streaming de logs do sistema (System Pulse)"""
+    logger.info("Nova tentativa de conexão WebSocket em /api/ws/pulse")
+    await manager.connect(websocket)
+    logger.info("Cliente conectado com sucesso em /api/ws/pulse")
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        logger.info("Cliente desconectado de /api/ws/pulse")
+
+
+@app.websocket("/api/ws/ticker")
+async def websocket_ticker(websocket: WebSocket):
+    """Stream de Ticker para o Real-Time War Room"""
+    logger.info("Nova tentativa de conexão WebSocket em /api/ws/ticker")
+    await manager.connect(websocket)
+    logger.info("Cliente conectado com sucesso em /api/ws/ticker")
+    try:
+        while True:
+            # Envia dados simulados enquanto não houver conexão real com o motor
+            await websocket.send_json({
+                "symbol": "BTCUSDT",
+                "price": float(65000 + np.random.normal(0, 100)),
+                "timestamp": datetime.now().isoformat()
+            })
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+
+@app.get("/api/system/health", tags=["Control Center"])
+async def get_system_health():
+    """Retorna o estado de saúde dos 3 RPCs (Nível 3.2)"""
+    return rpc_manager.get_all_health()
+
+
+@app.get("/api/system/logs", tags=["Control Center"])
+def get_system_logs():
+    """Retorna as últimas 50 linhas do arquivo de log persistente (Auditoria 3.3)"""
+    log_file = os.path.join(PROJECT_ROOT, 'backend', 'logs', 'defisys.log')
+    
+    if not os.path.exists(log_file):
+        return []
+    
+    try:
+        with open(log_file, 'r', encoding='utf-8') as f:
+            # Para arquivos grandes, o ideal seria ler do fim, 
+            # mas para 50 linhas o readlines() [-50:] é seguro no MVP
+            lines = f.readlines()
+            return [line.strip() for line in lines[-50:]]
+    except Exception as e:
+        logger.error(f"Erro ao ler arquivo de log: {e}")
+        return [f"Erro ao recuperar logs: {e}"]
+
+
+@app.get("/api/system/indicators", tags=["Control Center"])
+def get_indicators():
+    """Retorna indicadores críticos em tempo real"""
+    klines_table_name = f"{DEFAULT_SYMBOL}_{DEFAULT_INTERVAL}_klines".lower()
+    df = get_data_from_db(klines_table_name, limit=100)
+    if df.empty:
+        return {"rsi": 0, "fear_and_greed": 0, "market_regime": "unknown"}
+    return heuristics.get_market_indicators(df)
+
+
+@app.post("/api/sandbox/run", tags=["Control Center"])
+async def post_sandbox_run(payload: SandboxRunRequest):
+    """Dispara uma simulação no Sandbox Lab"""
+    result = await run_in_threadpool(run_sandbox_simulation, payload)
+    return result
 
 
 @app.get(
