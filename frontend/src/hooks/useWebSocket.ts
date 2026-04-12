@@ -20,8 +20,17 @@ export function useWebSocket(url: string, options: WebSocketOptions = {}) {
 
   const connect = useCallback(() => {
     try {
-      // Emergency Fix: Use direct hostname and port 8000
-      const socketUrl = `ws://${window.location.hostname}:8000${url}`;
+      // Usa NEXT_PUBLIC_API_URL, fazendo fallback para localhost no desenvolvimento local
+      let wsBase = `ws://${window.location.hostname}:8000`;
+      if (process.env.NEXT_PUBLIC_API_URL) {
+        try {
+          const apiUrl = new URL(process.env.NEXT_PUBLIC_API_URL);
+          wsBase = `ws://${apiUrl.host}`;
+        } catch (e) {
+          console.warn("Invalid NEXT_PUBLIC_API_URL provided, falling back to local hostname");
+        }
+      }
+      const socketUrl = `${wsBase}${url}`;
 
       console.log(`[useWebSocket] Attempting connection to: ${socketUrl}`);
       ws.current = new WebSocket(socketUrl);

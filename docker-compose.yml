@@ -1,12 +1,15 @@
 services:
   postgres:
     image: postgres:15-alpine
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       POSTGRES_DB: defisys
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - ./postgres_data/producao:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     restart: always
@@ -22,6 +25,8 @@ services:
       POSTGRES_DB: defisys_test
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
+    volumes:
+      - ./postgres_data/teste:/var/lib/postgresql/data
     ports:
       - "5433:5432"
     restart: always
@@ -38,7 +43,7 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
     volumes:
-      - paper_db_data:/var/lib/postgresql/data
+      - ./postgres_data/paper:/var/lib/postgresql/data
     ports:
       - "5434:5432"
     restart: always
@@ -52,6 +57,9 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     ports:
       - "8000:8000"
     env_file:
@@ -112,6 +120,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    env_file:
+      - .env
     environment:
       - API_BASE_URL=http://backend:8000/api/v1
       - HOSTNAME=0.0.0.0
@@ -132,6 +142,4 @@ services:
       start_period: 120s
 
 volumes:
-  db_data:
-  paper_db_data:
   backend_logs:
