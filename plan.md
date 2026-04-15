@@ -38,8 +38,8 @@ Principais sintomas atuais:
   - documentacao antiga ainda carrega sinais de arquitetura anterior
   - frontend atual e Next.js, mas o historico do repositorio ainda carrega rastros de Vue e partes placeholder
 - LLM no caminho de decisao:
-  - aceitavel como modo consultivo ou experimento
-  - inadequado como nucleo deterministico de estrategia e backtest
+  - hoje parece ser uma das fontes que mais agregam precisao ao sistema
+  - precisa ser mantido, mas com contratos, observabilidade, avaliacao offline e controles mais claros
 
 ## 3. Principios da Reescrita
 
@@ -50,7 +50,7 @@ Principais sintomas atuais:
 5. O legado continua servindo como referencia ate a nova implementacao atingir paridade.
 6. Cada fase precisa deixar o sistema em estado executavel.
 7. Nao introduzir mais complexidade de stack sem necessidade comprovada.
-8. LLM sai do hot path de trade/backtest e vira dependencia opcional.
+8. LLM permanece como componente estrategico, mas com envelope tecnico rigoroso: contrato claro, fallback, rastreabilidade, avaliacao e limites operacionais.
 
 ## 4. Objetivos de Arquitetura
 
@@ -64,6 +64,7 @@ Ao final da reescrita parcial, o sistema deve ter estas propriedades:
 - Testes unitarios independentes de banco real.
 - Testes de integracao rodando em ambiente dedicado e previsivel.
 - Caminho claro de migracao para paper trading e possivel execucao real.
+- LLM integrado como camada formal de decisao, com observabilidade, fallback, avaliacao quantitativa e politicas de uso bem definidas.
 
 ## 5. Nao Objetivos
 
@@ -143,6 +144,7 @@ backend/src/
 - `application` conhece contratos e abstrai repositories/gateways.
 - `infrastructure` implementa adaptadores concretos.
 - `interfaces` chama apenas casos de uso.
+- a decisao assistida por LLM entra por contrato explicito, nunca como dependencia informal espalhada no sistema.
 
 ## 7. Estrategia de Migracao
 
@@ -191,6 +193,9 @@ Criar uma linha de base tecnica antes de mover partes criticas.
   - geracao de predicoes
   - simulacao
   - dashboard/control center
+- registro oficial da stack de interface e comandos canonicos:
+  - frontend canonico = `frontend/` em `Next.js + TypeScript`
+  - `frontend-vue-backup/` e documentacao/comandos de Vue/Vite passam a ser tratados como legado
 - lista de invariantes de negocio;
 - lista de debt items criticos.
 
@@ -198,6 +203,7 @@ Criar uma linha de base tecnica antes de mover partes criticas.
 
 - saber exatamente o que precisa continuar funcionando;
 - saber o que e legado descartavel;
+- saber qual frontend, comandos e documentacao sao oficiais a partir deste baseline;
 - definir a baseline de regressao funcional.
 
 ### Riscos
@@ -237,6 +243,9 @@ Definir a linguagem comum do sistema antes de mexer em implementacao.
 
 - documento de contratos de dominio;
 - tipos base e DTOs;
+- registro de verdade oficial herdada da Fase 0 para a interface:
+  - frontend canonico ja congelado como `Next.js`
+  - divergencias de docs/comandos tratadas como debt a ser limpa, nao como ambiguidade de stack
 - definicao de invariantes:
   - reserva de gas
   - limites de drawdown
@@ -273,7 +282,11 @@ Retirar do legado tudo que pode e deve virar dominio puro.
   - regime classification
 - refatorar estrategias para trabalharem sobre estado imutavel ou quase-imutavel;
 - transformar decisao de estrategia em saida declarativa, sem side effects diretos;
-- isolar LLM como plugin opcional fora da regra principal.
+- separar claramente:
+  - sinal quantitativo
+  - contexto de carteira
+  - decisao do LLM
+  - regras de protecao e execucao
 
 ### Entregaveis
 
@@ -296,10 +309,12 @@ Retirar do legado tudo que pode e deve virar dominio puro.
 ### Notas importantes
 
 - `AccumulatorStrategy` e `BTCLiteStrategy` sao candidatas prioritarias.
-- LLM deve ser rebaixado para papel consultivo:
-  - modo `advisory`
-  - comparacao offline
-  - experimento isolado
+- o LLM deve continuar fazendo parte da decisao, mas em arquitetura controlada:
+  - contrato de entrada e saida explicito
+  - fallback deterministico
+  - log de prompt, resposta e decisao normalizada quando permitido
+  - avaliacao offline por dataset de referencia
+  - metricas de ganho real versus heuristica pura
 
 ---
 
@@ -391,6 +406,12 @@ Substituir acesso espalhado ao banco e aos provedores por adaptadores consistent
 - migrations iniciais;
 - testes de integracao reais e isolados;
 - politicas de erro e retry documentadas.
+- adaptador de LLM com contrato unico para:
+  - construcao de contexto
+  - chamada ao modelo
+  - validacao estrutural da resposta
+  - normalizacao da decisao
+  - fallback
 
 ### Criterios de saida
 
@@ -494,11 +515,17 @@ Criar uma malha de testes confiavel para sustentar a migracao.
 
 ### Escopo
 
-- separar testes em camadas:
-  - unitarios puros
-  - integracao com banco
-  - integracao com provedores mockados
-  - smoke e2e de API
+- dividir a estrategia de testes em duas trilhas planejadas:
+  - `Fase 7A`
+    - unitarios puros
+    - integracao com banco
+    - integracao com gateways e fakes controlados
+    - fixtures, datasets sinteticos e baseline funcional
+  - `Fase 7B`
+    - smoke de API
+    - smoke de BFF
+    - smoke de frontend
+    - smoke de WebSockets
 - eliminar dependencia do banco principal nos testes;
 - definir factories e fixtures deterministicas;
 - criar dataset sintetico pequeno para regressao;
@@ -514,6 +541,7 @@ Criar uma malha de testes confiavel para sustentar a migracao.
   - simulacao
   - summaries
   - control center
+- smoke tests de interface planejados como trilha posterior, apos estabilizacao de API/BFF/frontend.
 
 ### Criterios de saida
 
@@ -523,9 +551,13 @@ Criar uma malha de testes confiavel para sustentar a migracao.
 
 ### Qualidade minima recomendada
 
-- unit tests para dominio puro;
-- integracao para repositories;
-- smoke tests para endpoints criticos;
+- `Fase 7A`
+  - unit tests para dominio puro;
+  - integracao para repositories;
+  - baseline funcional dos casos de uso centrais;
+- `Fase 7B`
+  - smoke tests para endpoints criticos;
+  - smoke tests de BFF/frontend/WebSocket depois da reconciliacao das interfaces;
 - coverage focada nos modulos reescritos.
 
 ---
@@ -559,6 +591,15 @@ Separar de vez o que e laboratorio, o que e paper trading e o que seria execucao
 ### Observacao
 
 Se em algum momento houver necessidade real de um executor altamente concorrente e isolado, esta sera a fase para avaliar extrair um servico em `Go`. Nao antes.
+
+### Dependencias operacionais implicitas
+
+Esta fase so faz sentido depois de:
+
+- Fase 3 estabilizar os casos de uso e a orquestracao principal;
+- Fase 4 estabilizar repositories, gateways, eventos e contratos de infraestrutura;
+- Fases 5 e 6 permitirem observar runtime por API, BFF e UI;
+- Fase 7 fornecer baseline confiavel para diferenciar simulacao, paper e runtime.
 
 ---
 
@@ -597,19 +638,21 @@ Sequencia recomendada:
 2. Fase 1
 3. Fase 2
 4. Fase 3
-5. Fase 7 em paralelo parcial com Fases 2 e 3
+5. Fase 7A em paralelo parcial com Fases 2 e 3
 6. Fase 4
 7. Fase 5
 8. Fase 6
-9. Fase 8
-10. Fase 9
+9. Fase 7B
+10. Fase 8
+11. Fase 9
 
 Motivo:
 
 - sem contratos, a refatoracao vira remendo;
 - sem dominio puro, a API nova so reorganiza bagunca;
-- sem testes, a migracao nao e segura;
+- sem `Fase 7A`, a migracao do nucleo nao e segura;
 - sem persistencia reestruturada, continua alto o acoplamento;
+- `Fase 7B` precisa esperar API e frontend estabilizarem contratos;
 - frontend deve vir depois que o backend estabilizar contratos.
 
 ## 10. Workstreams Paralelos
@@ -640,10 +683,14 @@ Alguns trilhos podem rodar em paralelo.
 
 ### Trilha D. Testes e Qualidade
 
-- fixtures sinteticas
-- test matrix
-- regressao funcional
-- validacoes de contrato
+- `Fase 7A`
+  - fixtures sinteticas
+  - test matrix
+  - regressao funcional
+  - validacoes de contrato
+- `Fase 7B`
+  - smoke API/BFF/frontend/WebSocket
+  - verificacao de wiring e compatibilidade superficial
 
 ## 11. Marcos de Paridade
 
@@ -710,7 +757,7 @@ Mitigacao:
 
 Mitigacao:
 
-- atacar Fase 7 cedo;
+- atacar `Fase 7A` cedo;
 - eliminar dependencia do banco principal.
 
 ### Risco 5. Frontend continuar consumindo mock disfarçado de real
@@ -724,14 +771,16 @@ Mitigacao:
 
 Decisao recomendada:
 
-- nao usar LLM como fonte primaria de decisao no hot path do backtest ou runtime principal;
-- manter LLM apenas em um destes papeis:
-  - advisory
-  - analise offline
-  - explicacao de sinais
-  - comparacao experimental
+- manter o LLM como componente relevante da tomada de decisao, ja que ele parece contribuir para a melhor precisao atual do sistema;
+- reestruturar seu uso para que deixe de ser uma dependencia acoplada e passe a ser uma capacidade formal da arquitetura;
+- garantir que toda decisao baseada em LLM seja:
+  - validada estruturalmente
+  - normalizada para um conjunto finito de acoes
+  - auditavel
+  - comparavel com baseline heuristica
+  - protegida por fallback deterministico
 
-Se o sistema precisar de decisao automatizada em producao, ela deve ser suportada por regras deterministicas, thresholds calibrados e trilha de auditoria reproduzivel.
+O objetivo nao e remover a IA da estrategia. O objetivo e fazer com que ela gere valor dentro de um sistema mais confiavel, mensuravel e reproduzivel.
 
 ## 15. Politica para Dados e Testes
 
@@ -756,6 +805,11 @@ Objetivos:
   - test
   - paper
   - production
+- definir tambem politicas distintas para o uso do LLM por ambiente:
+  - desligado
+  - heuristica apenas
+  - LLM com fallback
+  - LLM obrigatorio com limites operacionais
 
 Regras:
 
@@ -768,14 +822,14 @@ Regras:
 Estimativa inicial, sujeita a revisao:
 
 - Sprint 1: Fase 0 + Fase 1
-- Sprint 2: Fase 2 parcial
-- Sprint 3: Fase 2 restante + Fase 7 parcial
-- Sprint 4: Fase 3
-- Sprint 5: Fase 4 parcial
-- Sprint 6: Fase 4 restante + Fase 5 parcial
-- Sprint 7: Fase 5 restante + Fase 6
-- Sprint 8: Fase 7 fechamento + Fase 8 preparacao
-- Sprint 9: Fase 8 + Fase 9
+- Sprint 2: Fase 2 parcial + Fase 7A inicio
+- Sprint 3: Fase 2 restante + Fase 3 + Fase 7A
+- Sprint 4: Fase 4 parcial
+- Sprint 5: Fase 4 restante + Fase 5 parcial
+- Sprint 6: Fase 5 restante + Fase 6
+- Sprint 7: Fase 7B + Fase 8 preparacao
+- Sprint 8: Fase 8
+- Sprint 9: Fase 9
 
 Isto nao e cronograma fixo. E apenas uma ordem pragmatica para reduzir risco.
 
