@@ -31,6 +31,8 @@
    Do instead: keep strategies, risk logic, and financial math in `backend/src/` and use the frontend only for presentation.
 2. **[2026-04-09] Pure calculations should stay isolated**
    Do instead: place deterministic math helpers in `backend/src/utils/math/` instead of mixing them into orchestration code.
+3. **[2026-04-14] Frontend stack docs may lag behind the codebase**
+   Do instead: verify `frontend/package.json` and `frontend/src/` before planning UI work; treat repo docs that mention Vue as stale unless they were updated after the latest Next.js changes.
 
 ## User Directives
 1. **[2026-04-09] Follow the repo conventions for dependency management**

@@ -13,21 +13,31 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "poetry==$POETRY_VERSION"
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "poetry==$POETRY_VERSION"
 
-COPY pyproject.toml poetry.lock README.md ./
+COPY pyproject.toml poetry.lock ./
 
 FROM base AS builder
 
-RUN poetry config virtualenvs.create false && \
+RUN --mount=type=cache,target=/root/.cache/pypoetry \
+    poetry config virtualenvs.create false && \
     poetry install --no-interaction --no-ansi --only main --no-root
+
+# Ensure uvicorn has websocket protocol support at runtime.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir "websockets>=10.4,<16"
 
 COPY backend ./backend
 
 FROM base AS test
 
-RUN poetry config virtualenvs.create false && \
+RUN --mount=type=cache,target=/root/.cache/pypoetry \
+    poetry config virtualenvs.create false && \
     poetry install --no-interaction --no-ansi --with dev --no-root
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir "websockets>=10.4,<16"
 
 COPY backend ./backend
 

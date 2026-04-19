@@ -12,10 +12,14 @@ help:
 	@echo "  install-frontend  Install frontend dependencies with npm"
 	@echo "  run               Run backend main module locally"
 	@echo "  run-api           Run FastAPI locally with reload"
-	@echo "  run-frontend      Run Vue frontend locally with Vite"
+	@echo "  run-frontend      Run Next.js frontend locally"
 	@echo "  test              Run backend tests locally with Poetry"
 	@echo "  test-cov          Run backend tests with coverage locally"
+	@echo "  test-smoke        Run smoke suite locally (pytest -m smoke)"
+	@echo "  test-unit         Run non-smoke suite locally (pytest -m 'not smoke')"
 	@echo "  test-docker       Run backend tests in Docker using backend-test"
+	@echo "  test-smoke-docker Run smoke suite in Docker"
+	@echo "  test-unit-docker  Run non-smoke suite in Docker"
 	@echo "  lint              Run Ruff checks"
 	@echo "  format            Run Ruff format and Black"
 	@echo "  build             Build Docker images"
@@ -49,8 +53,20 @@ test:
 test-cov:
 	poetry run pytest tests/ --cov=backend.src
 
+test-smoke:
+	poetry run pytest -m smoke -q
+
+test-unit:
+	poetry run pytest -m "not smoke" -q
+
 test-docker:
-	$(COMPOSE) --profile test run --rm backend-test
+	$(COMPOSE) --profile test run --rm -e PYTHONPATH=/app backend-test
+
+test-smoke-docker:
+	$(COMPOSE) --profile test run --rm -e PYTHONPATH=/app backend-test pytest -q -m smoke
+
+test-unit-docker:
+	$(COMPOSE) --profile test run --rm -e PYTHONPATH=/app backend-test pytest -q -m "not smoke"
 
 lint:
 	poetry run ruff check .
@@ -85,4 +101,4 @@ clean:
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 
-.PHONY: help install install-frontend run run-api run-frontend test test-cov test-docker lint format build up down restart ps logs logs-backend up-test clean
+.PHONY: help install install-frontend run run-api run-frontend test test-cov test-smoke test-unit test-docker test-smoke-docker test-unit-docker lint format build up down restart ps logs logs-backend up-test clean

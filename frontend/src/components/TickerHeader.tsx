@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, memo } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { Server, WifiOff } from 'lucide-react';
+import { Server, WifiOff, TrendingUp, TrendingDown } from 'lucide-react';
 
 interface RPCHealth {
   [key: string]: {
@@ -18,6 +18,8 @@ function TickerHeader() {
   const [btcPrice, setBtcPrice] = useState<number | null>(null);
   const [ethPrice, setEthPrice] = useState<number | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+  const [btcChange] = useState(2.4);
+  const [ethChange] = useState(-0.8);
 
   useEffect(() => {
     const timer = setTimeout(() => setIsMounted(true), 0);
@@ -26,12 +28,10 @@ function TickerHeader() {
 
   useEffect(() => {
     if (tickerData) {
-      if (typeof tickerData === 'object' && tickerData.symbol === 'BTCUSDT') {
-        // Use a timeout to avoid synchronous setState in effect (Satisfy lint)
+      if (typeof tickerData === 'object' && (tickerData as { symbol?: string }).symbol === 'BTCUSDT') {
         const timer = setTimeout(() => {
-          setBtcPrice(tickerData.price);
-          // Simulate ETH price as ~0.05 BTC if not provided
-          if (!ethPrice) setEthPrice(tickerData.price * 0.052);
+          setBtcPrice((tickerData as { price: number }).price);
+          if (!ethPrice) setEthPrice((tickerData as { price: number }).price * 0.052);
         }, 0);
         return () => clearTimeout(timer);
       }
@@ -40,14 +40,12 @@ function TickerHeader() {
 
   const fetchHealth = async () => {
     try {
-      // BFF: Chamada relativa para o Route Handler do Next.js
       const res = await fetch('/api/system/health');
       if (!res.ok) throw new Error('Proxy health check failed');
       const data = await res.json();
       setRpcHealth(data);
     } catch (err) {
       console.warn('Backend offline or Proxy error. Showing offline status.', err);
-      // Fallback gracioso para a UI
       setRpcHealth({
         primary: { status: 'offline', latency: 0, url: 'N/A' },
         secondary: { status: 'offline', latency: 0, url: 'N/A' },
@@ -65,53 +63,89 @@ function TickerHeader() {
     };
   }, []);
 
-  // Mock data if backend is not responding or live
   const displayBtc = btcPrice || 64230.50;
   const displayEth = ethPrice || 3450.20;
 
   return (
-    <div className="w-full bg-slate-900/50 border-b border-slate-800/50 px-6 py-3 flex items-center justify-between backdrop-blur-md">
-      <div className="flex items-center gap-8">
+    <header className="w-full bg-slate-950/80 border-b border-slate-800/60 px-5 py-2.5 flex items-center justify-between backdrop-blur-md z-10 shrink-0">
+      {/* Left: connection + prices */}
+      <div className="flex items-center gap-6">
+        {/* Live feed indicator */}
         <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-          <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">System Pulse</span>
+          <div className="relative flex">
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+            {isConnected && (
+              <div className="absolute inset-0 w-2 h-2 rounded-full bg-emerald-500 animate-ping opacity-40" />
+            )}
+          </div>
+          <span className={`text-[10px] font-mono uppercase tracking-widest font-bold ${isConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {isConnected ? 'Live' : 'Offline'}
+          </span>
         </div>
 
-        <div className="flex gap-6">
+        <div className="w-px h-4 bg-slate-800" />
+
+        {/* BTC */}
+        <div className="flex items-center gap-3">
           <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">BTC / USDT</span>
-            <span suppressHydrationWarning={true} className="text-sm font-mono font-bold text-emerald-400">
-              ${isMounted ? displayBtc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '...'}
-            </span>
+            <span className="text-[9px] text-slate-600 font-mono font-bold uppercase tracking-widest">BTC/USDT</span>
+            <div className="flex items-center gap-1.5">
+              <span suppressHydrationWarning className="text-xs font-mono font-bold text-white">
+                ${isMounted ? displayBtc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '...'}
+              </span>
+              <span className={`flex items-center text-[9px] font-mono font-bold ${btcChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {btcChange >= 0 ? <TrendingUp size={9} /> : <TrendingDown size={9} />}
+                {btcChange >= 0 ? '+' : ''}{btcChange}%
+              </span>
+            </div>
           </div>
+
           <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">ETH / USDT</span>
-            <span suppressHydrationWarning={true} className="text-sm font-mono font-bold text-emerald-400">
-              ${isMounted ? displayEth.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '...'}
-            </span>
+            <span className="text-[9px] text-slate-600 font-mono font-bold uppercase tracking-widest">ETH/USDT</span>
+            <div className="flex items-center gap-1.5">
+              <span suppressHydrationWarning className="text-xs font-mono font-bold text-white">
+                ${isMounted ? displayEth.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '...'}
+              </span>
+              <span className={`flex items-center text-[9px] font-mono font-bold ${ethChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {ethChange >= 0 ? <TrendingUp size={9} /> : <TrendingDown size={9} />}
+                {ethChange >= 0 ? '+' : ''}{ethChange}%
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
+      {/* Right: RPC nodes */}
+      <div className="flex items-center gap-2">
+        <span className="text-[9px] text-slate-600 font-mono uppercase tracking-widest mr-1 hidden sm:block">RPC Nodes</span>
         {rpcHealth ? (
-          Object.entries(rpcHealth).map(([name, info]) => (
-            <div key={name} className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800">
-              <Server size={12} className={info.status === 'ok' ? 'text-emerald-500' : 'text-rose-500'} />
-              <span className="text-[10px] font-mono text-slate-300 uppercase">{name}</span>
-              <span className={`text-[10px] font-mono ${info.status === 'ok' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {info.latency}ms
-              </span>
-            </div>
-          ))
+          Object.entries(rpcHealth).map(([name, info]) => {
+            const ok = info.status === 'ok';
+            return (
+              <div
+                key={name}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[10px] font-mono transition-all ${
+                  ok
+                    ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-400'
+                    : 'bg-rose-500/5 border-rose-500/20 text-rose-400'
+                }`}
+              >
+                <Server size={10} className={ok ? 'text-emerald-500' : 'text-rose-500'} />
+                <span className="uppercase text-slate-300 hidden md:inline">{name}</span>
+                <span className={`font-bold ${ok ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {ok ? `${info.latency}ms` : 'DOWN'}
+                </span>
+              </div>
+            );
+          })
         ) : (
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800">
-            <WifiOff size={12} className="text-slate-500" />
-            <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest animate-pulse">Connecting RPCs...</span>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-800 bg-slate-900/50 text-[10px]">
+            <WifiOff size={10} className="text-slate-500" />
+            <span className="text-slate-500 font-mono uppercase tracking-widest animate-pulse">Connecting...</span>
           </div>
         )}
       </div>
-    </div>
+    </header>
   );
 }
 
