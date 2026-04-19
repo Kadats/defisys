@@ -12,7 +12,7 @@ help:
 	@echo "  install-frontend  Install frontend dependencies with npm"
 	@echo "  run               Run backend main module locally"
 	@echo "  run-api           Run FastAPI locally with reload"
-	@echo "  run-frontend      Run Vue frontend locally with Vite"
+	@echo "  run-frontend      Run Next.js frontend locally"
 	@echo "  test              Run backend tests locally with Poetry"
 	@echo "  test-cov          Run backend tests with coverage locally"
 	@echo "  test-docker       Run backend tests in Docker using backend-test"

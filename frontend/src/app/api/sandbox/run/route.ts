@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
+import { buildBackendUrl } from '@/lib/backendEndpoints';
 
 export async function POST(request: Request) {
   try {
-    const baseUrl = (process.env.API_BASE_URL || 'http://backend:8000/api/v1').replace('/v1', '');
-    const backendUrl = `${baseUrl}/sandbox/run`;
+    const backendUrl = buildBackendUrl('/sandbox/run');
     const body = await request.json();
 
     const response = await fetch(backendUrl, {

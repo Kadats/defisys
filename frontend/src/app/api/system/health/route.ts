@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server';
+import { buildBackendUrl } from '@/lib/backendEndpoints';
 
 export async function GET() {
   try {
-    // BFF Proxy: Chamada interna entre containers Docker (backend:8000)
-    // Tenta usar a env var, removendo o sufixo /v1 se presente para endpoints de sistema
-    const baseUrl = (process.env.API_BASE_URL || 'http://backend:8000/api/v1').replace('/v1', '');
-    const backendUrl = `${baseUrl}/system/health`;
+    const backendUrl = buildBackendUrl('/system/health');
     
     const response = await fetch(backendUrl, {
       next: { revalidate: 0 }, // Garantir que não haja cache para o health check

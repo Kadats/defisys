@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
@@ -8,19 +8,28 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from decimal import Decimal
-from pydantic import BaseModel
 
 # Imports internos
+from backend.src.application import TradingWorkflowUseCases
 from backend.src.ai import heuristics
 from backend.src.data import storage
 from backend.src.core.rpc_manager import RPCManager
 from backend.src.data.storage import get_data_from_db, get_latest_simulation_summary
 from backend.src.data.pipeline import get_positions_from_db, get_predictions_from_db, sync_market_data
-from backend.src.system_runner import run_trading_system, train_model_pipeline, run_simulation
+from backend.src.interfaces.api import (
+    paper_runtime_router,
+    SandboxRunRequest,
+    SimulationRunRequest,
+    websocket_router,
+)
+from backend.src.system_runner import (
+    run_trading_system as _run_trading_system,
+    train_model_pipeline as _train_model_pipeline,
+    run_simulation as _run_simulation,
+)
 from backend.src.services.analytics import get_simulation_results
 from backend.src.utils.analytics import calculate_yearly_metrics
 from backend.src.utils.log_handler import WebSocketHandler
-from backend.src.utils.ws_manager import manager
 from .config import (
     DEFAULT_SYMBOL, DEFAULT_INTERVAL, DEFAULT_KLINES_LIMIT, LOG_LEVEL,
     RPC_URL_PRIMARY, RPC_URL_SECONDARY, RPC_URL_DECENTRALIZED, NETWORK_TIMEOUT_SECONDS,
@@ -33,6 +42,8 @@ setup_logging(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DefiSys API")
+app.include_router(websocket_router)
+app.include_router(paper_runtime_router)
 
 # RPC Manager Singleton para a API (Auditoria 2.1 e 3.2)
 rpc_manager = RPCManager(
@@ -60,21 +71,40 @@ app.add_middleware(
 _SUMMARY_CACHE = {}
 _SIMULATION_RUNNING = False  # Flag para rastrear se simulação está em andamento
 
-
-class SimulationRunRequest(BaseModel):
-    start_date: str | None = None
-    end_date: str | None = None
-    initial_capital: float | None = None
-    simulation_days: int | None = None
-    strategy_type: str = "accumulator"
-    use_llm: bool = False  # LLM Toggle: False by default for fast backtests
+_use_cases = TradingWorkflowUseCases(
+    train_model_fn=_train_model_pipeline,
+    run_simulation_fn=_run_simulation,
+    run_system_fn=_run_trading_system,
+)
 
 
-class SandboxRunRequest(BaseModel):
-    ai_confidence: float
-    initial_capital: float
-    train_window: int
-    test_window: int
+def train_model_pipeline():
+    """Backward-compatible API-level alias for model training use case."""
+    return _use_cases.train_model()
+
+
+def run_simulation(
+    start_date: str = None,
+    end_date: str = None,
+    initial_capital: float = None,
+    backtest_days: int | None = None,
+    strategy_type: str = "accumulator",
+    use_llm: bool = False,
+):
+    """Backward-compatible API-level alias for simulation use case."""
+    return _use_cases.run_simulation(
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=initial_capital,
+        backtest_days=backtest_days,
+        strategy_type=strategy_type,
+        use_llm=use_llm,
+    )
+
+
+def run_trading_system():
+    """Backward-compatible API-level alias for full system use case."""
+    return _use_cases.run_trading_system()
 
 
 def run_sandbox_simulation(payload: SandboxRunRequest):
@@ -223,52 +253,6 @@ def get_history():
                 conn.close()
             except Exception:
                 pass
-
-
-@app.websocket("/ws/logs")
-async def websocket_logs(websocket: WebSocket):
-    await manager.connect(websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-    except Exception as e:
-        manager.disconnect(websocket)
-        logger.exception("WebSocket error on /ws/logs: %s", e)
-
-
-@app.websocket("/api/ws/pulse")
-async def websocket_pulse(websocket: WebSocket):
-    """Alias para streaming de logs do sistema (System Pulse)"""
-    logger.info("Nova tentativa de conexão WebSocket em /api/ws/pulse")
-    await manager.connect(websocket)
-    logger.info("Cliente conectado com sucesso em /api/ws/pulse")
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info("Cliente desconectado de /api/ws/pulse")
-
-
-@app.websocket("/api/ws/ticker")
-async def websocket_ticker(websocket: WebSocket):
-    """Stream de Ticker para o Real-Time War Room"""
-    logger.info("Nova tentativa de conexão WebSocket em /api/ws/ticker")
-    await manager.connect(websocket)
-    logger.info("Cliente conectado com sucesso em /api/ws/ticker")
-    try:
-        while True:
-            # Envia dados simulados enquanto não houver conexão real com o motor
-            await websocket.send_json({
-                "symbol": "BTCUSDT",
-                "price": float(65000 + np.random.normal(0, 100)),
-                "timestamp": datetime.now().isoformat()
-            })
-            await asyncio.sleep(1)
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
 
 
 @app.get("/api/system/health", tags=["Control Center"])

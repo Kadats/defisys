@@ -55,6 +55,11 @@ DefiSys operates on a **modular, resilient, and data-isolated** architecture:
 - **`defisys_test` (Testing):** Ephemeral database for the `pytest` suite.
 - **`defisys_paper_trading` (Forward Testing):** Isolated virtual trade logs for real-time simulation.
 
+### Operating Modes
+- **Backtest (`/api/simulation/*`, `/api/v1/*`)**: historical replay for analysis and strategy evaluation.
+- **Sandbox (`/api/sandbox/run`)**: isolated UX lab with mocked behavior for experimentation.
+- **Paper Runtime (`/api/paper/runtime/*`)**: operational paper-trading loop with session state, events, and alerts (no real orders).
+
 ### Workflow Visualization
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -143,10 +148,15 @@ docker compose logs -f backend
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `POST` | `/api/data/sync` | Manually trigger market data synchronization. |
 | `POST` | `/api/model/train` | Train the XGBoost model using historical data. |
 | `POST` | `/api/simulation/run` | Execute backtest (Body: `{"simulation_days": 30}`). |
 | `GET` | `/api/simulation/summary` | Retrieve PnL, Drawdown, and Sharpe metrics. |
+| `GET` | `/api/system/health` | RPC and backend operational health snapshot. |
+| `POST` | `/api/sandbox/run` | Execute sandbox simulation flow (mocked lab mode). |
+| `POST` | `/api/paper/runtime/start` | Start paper runtime session. |
+| `POST` | `/api/paper/runtime/tick` | Process a market snapshot in paper runtime. |
+| `GET` | `/api/paper/runtime/status` | Read current paper runtime status and active alerts. |
+| `GET` | `/api/paper/runtime/events` | List recent paper runtime events. |
 
 ---
 

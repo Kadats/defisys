@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
+import { buildBackendUrl } from '@/lib/backendEndpoints';
 
 export async function GET() {
   try {
-    const baseUrl = (process.env.API_BASE_URL || 'http://backend:8000/api/v1').replace('/v1', '');
-    const backendUrl = `${baseUrl}/system/logs`;
+    const backendUrl = buildBackendUrl('/system/logs');
     const response = await fetch(backendUrl, { next: { revalidate: 0 } });
 
     if (!response.ok) {

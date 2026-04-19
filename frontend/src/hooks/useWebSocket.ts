@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { getBackendWebSocketBase } from '@/lib/backendEndpoints';
 
 interface WebSocketOptions {
   onMessage?: (data: unknown) => void;
@@ -20,16 +21,7 @@ export function useWebSocket(url: string, options: WebSocketOptions = {}) {
 
   const connect = useCallback(() => {
     try {
-      // Usa NEXT_PUBLIC_API_URL, fazendo fallback para localhost no desenvolvimento local
-      let wsBase = `ws://${window.location.hostname}:8000`;
-      if (process.env.NEXT_PUBLIC_API_URL) {
-        try {
-          const apiUrl = new URL(process.env.NEXT_PUBLIC_API_URL);
-          wsBase = `ws://${apiUrl.host}`;
-        } catch (e) {
-          console.warn("Invalid NEXT_PUBLIC_API_URL provided, falling back to local hostname");
-        }
-      }
+      const wsBase = getBackendWebSocketBase(window.location.hostname);
       const socketUrl = `${wsBase}${url}`;
 
       console.log(`[useWebSocket] Attempting connection to: ${socketUrl}`);

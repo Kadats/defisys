@@ -1,0 +1,60 @@
+"""WebSocket routes for API interface layer."""
+
+from datetime import datetime
+import asyncio
+import logging
+
+import numpy as np
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from backend.src.utils.ws_manager import manager
+
+router = APIRouter(tags=["WebSockets"])
+logger = logging.getLogger(__name__)
+
+
+@router.websocket("/ws/logs")
+async def websocket_logs(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as exc:
+        manager.disconnect(websocket)
+        logger.exception("WebSocket error on /ws/logs: %s", exc)
+
+
+@router.websocket("/api/ws/pulse")
+async def websocket_pulse(websocket: WebSocket):
+    """Alias para streaming de logs do sistema (System Pulse)."""
+    logger.info("Nova tentativa de conexão WebSocket em /api/ws/pulse")
+    await manager.connect(websocket)
+    logger.info("Cliente conectado com sucesso em /api/ws/pulse")
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        logger.info("Cliente desconectado de /api/ws/pulse")
+
+
+@router.websocket("/api/ws/ticker")
+async def websocket_ticker(websocket: WebSocket):
+    """Stream de Ticker para o Real-Time War Room."""
+    logger.info("Nova tentativa de conexão WebSocket em /api/ws/ticker")
+    await manager.connect(websocket)
+    logger.info("Cliente conectado com sucesso em /api/ws/ticker")
+    try:
+        while True:
+            await websocket.send_json(
+                {
+                    "symbol": "BTCUSDT",
+                    "price": float(65000 + np.random.normal(0, 100)),
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
