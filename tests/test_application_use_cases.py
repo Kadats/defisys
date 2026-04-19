@@ -20,7 +20,7 @@ def test_trading_workflow_use_cases_delegates_calls():
         called["run"] = True
         return {"run": "ok"}
 
-    use_cases = TradingWorkflowUseCases(
+    use_cases = TradingWorkflowUseCases.from_callables(
         train_model_fn=_train,
         run_simulation_fn=_sim,
         run_system_fn=_run,
@@ -48,3 +48,19 @@ def test_trading_workflow_use_cases_delegates_calls():
     assert use_cases.run_trading_system() == {"run": "ok"}
     assert called["run"] is True
 
+
+def test_trading_workflow_use_cases_accepts_port_object():
+    class DummyWorkflow:
+        def train_model(self):
+            return {"ok": "train"}
+
+        def run_simulation(self, **kwargs):
+            return {"ok": "sim", "kwargs": kwargs}
+
+        def run_trading_system(self):
+            return {"ok": "run"}
+
+    use_cases = TradingWorkflowUseCases(DummyWorkflow())
+    assert use_cases.train_model() == {"ok": "train"}
+    assert use_cases.run_simulation(strategy_type="accumulator")["ok"] == "sim"
+    assert use_cases.run_trading_system() == {"ok": "run"}

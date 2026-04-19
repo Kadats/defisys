@@ -7,6 +7,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from backend.src.data.storage import log_open_position, log_close_position
+from backend.src.domain.portfolio import calculate_portfolio_value
 from ..config import (
     SIMULATED_GAS_FEE_USD, GAS_RESERVE_USD, SLIPPAGE_PCT, DEFAULT_INTERVAL, 
     MAX_GLOBAL_DRAWDOWN, MAX_DAILY_DRAWDOWN, ENVIRONMENT,
@@ -35,7 +36,7 @@ class TradingEngine:
         self.btc_collateral_balance = 0.0
         self.total_debt_usd = 0.0             
         self.loan_apy = DEBT_INTEREST_RATE
-        from backend.src.strategies.yield_manager import AaveYieldManager
+        from backend.src.domain.strategies.yield_manager import AaveYieldManager
         self.yield_manager = AaveYieldManager()
         self.gas_fee_usd = gas_fee_usd
         self.slippage_pct = slippage_pct
@@ -102,9 +103,17 @@ class TradingEngine:
         return calculate_lp_value(liquidity=lp['L'], range_lower=lp['range_lower'], range_upper=lp['range_upper'], current_price=Decimal(str(current_btc_price)))
 
     def _calculate_portfolio_value(self, current_btc_price):
-        lp_val = sum([float(self._get_lp_value(lp, current_btc_price)[0]) + lp['fees_accrued_usdt'] + (lp['fees_accrued_btc'] * current_btc_price) for lp in self.active_lps])
-        short_val = sum([s['collateral_usd'] + (s['entry_price'] - current_btc_price) * s['btc_amount'] for s in self.active_shorts])
-        return (self.btc_hodl_balance + self.btc_collateral_balance) * current_btc_price + self.usd_balance + lp_val + short_val + self.yield_manager.get_total_balance() - self.total_debt_usd
+        return calculate_portfolio_value(
+            btc_hodl_balance=self.btc_hodl_balance,
+            btc_collateral_balance=self.btc_collateral_balance,
+            current_btc_price=current_btc_price,
+            usd_balance=self.usd_balance,
+            active_lps=self.active_lps,
+            active_shorts=self.active_shorts,
+            yield_total_balance=self.yield_manager.get_total_balance(),
+            total_debt_usd=self.total_debt_usd,
+            get_lp_value_fn=self._get_lp_value,
+        )
 
     def allocate_to_yield(self, amount, timestamp):
         if amount > 0 and self.usd_balance >= amount and self.yield_manager.deposit_usd(amount):

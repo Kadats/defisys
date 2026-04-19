@@ -2,10 +2,10 @@ import pandas as pd
 from typing import TYPE_CHECKING
 import logging
 
-from backend.src.strategies.base import BaseStrategy
-from backend.src.strategies.btc_lite import BTCLiteStrategy
-from backend.src.strategies.swing_usd import SwingUSDStrategy
-from backend.src.strategies.short_strategy import AggressiveShortStrategy
+from backend.src.domain.strategies.base import BaseStrategy
+from backend.src.domain.strategies.btc_lite import BTCLiteStrategy
+from backend.src.domain.strategies.swing_usd import SwingUSDStrategy
+from backend.src.domain.strategies.short_strategy import AggressiveShortStrategy
 from backend.src.ai.regime_classifier import MarketRegime, detect_regime
 from backend.src.ai.ensemble import evaluate_ensemble_signal, calculate_confidence_sizing
 

@@ -80,3 +80,62 @@ def test_paper_runtime_kill_switch_alert():
     assert len(alerts) > 0
     codes = {alert["code"] for alert in alerts}
     assert "KILL_SWITCH_ACTIVATED" in codes
+
+
+@pytest.mark.smoke
+@pytest.mark.api
+def test_paper_runtime_health_factor_critical_blocks_orders():
+    client.post("/api/paper/runtime/stop")
+    client.post("/api/paper/runtime/start", json={"strategy_name": "accumulator"})
+
+    tick_response = client.post(
+        "/api/paper/runtime/tick",
+        json={
+            "symbol": "BTCUSDT",
+            "price": 63000.0,
+            "source_status": "real",
+            "ml_confidence": 0.95,
+            "health_factor": 1.1,
+            "kill_switch_active": False,
+        },
+    )
+    assert tick_response.status_code == 200
+    result = tick_response.json()["result"]
+    assert result["runtime_status"] == "restricted"
+    assert result["decision_action"] == "BLOCKED"
+    assert result["blocking_reason"] == "health_factor_critical"
+
+    alerts_response = client.get("/api/paper/runtime/alerts?active_only=true")
+    assert alerts_response.status_code == 200
+    alerts = alerts_response.json()["alerts"]
+    codes = {alert["code"] for alert in alerts}
+    assert "HEALTH_FACTOR_CRITICAL" in codes
+
+
+@pytest.mark.smoke
+@pytest.mark.api
+def test_paper_runtime_degraded_feed_emits_warning_alert():
+    client.post("/api/paper/runtime/stop")
+    client.post("/api/paper/runtime/start", json={"strategy_name": "accumulator"})
+
+    tick_response = client.post(
+        "/api/paper/runtime/tick",
+        json={
+            "symbol": "BTCUSDT",
+            "price": 62000.0,
+            "source_status": "degraded",
+            "ml_confidence": 0.6,
+            "health_factor": 2.0,
+            "kill_switch_active": False,
+        },
+    )
+    assert tick_response.status_code == 200
+    result = tick_response.json()["result"]
+    assert result["runtime_status"] == "degraded"
+    assert result["decision_action"] == "HOLD"
+
+    alerts_response = client.get("/api/paper/runtime/alerts?active_only=true")
+    assert alerts_response.status_code == 200
+    alerts = alerts_response.json()["alerts"]
+    codes = {alert["code"] for alert in alerts}
+    assert "MARKET_FEED_DEGRADED" in codes

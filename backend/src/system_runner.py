@@ -5,16 +5,36 @@ import uuid
 import os
 
 from backend.src.data.pipeline import get_full_prepared_data
+from backend.src.domain.strategies import (
+    AccumulatorStrategy,
+    BTCLiteStrategy,
+    PureSpotStrategy,
+    SmartDCAStrategy,
+    SwingUSDStrategy,
+    build_strategy,
+)
 from .core import TradingEngine
 from .core.policy_layer import PolicyLayerStrategy
-from .strategies import BTCLiteStrategy, AccumulatorStrategy, SwingUSDStrategy, PureSpotStrategy, SmartDCAStrategy
 from .config import PROJECT_ROOT, ML_TRAIN_SPLIT_DATE, GEMINI_BACKTEST_DAYS
 
 from .ai import train_prediction_model, get_predictions
-from backend.src.data.storage import save_predictions_to_db, save_trades, save_simulation_summary
 from backend.src.data import storage
+from backend.src.infrastructure.repositories import default_simulation_repository
 
 logger = logging.getLogger(__name__)
+
+
+# Backward-compatible module-level functions kept patchable by current tests.
+def save_predictions_to_db(df: pd.DataFrame) -> None:
+    default_simulation_repository.save_predictions(df)
+
+
+def save_trades(trades_list: list[dict], current_price: float = 0.0) -> None:
+    default_simulation_repository.save_trades(trades_list, current_price=current_price)
+
+
+def save_simulation_summary(**kwargs) -> None:
+    default_simulation_repository.save_simulation_summary(**kwargs)
 
 # (A função log_summary_report permanece a mesma)
 def log_summary_report(results, latest_indicators=None):
@@ -173,8 +193,7 @@ def run_simulation(
     
     # 2. CARREGAR PREDIÇÕES DO BANCO DE DADOS
     logger.info("Carregando predições de ML do banco de dados...")
-    from backend.src.data.pipeline import get_predictions_from_db
-    predictions_df = get_predictions_from_db()
+    predictions_df = default_simulation_repository.get_predictions()
     
     if predictions_df is None or predictions_df.empty:
         logger.error("Nenhuma predição encontrada no banco de dados!")
@@ -275,26 +294,29 @@ def run_simulation(
     engine_initial_capital = float(initial_capital) if initial_capital is not None else 1050.0
     engine = TradingEngine(initial_capital_usd=engine_initial_capital)
     
-    # Strategy Factory - Instantiate the strategy based on strategy_type
+    # Strategy Factory - instantiate strategy by domain contract
     logger.info(f"Selecionando estratégia: {strategy_type} (LLM: {'ON' if use_llm else 'OFF'})")
-    
-    if strategy_type == "accumulator":
-        strategy = AccumulatorStrategy(use_llm=use_llm)
-    elif strategy_type == "btc_lite":
-        strategy = BTCLiteStrategy()
-    elif strategy_type == "swing_usd":
-        strategy = SwingUSDStrategy(use_llm=use_llm)
-    elif strategy_type == "pure_spot":
-        strategy = PureSpotStrategy()
-    elif strategy_type == "smart_dca":
-        strategy = SmartDCAStrategy()
-    elif strategy_type == "policy_layer":
-        strategy = PolicyLayerStrategy(use_llm=use_llm)
-    else:
+
+    strategy_builders = {
+        "accumulator": lambda flag: AccumulatorStrategy(use_llm=flag),
+        "btc_lite": lambda _flag: BTCLiteStrategy(),
+        "swing_usd": lambda flag: SwingUSDStrategy(use_llm=flag),
+        "pure_spot": lambda _flag: PureSpotStrategy(),
+        "smart_dca": lambda _flag: SmartDCAStrategy(),
+        "policy_layer": lambda flag: PolicyLayerStrategy(use_llm=flag),
+    }
+
+    try:
+        strategy = build_strategy(
+            strategy_type,
+            use_llm=use_llm,
+            strategy_builders=strategy_builders,
+        )
+    except ValueError as exc:
         logger.error(f"Estratégia desconhecida: {strategy_type}")
         return {
             "backtest_report": {
-                "error": f"Unknown strategy type: {strategy_type}. Available: accumulator, btc_lite, swing_usd, pure_spot, smart_dca, policy_layer"
+                "error": str(exc)
             }
         }
     

@@ -1,12 +1,19 @@
 const DEFAULT_BACKEND_API_BASE = 'http://backend:8000/api/v1';
 
-function stripApiV1(path: string): string {
-  return path.replace(/\/api\/v1\/?$/, '');
+function normalizeApiBase(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  if (/\/api\/v1$/i.test(trimmed)) {
+    return trimmed.replace(/\/api\/v1$/i, '/api');
+  }
+  if (/\/api$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed}/api`;
 }
 
 export function getBackendHttpBase(): string {
   const configured = process.env.API_BASE_URL || DEFAULT_BACKEND_API_BASE;
-  return stripApiV1(configured);
+  return normalizeApiBase(configured);
 }
 
 export function buildBackendUrl(path: string): string {

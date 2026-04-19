@@ -15,8 +15,9 @@ warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 from datetime import datetime, timedelta
 from typing import Optional
 
-from backend.src.data import sources, storage
+from backend.src.data import storage
 from backend.src.utils import indicators
+from backend.src.infrastructure.gateways import default_market_data_gateway
 from backend.src.config import (
     DEFAULT_SYMBOL,
     DEFAULT_INTERVAL,
@@ -37,6 +38,7 @@ from backend.src.config import (
 )
 
 logger = logging.getLogger(__name__)
+_market_data_gateway = default_market_data_gateway
 
 # ML Constants
 PREDICTION_HORIZON_DAYS = 7
@@ -116,7 +118,7 @@ def sync_market_data() -> None:
     logger.info(f"  📈 Klines: {start_date.strftime('%Y-%m-%d %H:%M:%S')} até {end_date.strftime('%Y-%m-%d %H:%M:%S')}")
     
     if start_ts_klines < end_ts_klines:
-        klines_df = sources.fetch_all_klines(
+        klines_df = _market_data_gateway.fetch_all_klines(
             DEFAULT_SYMBOL, DEFAULT_INTERVAL, start_ts_klines, end_ts_klines,
             max_klines_per_request=DEFAULT_KLINES_LIMIT,
             binance_api_base_url=BINANCE_API_BASE_URL
@@ -138,7 +140,7 @@ def sync_market_data() -> None:
     start_ts_fng_sec = storage.get_start_timestamp_for_collection(
         storage.get_last_fng_timestamp_from_db, fng_table_name, DEFAULT_HISTORICAL_DAYS
     )
-    fng_data = sources.get_fear_and_greed_index(
+    fng_data = _market_data_gateway.get_fear_and_greed_index(
         limit=DEFAULT_HISTORICAL_DAYS, start_date_unix_sec=start_ts_fng_sec, fng_api_url=FNG_API_URL
     )
     if fng_data:
@@ -149,7 +151,9 @@ def sync_market_data() -> None:
     
     # 3. Collect On-Chain (Blockchair)
     logger.info("  ⛓️  Coletando métricas on-chain...")
-    on_chain_data = sources.get_bitcoin_network_fees(blockchair_api_url=BLOCKCHAIR_API_URL)
+    on_chain_data = _market_data_gateway.get_bitcoin_network_fees(
+        blockchair_api_url=BLOCKCHAIR_API_URL
+    )
     if on_chain_data:
         storage.save_on_chain_to_db(on_chain_data, on_chain_table_name)
         logger.info("  ✓ Métricas on-chain atualizadas")
@@ -164,7 +168,7 @@ def sync_market_data() -> None:
     end_ts_funding = int(datetime.now().timestamp() * 1000)
     
     try:
-        funding_data = sources.get_funding_rate_history(
+        funding_data = _market_data_gateway.get_funding_rate_history(
             DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
             binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
         )
@@ -184,7 +188,7 @@ def sync_market_data() -> None:
     end_ts_oi = int(datetime.now().timestamp() * 1000)
     
     try:
-        oi_data = sources.get_open_interest_history(
+        oi_data = _market_data_gateway.get_open_interest_history(
             DEFAULT_SYMBOL, period=DEFAULT_INTERVAL, limit=500, 
             start_time_ms=start_ts_oi, end_time_ms=end_ts_oi,
             binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
@@ -202,7 +206,10 @@ def sync_market_data() -> None:
     start_ts_iv = storage.get_start_timestamp_for_collection(
         storage.get_last_implied_volatility_timestamp_from_db, implied_vol_table_name, DEFAULT_HISTORICAL_DAYS
     )
-    iv_data = sources.get_implied_volatility_history(start_timestamp_ms=start_ts_iv, deribit_base_url=DERIBIT_API_BASE_URL)
+    iv_data = _market_data_gateway.get_implied_volatility_history(
+        start_timestamp_ms=start_ts_iv,
+        deribit_base_url=DERIBIT_API_BASE_URL,
+    )
     if iv_data:
         storage.save_implied_volatility_to_db(iv_data, implied_vol_table_name)
         logger.info("  ✓ Implied Volatility atualizada")
@@ -214,7 +221,7 @@ def sync_market_data() -> None:
     start_ts_uni = storage.get_start_timestamp_for_collection(
         storage.get_last_uniswap_timestamp_from_db, uniswap_table_name, DEFAULT_HISTORICAL_DAYS
     )
-    uni_data = sources.get_uniswap_pool_daily_data(
+    uni_data = _market_data_gateway.get_uniswap_pool_daily_data(
         pool_id=DEFAULT_POLYGON_POOL_ID,
         start_timestamp_ms=start_ts_uni,
         thegraph_base_url=THEGRAPH_UNISWAP_V3_URL,
@@ -281,7 +288,7 @@ def get_full_prepared_data() -> pd.DataFrame:
     logger.info(f"  Period: {start_date.strftime('%Y-%m-%d %H:%M:%S')} to {end_date.strftime('%Y-%m-%d %H:%M:%S')}")
     
     if start_ts_klines < end_ts_klines:
-        klines_df = sources.fetch_all_klines(
+        klines_df = _market_data_gateway.fetch_all_klines(
             DEFAULT_SYMBOL, DEFAULT_INTERVAL, start_ts_klines, end_ts_klines,
             max_klines_per_request=DEFAULT_KLINES_LIMIT,
             binance_api_base_url=BINANCE_API_BASE_URL
@@ -304,14 +311,16 @@ def get_full_prepared_data() -> pd.DataFrame:
     start_ts_fng_sec = storage.get_start_timestamp_for_collection(
         storage.get_last_fng_timestamp_from_db, fng_table_name, DEFAULT_HISTORICAL_DAYS
     )
-    fng_data = sources.get_fear_and_greed_index(
+    fng_data = _market_data_gateway.get_fear_and_greed_index(
         limit=DEFAULT_HISTORICAL_DAYS, start_date_unix_sec=start_ts_fng_sec, fng_api_url=FNG_API_URL
     )
     if fng_data:
         storage.save_fng_to_db(fng_data, fng_table_name)
     
     # 3. Collect On-Chain (Blockchair)
-    on_chain_data = sources.get_bitcoin_network_fees(blockchair_api_url=BLOCKCHAIR_API_URL)
+    on_chain_data = _market_data_gateway.get_bitcoin_network_fees(
+        blockchair_api_url=BLOCKCHAIR_API_URL
+    )
     if on_chain_data:
         storage.save_on_chain_to_db(on_chain_data, on_chain_table_name)
     
@@ -323,7 +332,7 @@ def get_full_prepared_data() -> pd.DataFrame:
     end_ts_funding = int(datetime.now().timestamp() * 1000)
     
     try:
-        funding_data = sources.get_funding_rate_history(
+        funding_data = _market_data_gateway.get_funding_rate_history(
             DEFAULT_SYMBOL, limit=1000, start_time_ms=start_ts_funding, end_time_ms=end_ts_funding,
             binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
         )
@@ -339,7 +348,7 @@ def get_full_prepared_data() -> pd.DataFrame:
     end_ts_oi = int(datetime.now().timestamp() * 1000)
     
     try:
-        oi_data = sources.get_open_interest_history(
+        oi_data = _market_data_gateway.get_open_interest_history(
             DEFAULT_SYMBOL, period=DEFAULT_INTERVAL, limit=500, 
             start_time_ms=start_ts_oi, end_time_ms=end_ts_oi,
             binance_futures_api_base_url=BINANCE_FUTURES_API_BASE_URL
@@ -353,7 +362,10 @@ def get_full_prepared_data() -> pd.DataFrame:
     start_ts_iv = storage.get_start_timestamp_for_collection(
         storage.get_last_implied_volatility_timestamp_from_db, implied_vol_table_name, DEFAULT_HISTORICAL_DAYS
     )
-    iv_data = sources.get_implied_volatility_history(start_timestamp_ms=start_ts_iv, deribit_base_url=DERIBIT_API_BASE_URL)
+    iv_data = _market_data_gateway.get_implied_volatility_history(
+        start_timestamp_ms=start_ts_iv,
+        deribit_base_url=DERIBIT_API_BASE_URL,
+    )
     if iv_data:
         storage.save_implied_volatility_to_db(iv_data, implied_vol_table_name)
     
@@ -361,7 +373,7 @@ def get_full_prepared_data() -> pd.DataFrame:
     start_ts_uni = storage.get_start_timestamp_for_collection(
         storage.get_last_uniswap_timestamp_from_db, uniswap_table_name, DEFAULT_HISTORICAL_DAYS
     )
-    uni_data = sources.get_uniswap_pool_daily_data(
+    uni_data = _market_data_gateway.get_uniswap_pool_daily_data(
         pool_id=DEFAULT_POLYGON_POOL_ID,
         start_timestamp_ms=start_ts_uni,
         thegraph_base_url=THEGRAPH_UNISWAP_V3_URL,
