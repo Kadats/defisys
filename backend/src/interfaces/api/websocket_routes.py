@@ -6,6 +6,7 @@ import logging
 
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from backend.src.utils.ws_manager import manager
 
@@ -36,14 +37,13 @@ async def websocket_pulse(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
         logger.info("Cliente desconectado de /api/ws/pulse")
-    except RuntimeError:
-        manager.disconnect(websocket)
+    except (RuntimeError, OSError):
         logger.info("WebSocket /api/ws/pulse encerrado pelo cliente")
     except Exception as exc:
-        manager.disconnect(websocket)
         logger.exception("Erro em /api/ws/pulse: %s", exc)
+    finally:
+        manager.disconnect(websocket)
 
 
 @router.websocket("/api/ws/ticker")
@@ -54,6 +54,12 @@ async def websocket_ticker(websocket: WebSocket):
     logger.info("Cliente conectado com sucesso em /api/ws/ticker")
     try:
         while True:
+            if (
+                websocket.client_state != WebSocketState.CONNECTED
+                or websocket.application_state != WebSocketState.CONNECTED
+            ):
+                break
+
             await websocket.send_json(
                 {
                     "symbol": "BTCUSDT",
@@ -63,10 +69,10 @@ async def websocket_ticker(websocket: WebSocket):
             )
             await asyncio.sleep(1)
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-    except RuntimeError:
-        manager.disconnect(websocket)
+        logger.info("Cliente desconectado de /api/ws/ticker")
+    except (RuntimeError, OSError):
         logger.info("WebSocket /api/ws/ticker encerrado pelo cliente")
     except Exception as exc:
-        manager.disconnect(websocket)
         logger.exception("Erro em /api/ws/ticker: %s", exc)
+    finally:
+        manager.disconnect(websocket)
