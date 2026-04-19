@@ -24,6 +24,10 @@ RUN --mount=type=cache,target=/root/.cache/pypoetry \
     poetry config virtualenvs.create false && \
     poetry install --no-interaction --no-ansi --only main --no-root
 
+# Ensure uvicorn has websocket protocol support at runtime.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir "websockets>=10.4,<16"
+
 COPY backend ./backend
 
 FROM base AS test
@@ -31,6 +35,9 @@ FROM base AS test
 RUN --mount=type=cache,target=/root/.cache/pypoetry \
     poetry config virtualenvs.create false && \
     poetry install --no-interaction --no-ansi --with dev --no-root
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir "websockets>=10.4,<16"
 
 COPY backend ./backend
 
